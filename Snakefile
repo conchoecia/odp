@@ -1,5 +1,5 @@
 """
-This script performs mutual-best BLAST searches,
+This script performs mutual-best protein diamond BLAST searches,
  then makes synteny plots of those results.
 """
 import matplotlib
@@ -15,6 +15,12 @@ for this_axis in ["xaxisspecies", "yaxisspecies"]:
         if "breaks" not in config[this_axis][this_one]:
             config[this_axis][this_one]["breaks"] = []
 
+
+#make a function to add entries into y, if the entry is in x but not yet in y
+for thisx in config["xaxisspecies"]:
+    if thisx not in config["yaxisspecies"]:
+        config["yaxisspecies"][thisx] = config["xaxisspecies"][thisx]
+
 rule all:
     input:
         #expand("synteny_analysis/blastp_results/xtoybest/{xsample}_against_{ysample}.blastp",
@@ -27,7 +33,7 @@ rule all:
         #       xsample = config["xaxisspecies"]),
         #expand("synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
         #       ysample = config["yaxisspecies"])
-        expand("synteny_analysis/plots/{xsample}_and_{ysample}_synteny.pdf",
+        expand("synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny.pdf",
                 xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
         expand("synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
                 xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
@@ -35,77 +41,66 @@ rule all:
         # working on plotting for color
         #expand("synteny_analysis/prot_to_color/{colorby}_prottocolor.tsv",
         #       colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]])
-        expand("synteny_analysis/plots_colored_by/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
+        expand("synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
                xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
                colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
-        expand("synteny_analysis/plots_colored_by/no_missing/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
+        expand("synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
                xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
                colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
-
         # make protein similarity plots
-        expand("synteny_analysis/sample_similarity/{xsample}_and_{ysample}_peridentity_length.pdf",
+        expand("synteny_analysis/plots/sample_similarity/{xsample}_and_{ysample}_peridentity_length.pdf",
                 xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
 
-rule make_blastdb_x:
+rule make_diamonddb_x:
     input:
         prots = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["proteins"]
     output:
         pep = "synteny_analysis/db/xaxis/{xsample}_prots.pep",
-        phr = "synteny_analysis/db/xaxis/{xsample}_prots.pep.phr",
-        pin = "synteny_analysis/db/xaxis/{xsample}_prots.pep.pin",
-        psq = "synteny_analysis/db/xaxis/{xsample}_prots.pep.psq"
-    threads: 1
+        dmnd = "synteny_analysis/db/xaxis/dmnd/{xsample}_prots.dmnd"
+    threads: workflow.cores - 1
     shell:
         """
         ln -s {input.prots} {output.pep}
-        makeblastdb -in {output.pep} -dbtype prot
+        diamond makedb --in {output.pep} --db {output.dmnd}
         """
 
-rule make_blastdb_y:
+rule make_diamonddb_y:
     input:
         prots = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["proteins"]
     output:
         pep = "synteny_analysis/db/yaxis/{ysample}_prots.pep",
-        phr = "synteny_analysis/db/yaxis/{ysample}_prots.pep.phr",
-        pin = "synteny_analysis/db/yaxis/{ysample}_prots.pep.pin",
-        psq = "synteny_analysis/db/yaxis/{ysample}_prots.pep.psq"
-    threads: 1
+        dmnd = "synteny_analysis/db/yaxis/dmnd/{ysample}_prots.dmnd"
+    threads: workflow.cores - 1
     shell:
         """
         ln -s {input.prots} {output.pep}
-        makeblastdb -in {output.pep} -dbtype prot
+        diamond makedb --in {output.pep} --db {output.dmnd}
         """
 
-rule blast_x_to_y:
+rule diamond_blast_x_to_y:
     input:
         xpep = "synteny_analysis/db/xaxis/{xsample}_prots.pep",
-        ypep = "synteny_analysis/db/yaxis/{ysample}_prots.pep",
-        phr = "synteny_analysis/db/yaxis/{ysample}_prots.pep.phr",
-        pin = "synteny_analysis/db/yaxis/{ysample}_prots.pep.pin",
-        psq = "synteny_analysis/db/yaxis/{ysample}_prots.pep.psq"
+        ydmnd = "synteny_analysis/db/yaxis/dmnd/{ysample}_prots.dmnd",
     output:
         blastp = "synteny_analysis/blastp_results/xtoy/{xsample}_against_{ysample}.blastp",
-    threads: workflow.cores
+    threads: workflow.cores - 1
     shell:
         """
-        blastp -query {input.xpep} -db {input.ypep} \
-          -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
+        diamond blastp --query {input.xpep} --db {input.ydmnd} \
+          --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
         """
 
-rule blast_y_to_x:
+rule diamond_blast_y_to_x:
     input:
         ypep = "synteny_analysis/db/yaxis/{ysample}_prots.pep",
-        xpep = "synteny_analysis/db/xaxis/{xsample}_prots.pep",
-        phr = "synteny_analysis/db/xaxis/{xsample}_prots.pep.phr",
-        pin = "synteny_analysis/db/xaxis/{xsample}_prots.pep.pin",
-        psq = "synteny_analysis/db/xaxis/{xsample}_prots.pep.psq"
+        xdmnd = "synteny_analysis/db/xaxis/dmnd/{xsample}_prots.dmnd",
     output:
         blastp = "synteny_analysis/blastp_results/ytox/{ysample}_against_{xsample}.blastp",
-    threads: workflow.cores
+    threads: workflow.cores - 1
     shell:
         """
-        blastp -query {input.ypep} -db {input.xpep} \
-          -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
+        diamond blastp --query {input.ypep} --db {input.xdmnd} \
+          --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
         """
 
 rule absolute_best_from_blast_x_to_y:
@@ -182,9 +177,9 @@ rule make_identity_marginplot:
     input:
         table = "synteny_analysis/blastp_results/reciprocal_best/table_for_marginplot/{xsample}_and_{ysample}_peridentity_length.tsv",
     output:
-        plot = "synteny_analysis/sample_similarity/{xsample}_and_{ysample}_peridentity_length.pdf"
+        plot = "synteny_analysis/plots/sample_similarity/{xsample}_and_{ysample}_peridentity_length.pdf"
     params:
-        stem = "synteny_analysis/sample_similarity/{xsample}_and_{ysample}_peridentity_length",
+        stem = "synteny_analysis/plots/sample_similarity/{xsample}_and_{ysample}_peridentity_length",
         xsample = lambda wildcards: wildcards.xsample,
         ysample = lambda wildcards: wildcards.ysample
     threads: 1
@@ -535,6 +530,10 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
         panel1.set_yticklabels(yticklabel, fontsize=8)
         #print(list(zip(df["xpos"], df["Dx"])))
 
+        # set the x and y labels
+        panel1.set_ylabel(ysample)
+        panel1.set_xlabel(xsample)
+
         panelxd.bar(x = df["xpos"], height=df["Dx"], width = df["Dx_barwidth"], lw=0, color="blue", zorder = 2)
         panelxd.set_xlim([0,xmax])
         panelxd.set_ylabel('Dx', fontsize=10)
@@ -562,6 +561,9 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
             panel1.axhline(y=value, color=[0,0,0,0.25], lw=0.5, linestyle="dotted")
         plt.savefig(synplot)
 
+"""
+This makes the synteny plot without doing any special coloring of the dots
+"""
 rule plot_synteny:
     input:
         ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
@@ -570,7 +572,7 @@ rule plot_synteny:
         yprottoloc = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"],
         recip = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp"
     output:
-        synplot = "synteny_analysis/plots/{xsample}_and_{ysample}_synteny.pdf",
+        synplot = "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny.pdf",
         table = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv"
     threads:
         1
@@ -637,6 +639,13 @@ rule xprot_to_color:
                         print("{}\t{}".format(prot, color), file=out_handle)
         out_handle.close()
 
+"""
+This makes the plots where the proteins are colored by another protein set.
+
+Jan 12 2021 I am not sure what the no missing plot version is.
+
+For some reason I am getting an InputFunctionException
+"""
 rule plot_synteny_x_colored_by_x:
     input:
         ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
@@ -647,8 +656,8 @@ rule plot_synteny_x_colored_by_x:
         color_by_blast = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{colorby}_recip.blastp",
         color_by = "synteny_analysis/prot_to_color/{colorby}_prottocolor.tsv"
     output:
-        synplot = "synteny_analysis/plots_colored_by/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
-        nodots = "synteny_analysis/plots_colored_by/no_missing/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
+        synplot = "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
+        nodots = "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
     threads:
         1
     params:
