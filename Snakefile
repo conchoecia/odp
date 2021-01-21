@@ -228,8 +228,83 @@ rule get_genome_coords_y:
           sort -k2 -nr | \
           awk '{{sum = sum + $2; print($1, $2, sum) }}' > {output.coords}
         """
+def blast_plot_order_helper(coords, sample, breaks, xory, xprottoloc, yprottoloc, recip, xorder):
+    """
+    This uses the reciprocal blast results to come up with the sort order
+     for the y-axis scaffolds. Returns a list of the plot order.
 
-def parse_coords(coords, sample, breaks, xory):
+    This code is all duplicated from the synteny plot function.
+     Could be programmed in a better way to avoid redundancy, but this just fits
+     the edge case where the y-axis has to be arranged based on the blast results.
+    """
+    # now make a lookup table of where the prots are.
+    #  Use the x_offset and y_offset to recalculate where the plotting
+    #  value is
+    x_prot_to_loc = {}
+    x_prot_to_scaf = {}
+    with open(xprottoloc, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                splitd = line.split()
+                prot = splitd[0]
+                scaf = splitd[1]
+                pos = int(splitd[2])
+                x_prot_to_loc[prot] = pos
+                x_prot_to_scaf[prot] = scaf
+    y_prot_to_loc = {}
+    y_prot_to_scaf = {}
+    with open(yprottoloc, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                splitd = line.split()
+                prot = splitd[0]
+                scaf = splitd[1]
+                pos = int(splitd[2])
+                y_prot_to_loc[prot] = pos
+                y_prot_to_scaf[prot] = scaf
+
+    # now open the blast results and translate the pairs
+    #  into plotting positions
+    df = pd.read_csv(recip, header=None, sep = "\t")
+    df.columns = ["xgene", "ygene", "pident", "length",
+                  "mismatch", "gapopen", "qstart", "qend",
+                  "sstart", "send", "evalue", "bitscore"]
+    df = df[["xgene", "ygene", "bitscore", "evalue"]]
+    #print(x_prot_to_loc)
+    df["xpos"] = df["xgene"].map(x_prot_to_loc)
+    df["ypos"] = df["ygene"].map(y_prot_to_loc)
+
+    df["yscaf"] = df["ygene"].map(y_prot_to_scaf)
+    df["xscaf"] = df["xgene"].map(x_prot_to_scaf)
+    df = df.dropna()
+    df = df.sort_values(by=['xpos'])
+    df = df.loc[df["evalue"] <= float("1E-20"), ]
+    df = df.dropna()
+
+    grouped_df = df.groupby(["yscaf"])
+    for key, item in grouped_df:
+        max_item = grouped_df.get_group(key)['xscaf'].value_counts().idxmax()
+        all_other_things = [x for x in grouped_df.get_group(key)['xscaf'].unique() if x != max_item]
+        for thisthing in all_other_things:
+            df = df.loc[~( (df["yscaf"] == key) & (df["xscaf"] == thisthing)), ]
+    # now sort based on the xscafs and the xpos
+    sorterIndex = dict(zip(xorder, range(len(xorder))))
+    df.sort_values(['yscaf', 'ypos'],
+        ascending = [True, True], inplace = True)
+    df.reset_index(drop=True, inplace = True)
+    df = df.drop_duplicates(subset=['yscaf'])
+    df['x_Rank'] = df['xscaf'].map(sorterIndex)
+    df.sort_values(['x_Rank', 'xpos'],
+        ascending = [True, True], inplace = True)
+    df.dropna()
+    df.reset_index(drop=True, inplace = True)
+    print(df)
+    #print(list(df.yscaf))
+    return(list(df.yscaf))
+
+def parse_coords(coords, sample, breaks, xory, xprottoloc=None, yprottoloc=None, recip=None, xorder=None):
     """
     This parses the coordinates and returns a
       - coord-to-offset dict (I don't remember what this is for),
@@ -255,18 +330,30 @@ def parse_coords(coords, sample, breaks, xory):
             else:
                 plotorder = None
     elif xory == "y":
+        #print("we're in y")
         if sample not in config["yaxisspecies"]:
             raise IOError("Can't find this yspecies")
         else:
+            #print("we're in the else of y")
             if "plotorder" in config["yaxisspecies"][sample]:
+                #print("we're in the plotorder of y")
                 plotorder = config["yaxisspecies"][sample]["plotorder"]
+            if "sort_by_x_coord_blast" in config["yaxisspecies"][sample]:
+                #print("we're in the sort_by_x_coord_blast of y")
+                if config["yaxisspecies"][sample]["sort_by_x_coord_blast"]:
+                    #print("we're in the sort_by_x_coord_blast of y True")
+                    # we need to set up the sort order based on the occurrence in the blast results
+                    plotorder = blast_plot_order_helper(coords, sample, breaks,
+                                                        xory, xprottoloc,
+                                                        yprottoloc, recip, xorder)
+                    #print("after plot order in sort_by_x_coord_blast")
             else:
                 plotorder = None
     else:
         raise IOError("Don't know what this is")
     # now we have determined if we need to sort
     if plotorder != None:
-        print(" - using custom plot order: ", plotorder)
+        #print(" - using custom plot order: ", plotorder)
         sortdict = {key: val for key, val in zip(plotorder, range(len(plotorder)))}
         df['rank'] = df['scaf'].map(sortdict)
         df.sort_values(by = 'rank' ,inplace=True)
@@ -334,7 +421,8 @@ def calc_D_for_y_and_x(df):
     return df
 
 def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
-                 xbreaks, ybreaks, recip, synplot, outtable, prot_to_color, dropmissing):
+                 xbreaks, ybreaks, recip, synplot, outtable, prot_to_color,
+                 dropmissing, plot_y_lines = False):
         import pandas as pd
         import seaborn as sns; sns.set()
         import matplotlib
@@ -371,15 +459,20 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
             pos  = int(thisy.split(":")[1])
             ybreaks_list.append([scaf, pos])
 
+
         # first make a lookup table of how to calculate the
         #  x and y coords. This lookup is just the amount of
-        # bp to add to the value when plotting.
-
-        y_offset, horizontal_lines_at, ymax, ybreaks, yticklabel, ytickpos = parse_coords(ycoords, ysample, ybreaks_list, "y")
-        print("found {} y chromosomes".format(len(y_offset)))
-
-        x_offset, vertical_lines_at, xmax, xbreaks, xticklabel, xtickpos = parse_coords(xcoords, xsample, xbreaks_list, "x")
+        # bp to add to the value when plotting. We pass the xprot_to_loc,
+        #  xprot_to_scaf in case we need to sort everything based on order of
+        #  occurrence on the scaffolds
+        x_offset, vertical_lines_at, xmax, xbreaks, xticklabel, xtickpos = parse_coords(
+            xcoords, xsample, xbreaks_list, "x")
         print("found {} x chromosomes".format(len(x_offset)))
+
+        y_offset, horizontal_lines_at, ymax, ybreaks, yticklabel, ytickpos = parse_coords(
+            ycoords, ysample, ybreaks_list, "y",
+            xprottoloc, yprottoloc, recip, xticklabel)
+        print("found {} y chromosomes".format(len(y_offset)))
 
         # now make a lookup table of where the prots are.
         #  Use the x_offset and y_offset to recalculate where the plotting
@@ -410,6 +503,7 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
                         pos = int(splitd[2]) + y_offset[scaf]
                         y_prot_to_loc[prot] = pos
                         y_prot_to_scaf[prot] = scaf
+
         # now open the blast results and translate the pairs
         #  into plotting positions
         df = pd.read_csv(recip, header=None, sep = "\t")
@@ -550,8 +644,9 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
         for value in vertical_lines_at:
             panel1.axvline(x=value, color="black", lw=0.5)
         #plot horizontal lines
-        for value in horizontal_lines_at:
-            panel1.axhline(y=value, color="black", lw=0.5)
+        if plot_y_lines:
+            for value in horizontal_lines_at:
+                panel1.axhline(y=value, color="black", lw=0.5)
 
         # plot vertical BOS
         for value in xbreaks:
@@ -580,13 +675,15 @@ rule plot_synteny:
         xsample = lambda wildcards: wildcards.xsample,
         ysample = lambda wildcards: wildcards.ysample,
         xbreaks  = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["breaks"],
-        ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["breaks"]
+        ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["breaks"],
+        keep_y   = lambda wildcards: False if "sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample] else True
     run:
         synteny_plot(input.ycoords, input.xcoords,
                      input.xprottoloc, input.yprottoloc,
                      params.xsample, params.ysample,
                      params.xbreaks, params.ybreaks,
-                     input.recip, output.synplot, output.table, None, False)
+                     input.recip, output.synplot, output.table, None,
+                     False, params.keep_y)
 
 rule xprot_to_color:
     """
@@ -665,7 +762,8 @@ rule plot_synteny_x_colored_by_x:
         ysample = lambda wildcards: wildcards.ysample,
         color_sample = lambda wildcards: wildcards.colorby,
         xbreaks  = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["breaks"],
-        ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["breaks"]
+        ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["breaks"],
+        keep_y   = lambda wildcards: False if "sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample] else True
     run:
         #first figure out what the color should be for each protein pair
         colorby_prot_to_color = {}
@@ -702,10 +800,12 @@ rule plot_synteny_x_colored_by_x:
                      input.xprottoloc, input.yprottoloc,
                      params.xsample, params.ysample,
                      params.xbreaks, params.ybreaks,
-                     input.recip, output.synplot, None, prot_to_color, False)
+                     input.recip, output.synplot, None, prot_to_color,
+                     False, params.keep_y)
         # plot again, but without the black (missing) points
         synteny_plot(input.ycoords, input.xcoords,
                      input.xprottoloc, input.yprottoloc,
                      params.xsample, params.ysample,
                      params.xbreaks, params.ybreaks,
-                     input.recip, output.nodots, None, prot_to_color, True)
+                     input.recip, output.nodots, None, prot_to_color,
+                     True, params.keep_y)
