@@ -298,7 +298,7 @@ def blast_plot_order_helper(coords, sample, breaks, xory, xprottoloc, yprottoloc
     df['x_Rank'] = df['xscaf'].map(sorterIndex)
     df.sort_values(['x_Rank', 'xpos'],
         ascending = [True, True], inplace = True)
-    df.dropna()
+    df = df.dropna()
     df.reset_index(drop=True, inplace = True)
     print(df)
     #print(list(df.yscaf))
@@ -336,7 +336,7 @@ def parse_coords(coords, sample, breaks, xory, xprottoloc=None, yprottoloc=None,
         else:
             #print("we're in the else of y")
             if "plotorder" in config["yaxisspecies"][sample]:
-                #print("we're in the plotorder of y")
+                print("we're in the plotorder of y")
                 plotorder = config["yaxisspecies"][sample]["plotorder"]
             if "sort_by_x_coord_blast" in config["yaxisspecies"][sample]:
                 #print("we're in the sort_by_x_coord_blast of y")
@@ -357,9 +357,11 @@ def parse_coords(coords, sample, breaks, xory, xprottoloc=None, yprottoloc=None,
         sortdict = {key: val for key, val in zip(plotorder, range(len(plotorder)))}
         df['rank'] = df['scaf'].map(sortdict)
         df.sort_values(by = 'rank' ,inplace=True)
+    df = df.dropna()
     df.reset_index(drop=True, inplace = True)
     df["cumsum"] = df["scaflen"].cumsum()
     df["cumsum"] = df["cumsum"] - df["scaflen"]
+    print(df)
     for i, row in df.iterrows():
         offset[row["scaf"]] = row["cumsum"]
         if i > 0:
