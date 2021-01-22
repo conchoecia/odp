@@ -622,12 +622,34 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
         panel1.set_xticks(xtickpos)
         panel1.set_xticklabels(xticklabel, rotation=90, fontsize=8)
         # set y ticks
-        panel1.set_yticks(ytickpos)
-        panel1.set_yticklabels(yticklabel, fontsize=8)
+        if not plot_y_lines:
+            #there are inevitably going to be many scaffolds. We need to subset
+            # get a list of evenly spaced indices
+            numElems = 20
+            arr = ytickpos
+            idx = np.round(np.linspace(0, len(arr) - 1, numElems)).astype(int)
+            newarr       = [arr[i] for i in idx]
+            newarrlabels = [round(arr[i]/1000000, 1) for i in idx]
+            newarrDy     = [i for i in idx]
+            # turn on y-axis ticks
+            panel1.tick_params(left=True)
+            panel1.set_yticks(newarr)
+            panel1.set_yticklabels(newarrlabels, fontsize=8)
+            # turn on y-axis ticks on the Dy plot
+            panelyd.tick_params(right=True, labelright=True)
+            panelyd.set_yticks(newarr)
+            panelyd.set_yticklabels(newarrDy, fontsize=8)
+            panelyd.yaxis.set_label_position("right")
+            panelyd.set_ylabel("number of scaffolds")
+            #panel1.set_yticklabels(yticklabel, fontsize=8)
+            panel1.set_ylabel(ysample + " Mb")
+        else:
+            panel1.set_yticks(ytickpos)
+            panel1.set_yticklabels(yticklabel, fontsize=8)
+            panel1.set_ylabel(ysample)
         #print(list(zip(df["xpos"], df["Dx"])))
 
         # set the x and y labels
-        panel1.set_ylabel(ysample)
         panel1.set_xlabel(xsample)
 
         panelxd.bar(x = df["xpos"], height=df["Dx"], width = df["Dx_barwidth"], lw=0, color="blue", zorder = 2)
