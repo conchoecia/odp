@@ -21,6 +21,36 @@ for thisx in config["xaxisspecies"]:
     if thisx not in config["yaxisspecies"]:
         config["yaxisspecies"][thisx] = config["xaxisspecies"][thisx]
 
+def expand_avoid_matching_x_and_y(filestring, xsamples, ysamples):
+    """
+    this works like snakemake's expand function but does not generate
+     files where xsample equals ysample
+
+    outputs a list of files
+    """
+    outlist = []
+    for xsamp in xsamples:
+        for ysamp in ysamples:
+            if xsamp != ysamp:
+                outlist.append(filestring.format(xsamp, ysamp))
+    return outlist
+
+def expand_avoid_matching_x_and_y_third(filestring, xsamples, ysamples, third):
+    """
+    this works like snakemake's expand function but does not generate
+     files where xsample equals ysample
+
+    outputs a list of files
+    """
+    outlist = []
+    for xsamp in xsamples:
+        for ysamp in ysamples:
+            if xsamp != ysamp:
+                for t in third:
+                    outlist.append(filestring.format(xsamp, ysamp, t))
+    return outlist
+
+
 rule all:
     input:
         #expand("synteny_analysis/blastp_results/xtoybest/{xsample}_against_{ysample}.blastp",
@@ -33,23 +63,40 @@ rule all:
         #       xsample = config["xaxisspecies"]),
         #expand("synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
         #       ysample = config["yaxisspecies"])
-        expand("synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny.pdf",
-                xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
-        expand("synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
-                xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y("synteny_analysis/plots/synteny_uncolored/{}_and_{}_synteny.pdf",
+                config["xaxisspecies"], config["yaxisspecies"]),
+        #expand("synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny.pdf",
+        #        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y("synteny_analysis/dvalue_table/{}_and_{}_info.tsv",
+                config["xaxisspecies"],  config["yaxisspecies"]),
+        #expand("synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
+        #        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
 
         # working on plotting for color
         #expand("synteny_analysis/prot_to_color/{colorby}_prottocolor.tsv",
         #       colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]])
-        expand("synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
-               xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-               colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
-        expand("synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
-               xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-               colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
+        expand_avoid_matching_x_and_y_third(
+            "synteny_analysis/plots/synteny_colored_by/{}_and_{}_coloredby_{}_synteny.pdf",
+            config["xaxisspecies"], config["yaxisspecies"],
+            [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+            ),
+        #expand("synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
+        #       xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
+        #       colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
+        expand_avoid_matching_x_and_y_third(
+            "synteny_analysis/plots/synteny_colored_by_no_missing/{}_and_{}_coloredby_{}_synteny.pdf",
+            config["xaxisspecies"], config["yaxisspecies"],
+            [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+            ),
+        #expand("synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
+        #       xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
+        #       colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
         # make protein similarity plots
-        expand("synteny_analysis/plots/sample_similarity/{xsample}_and_{ysample}_peridentity_length.pdf",
-                xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y(
+            "synteny_analysis/plots/sample_similarity/{}_and_{}_peridentity_length.pdf",
+             config["xaxisspecies"], config["yaxisspecies"]),
+        #expand("synteny_analysis/plots/sample_similarity/{xsample}_and_{ysample}_peridentity_length.pdf",
+        #        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
 
 rule make_diamonddb_x:
     input:
@@ -313,6 +360,7 @@ def parse_coords(coords, sample, breaks, xory, xprottoloc=None, yprottoloc=None,
       - the BOS positions for that to plot (dotted, translucent line)
       - the tick labels
       - the tick positions
+      - the yorder or xorder
     """
     offset = {}
     max_coord = 0
@@ -378,7 +426,7 @@ def parse_coords(coords, sample, breaks, xory, xprottoloc=None, yprottoloc=None,
     #tick labels
     tick_labels = list(df["scaf"])
     tick_pos    = list(df["cumsum"] + (df["scaflen"]/2))
-    return (offset, lines_at, max_coord, BOS_here, tick_labels, tick_pos)
+    return (offset, lines_at, max_coord, BOS_here, tick_labels, tick_pos, list(df["scaf"]))
 
 def calc_D_for_y_and_x(df):
     """
@@ -423,7 +471,7 @@ def calc_D_for_y_and_x(df):
     return df
 
 def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
-                 xbreaks, ybreaks, recip, synplot, outtable, prot_to_color,
+                 xbreaks, ybreaks, recip, synplot, outtable, plotorder_file, prot_to_color,
                  dropmissing, plot_y_lines = False):
         import pandas as pd
         import seaborn as sns; sns.set()
@@ -467,14 +515,23 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
         # bp to add to the value when plotting. We pass the xprot_to_loc,
         #  xprot_to_scaf in case we need to sort everything based on order of
         #  occurrence on the scaffolds
-        x_offset, vertical_lines_at, xmax, xbreaks, xticklabel, xtickpos = parse_coords(
+        x_offset, vertical_lines_at, xmax, xbreaks, xticklabel, xtickpos, xorder = parse_coords(
             xcoords, xsample, xbreaks_list, "x")
         print("found {} x chromosomes".format(len(x_offset)))
 
-        y_offset, horizontal_lines_at, ymax, ybreaks, yticklabel, ytickpos = parse_coords(
+        y_offset, horizontal_lines_at, ymax, ybreaks, yticklabel, ytickpos, yorder = parse_coords(
             ycoords, ysample, ybreaks_list, "y",
             xprottoloc, yprottoloc, recip, xticklabel)
         print("found {} y chromosomes".format(len(y_offset)))
+
+        # now save the plot order to a file
+        with open(plotorder_file, "w") as f:
+            print("xplotorder:", file=f)
+            for entry in xorder:
+                print("  - {}".format(entry), file=f)
+            print("yplotorder:", file=f)
+            for entry in yorder:
+                print("  - {}".format(entry), file=f)
 
         # now make a lookup table of where the prots are.
         #  Use the x_offset and y_offset to recalculate where the plotting
@@ -692,7 +749,8 @@ rule plot_synteny:
         recip = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp"
     output:
         synplot = "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny.pdf",
-        table = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv"
+        table = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
+        plot_order = "synteny_analysis/plot_order/basic/{xsample}_and_{ysample}_plotorder.tsv",
     threads:
         1
     params:
@@ -706,7 +764,8 @@ rule plot_synteny:
                      input.xprottoloc, input.yprottoloc,
                      params.xsample, params.ysample,
                      params.xbreaks, params.ybreaks,
-                     input.recip, output.synplot, output.table, None,
+                     input.recip, output.synplot, output.table,
+                     output.plot_order, None,
                      False, params.keep_y)
 
 rule xprot_to_color:
@@ -779,6 +838,7 @@ rule plot_synteny_x_colored_by_x:
     output:
         synplot = "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
         nodots = "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
+        plot_order = "synteny_analysis/plot_order/colored_by/{xsample}_and_{ysample}_coloredby_{colorby}_plotorder.tsv"
     threads:
         1
     params:
@@ -824,12 +884,14 @@ rule plot_synteny_x_colored_by_x:
                      input.xprottoloc, input.yprottoloc,
                      params.xsample, params.ysample,
                      params.xbreaks, params.ybreaks,
-                     input.recip, output.synplot, None, prot_to_color,
+                     input.recip, output.synplot, None,
+                     output.plot_order, prot_to_color,
                      False, params.keep_y)
         # plot again, but without the black (missing) points
         synteny_plot(input.ycoords, input.xcoords,
                      input.xprottoloc, input.yprottoloc,
                      params.xsample, params.ysample,
                      params.xbreaks, params.ybreaks,
-                     input.recip, output.nodots, None, prot_to_color,
+                     input.recip, output.nodots, None,
+                     output.plot_order, prot_to_color,
                      True, params.keep_y)
