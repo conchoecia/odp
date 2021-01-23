@@ -475,7 +475,7 @@ def calc_D_for_y_and_x(df):
 
 def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
                  xbreaks, ybreaks, recip, synplot, outtable, plotorder_file, prot_to_color,
-                 dropmissing, plot_y_lines = False):
+                 dropmissing, plot_x_lines = False, plot_y_lines = False):
         import pandas as pd
         import seaborn as sns; sns.set()
         import matplotlib
@@ -679,39 +679,68 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
         panel1.set_xlim([0,xmax])
         panel1.set_ylim([0,ymax])
         # set x ticks
-        panel1.set_xticks(xtickpos)
-        panel1.set_xticklabels(xticklabel, rotation=90, fontsize=8)
+        newarr = []
+        newarrlabels=[]
+        if not plot_x_lines:
+            #there are inevitably going to be many scaffolds. We need to subset
+            # get a list of evenly spaced indices
+            numElems = min(20, len(xtickpos)) # this could break if there are fewer elements
+            arr = xtickpos
+            idx = np.round(np.linspace(0, len(arr) - 1, numElems)).astype(int)
+            newarr       = [arr[i] for i in idx]
+            newarrlabels = [round(arr[i]/1000000, 1) for i in idx]
+            newarrNumScaf     = [i for i in idx]
+            # turn on y-axis ticks on the left - plot scaffolds
+            panel1.tick_params(bottom=True)
+            panel1.set_xticks(newarr)
+            panel1.set_xticklabels(newarrNumScaf, fontsize=8, rotation=90)
+            panel1.set_xlabel(xsample + " number of scaffolds")
+        else:
+            newarr = xtickpos
+            newarrlabels = [round(x/1000000, 1) for x in newarr]
+            panel1.set_xticks(xtickpos)
+            panel1.set_xticklabels(xticklabel, fontsize=8)
+            panel1.set_xlabel(xsample + " scaffolds")
+        # turn on x-axis ticks on the Dx plot
+        panelxd.tick_params(top=True, labeltop=True)
+        panelxd.set_xticks(newarr)
+        panelxd.set_xticklabels(newarrlabels, fontsize=8, rotation=-90)
+        panelxd.xaxis.set_label_position("top")
+        panelxd.set_xlabel("Mb")
+
         # set y ticks
+        newarr=[]
+        newarrlabels=[]
         if not plot_y_lines:
             #there are inevitably going to be many scaffolds. We need to subset
             # get a list of evenly spaced indices
-            numElems = 20
+            numElems = min(20, len(ytickpos))
             arr = ytickpos
             idx = np.round(np.linspace(0, len(arr) - 1, numElems)).astype(int)
             newarr       = [arr[i] for i in idx]
             newarrlabels = [round(arr[i]/1000000, 1) for i in idx]
-            newarrDy     = [i for i in idx]
-            # turn on y-axis ticks
+            newarrNumScaf     = [i for i in idx]
+            # turn on y-axis ticks on the left - plot scaffolds
             panel1.tick_params(left=True)
             panel1.set_yticks(newarr)
-            panel1.set_yticklabels(newarrlabels, fontsize=8)
-            # turn on y-axis ticks on the Dy plot
-            panelyd.tick_params(right=True, labelright=True)
-            panelyd.set_yticks(newarr)
-            panelyd.set_yticklabels(newarrDy, fontsize=8)
-            panelyd.yaxis.set_label_position("right")
-            panelyd.set_ylabel("number of scaffolds")
-            #panel1.set_yticklabels(yticklabel, fontsize=8)
-            panel1.set_ylabel(ysample + " Mb")
+            panel1.set_yticklabels(newarrNumScaf, fontsize=8)
+            panel1.set_ylabel(ysample + " number of scaffolds")
         else:
+            newarr = ytickpos
+            newarrlabels = [round(x/1000000, 1) for x in newarr]
             panel1.set_yticks(ytickpos)
             panel1.set_yticklabels(yticklabel, fontsize=8)
-            panel1.set_ylabel(ysample)
+            panel1.set_ylabel(ysample + " scaffolds")
+        # turn on y-axis ticks on the Dy plot
+        panelyd.tick_params(right=True, labelright=True)
+        panelyd.set_yticks(newarr)
+        panelyd.set_yticklabels(newarrlabels, fontsize=8)
+        panelyd.yaxis.set_label_position("right")
+        panelyd.set_ylabel("Mb")
+
         #print(list(zip(df["xpos"], df["Dx"])))
 
-        # set the x and y labels
-        panel1.set_xlabel(xsample)
-
+        # set the x and y labels on Dy and Dx
         panelxd.bar(x = df["xpos"], height=df["Dx"], width = df["Dx_barwidth"], lw=0, color="blue", zorder = 2)
         panelxd.set_xlim([0,xmax])
         panelxd.set_ylabel('Dx', fontsize=10)
@@ -725,8 +754,9 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
             this_axis.yaxis.get_offset_text().set_visible(False)
 
         #plot vertical lines
-        for value in vertical_lines_at:
-            panel1.axvline(x=value, color="black", lw=0.5)
+        if plot_x_lines:
+            for value in vertical_lines_at:
+                panel1.axvline(x=value, color="black", lw=0.5)
         #plot horizontal lines
         if plot_y_lines:
             for value in horizontal_lines_at:
@@ -761,6 +791,7 @@ rule plot_synteny:
         ysample = lambda wildcards: wildcards.ysample,
         xbreaks  = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["breaks"],
         ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["breaks"],
+        keep_x   = lambda wildcards: False if "sort_by_x_coord_blast" in config["xaxisspecies"][wildcards.xsample] else True,
         keep_y   = lambda wildcards: False if "sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample] else True
     run:
         synteny_plot(input.ycoords, input.xcoords,
@@ -769,7 +800,7 @@ rule plot_synteny:
                      params.xbreaks, params.ybreaks,
                      input.recip, output.synplot, output.table,
                      output.plot_order, None,
-                     False, params.keep_y)
+                     False, params.keep_x, params.keep_y)
 
 rule xprot_to_color:
     """
@@ -850,6 +881,7 @@ rule plot_synteny_x_colored_by_x:
         color_sample = lambda wildcards: wildcards.colorby,
         xbreaks  = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["breaks"],
         ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["breaks"],
+        keep_x   = lambda wildcards: False if "sort_by_x_coord_blast" in config["xaxisspecies"][wildcards.xsample] else True,
         keep_y   = lambda wildcards: False if "sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample] else True
     run:
         #first figure out what the color should be for each protein pair
@@ -889,7 +921,7 @@ rule plot_synteny_x_colored_by_x:
                      params.xbreaks, params.ybreaks,
                      input.recip, output.synplot, None,
                      output.plot_order, prot_to_color,
-                     False, params.keep_y)
+                     False, params.keep_x, params.keep_y)
         # plot again, but without the black (missing) points
         synteny_plot(input.ycoords, input.xcoords,
                      input.xprottoloc, input.yprottoloc,
@@ -897,4 +929,4 @@ rule plot_synteny_x_colored_by_x:
                      params.xbreaks, params.ybreaks,
                      input.recip, output.nodots, None,
                      output.plot_order, prot_to_color,
-                     True, params.keep_y)
+                     True, params.keep_x, params.keep_y)
