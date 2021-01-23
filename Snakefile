@@ -11,12 +11,15 @@ configfile: "config.yaml"
 
 #make fake breaks
 for this_axis in ["xaxisspecies", "yaxisspecies"]:
-    for this_one in config[this_axis]:
-        if "breaks" not in config[this_axis][this_one]:
-            config[this_axis][this_one]["breaks"] = []
+    if this_axis in config:
+        for this_one in config[this_axis]:
+            if "breaks" not in config[this_axis][this_one]:
+                config[this_axis][this_one]["breaks"] = []
 
 
 #make a function to add entries into y, if the entry is in x but not yet in y
+if "yaxisspecies" not in config:
+    config["yaxisspecies"] = {}
 for thisx in config["xaxisspecies"]:
     if thisx not in config["yaxisspecies"]:
         config["yaxisspecies"][thisx] = config["xaxisspecies"][thisx]
