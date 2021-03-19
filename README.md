@@ -1,4 +1,4 @@
-![odp](figs/dotplot_fig-01.png)
+![odp](figs/dotplot_fig-01.jpg)
 
 # odp - Oxford Dot Plots
 
