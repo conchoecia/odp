@@ -29,12 +29,11 @@ If you have `conda` I recommend `conda install snakemake matplotlib pandas numpy
 
 Direct calls to these programs must also be available in your environment. Future versions of `odp` may bundle these software packages directly to avoid these requirements.
 
-```
-[diamond](https://github.com/bbuchfink/diamond)
-awk
-[pauvre](https://github.com/conchoecia/pauvre) - I may remove this requirement in future releases 
-[bioawk](https://github.com/lh3/bioawk) - I may remove this requirement in future releases
-```
+- [diamond](https://github.com/bbuchfink/diamond)
+- awk
+- [pauvre](https://github.com/conchoecia/pauvre) - I may remove this requirement in future releases 
+- [bioawk](https://github.com/lh3/bioawk) - I may remove this requirement in future releases
+
 
 ## Installation
 
