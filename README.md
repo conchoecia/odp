@@ -1,4 +1,4 @@
-<img src="https://github.com/conchoecia/odp/blob/main/figs/dotplot_fig-01.jpg" width="250">
+<img src="https://github.com/conchoecia/odp/blob/main/figs/dotplot_fig_v2-01.jpg" width="250">
 
 # odp - Oxford Dot Plots
 
