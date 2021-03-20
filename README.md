@@ -1,4 +1,4 @@
-![odp](figs/dotplot_fig-01.jpg)
+<img src="https://github.com/conchoecia/odp/blob/main/figs/dotplot_fig-01.jpg" width="250">
 
 # odp - Oxford Dot Plots
 
