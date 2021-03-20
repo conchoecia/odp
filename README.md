@@ -9,6 +9,9 @@ This software works by:
 2. Calculating [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) for each genome.
 3. Plotting the genome assembly, reciprocal best protein hits, and Da/Db using matplotlib
 
+## Example
+
+
 ## Requirements
 
 This software is probably best run in a unix environment. All development was on Ubuntu 18.04.4 LTS.
@@ -57,7 +60,7 @@ The requirements for each field are:
 1. "protein_header" - the string here must match the header of a protein in the protein fasta.
 2. "scaffold_header" - the string here must match the header of a sequence in the genome assembly fasta.
 3. "strand" - must be "+" or "-".
-4. "start" - the position, in basepair coordinates, where the CDS of the protein starts. Can often be found in a GFF3 or GTF.
+4. "start" - the numerically least position, in basepair coordinates, of the CDS of the protein. Like the start coords in a `bed` or `GFF` file, not necessarily the position of the start codon. Can often be found in a GFF3 or GTF.
 5. "stop" - same as #4, but the stop position.
 
 For example, the following text details four proteins that map to two scaffolds. Two of the proteins are on the negative strand. The first protein, `BFGX8636T1`, has its start codon from the first position of scaffold 1, and the last codon ends at base 1246.
@@ -82,3 +85,7 @@ XP_024307730.1  NC_000001.11    -       358153  399041
 NP_001005221.2  NC_000001.11    -       450740  450740
 XP_011540840.1  NC_000001.11    -       586839  611112
 ```
+
+## Configuring your Oxford Dot Plots
+
+The plots produc
