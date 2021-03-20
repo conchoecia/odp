@@ -50,4 +50,26 @@ Three files are needed for each genome for which you would like to be plotted.
 
 ### `.chrom` specification
 
-The `.chrom` file format has 5 fields. Each line details the location of a protein in the genome assem
+The `.chrom` file format has 5 tab-delimited fields. Each line details the location of a protein on a scaffold. The fields are:
+  - "protein_header scaffold_header strand start stop"
+
+The requirements for each field are:
+1. "protein_header" - the string here must match the header of a protein in the protein fasta.
+2. "scaffold_header" - the string here must match the header of a sequence in the genome assembly fasta.
+3. "strand" - must be "+" or "-".
+4. "start" - the position, in basepair coordinates, where the CDS of the protein starts. Can often be found in a GFF3 or GTF.
+5. "stop" - same as #4, but the stop position.
+
+For example, the following text details four proteins that map to two scaffolds. Two of the proteins are on the negative strand. The first protein, `BFGX8636T1`, has its start codon from the first position of scaffold 1, and the last codon ends at base 1246.
+
+```
+BFGX8636T1      sca1    +       1       1246
+BFGX0001T1      sca1    -       2059    2719
+BFGX0002T1      sca2    +       6491    12359
+BFGX0003T1      sca2    -       12899   18848
+```
+
+### How to genereate a `.chrom` file
+
+A `.chrom` file can usually easily be generated from a genome annotation, such as a [`GFF3`](https://m.ensembl.org/info/website/upload/gff3.html) or [`GTF/GFF2`](https://uswest.ensembl.org/info/website/upload/gff.html) file.
+
