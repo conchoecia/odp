@@ -71,5 +71,14 @@ BFGX0003T1      sca2    -       12899   18848
 
 ### How to genereate a `.chrom` file
 
-A `.chrom` file can usually easily be generated from a genome annotation, such as a [`GFF3`](https://m.ensembl.org/info/website/upload/gff3.html) or [`GTF/GFF2`](https://uswest.ensembl.org/info/website/upload/gff.html) file.
+A `.chrom` file can usually easily be generated from a genome annotation, such as a [`GFF3`](https://m.ensembl.org/info/website/upload/gff3.html) or [`GTF/GFF2`](https://uswest.ensembl.org/info/website/upload/gff.html) file. If you are working with NCBI GFFs, CDS entries have a predictable format that enables us to compile all of the information required for a chrom file: `NC_000001.11	BestRefSeq	CDS	65565	65573	.	+	0	ID=cds-NP_001005484.2;Parent=rna-NM_001005484.2;Dbxref=CCDS:CCDS30547.1,Ensembl:ENSP00000493376.2,GeneID:79501,Genbank:NP_001005484.2,HGNC:HGNC:14825;Name=NP_001005484.2;gbkey=CDS;gene=OR4F5;product=olfactory receptor 4F5;protein_id=NP_001005484.2;tag=MANE Select`. There are many CDS lines per gene, so a special parsing program is required.
 
+The program bundled with `odp`, [scripts/NCBIgff2chrom.py](scripts/NCBIgff2chrom.py), parses gzipped/uncompressed NCBI GFFs and gets the full protein span in the genome. Running [scripts/NCBIgff2chrom.py](scripts/NCBIgff2chrom.py) on the [human GFF from NCBI](https://www.ncbi.nlm.nih.gov/genome/?term=human) with the command `python NCBIgff2chrom.py GCF_000001405.39_GRCh38.p13_genomic.gff.gz` results in a legal `.chrom` file with all of the proteins from the annotation. This file can be easily filtered later on.
+
+```
+NP_001005484.2  NC_000001.11    +       65565   69037
+XP_024307731.1  NC_000001.11    -       358067  399041
+XP_024307730.1  NC_000001.11    -       358153  399041
+NP_001005221.2  NC_000001.11    -       450740  450740
+XP_011540840.1  NC_000001.11    -       586839  611112
+```
