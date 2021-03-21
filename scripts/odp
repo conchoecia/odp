@@ -43,7 +43,9 @@ def expand_avoid_matching_x_and_y_third(filestring, xsamples, ysamples, third):
     this works like snakemake's expand function but does not generate
      files where xsample equals ysample
 
-    outputs a list of files
+    outputs a list of files.
+
+    Note March 20th, 2021 - the "third" aspect is related to coloring by another species
     """
     outlist = []
     for xsamp in xsamples:
@@ -76,8 +78,8 @@ rule all:
         #        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
 
         # working on plotting for color
-        #expand("synteny_analysis/prot_to_color/{colorby}_prottocolor.tsv",
-        #       colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]])
+        expand("synteny_analysis/prot_to_color/{colorby}_prottocolor.tsv",
+               colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
         expand_avoid_matching_x_and_y_third(
             "synteny_analysis/plots/synteny_colored_by/{}_and_{}_coloredby_{}_synteny.pdf",
             config["xaxisspecies"], config["yaxisspecies"],
@@ -278,6 +280,45 @@ rule get_genome_coords_y:
           sort -k2 -nr | \
           awk '{{sum = sum + $2; print($1, $2, sum) }}' > {output.coords}
         """
+
+def generate_coord_structs(prot_to_loc_file):
+    """
+    This parses a .chrom file and outputs five data structures that are easily
+     used for mapping pandas dataframes.
+    The output is a dict of dicts. Not the most intuitive format but easy for
+     mapping to column values.
+     { "prot_to_scaf":   prot_to_scaf,
+       "prot_to_strand": prot_to_strand,
+       "prot_to_start":  prot_to_start,
+       "prot_to_stop":   prot_to_stop,
+       "prot_to_middle": prot_to_middle }
+    """
+    prot_to_scaf   = {}
+    prot_to_strand = {}
+    prot_to_start  = {}
+    prot_to_stop   = {}
+    prot_to_middle = {}
+    with open(prot_to_loc_file, "r") as f:
+       for line in f:
+           line = line.strip()
+           if line:
+               splitd = line.split()
+               prot = splitd[0]
+               # add things now
+               prot_to_scaf[prot]   = splitd[1]
+               prot_to_strand[prot] = splitd[2]
+               start = int(splitd[3])
+               prot_to_start[prot]  = start
+               stop = int(splitd[4])
+               prot_to_stop[prot]   = stop
+               stop = int(splitd[4])
+               prot_to_middle[prot] = int(start + (stop - start)/2)
+    return { "prot_to_scaf":   prot_to_scaf,
+             "prot_to_strand": prot_to_strand,
+             "prot_to_start":  prot_to_start,
+             "prot_to_stop":   prot_to_stop,
+             "prot_to_middle": prot_to_middle }
+
 def blast_plot_order_helper(coords, sample, breaks, xory, xprottoloc, yprottoloc, recip, xorder):
     """
     This uses the reciprocal blast results to come up with the sort order
@@ -290,30 +331,8 @@ def blast_plot_order_helper(coords, sample, breaks, xory, xprottoloc, yprottoloc
     # now make a lookup table of where the prots are.
     #  Use the x_offset and y_offset to recalculate where the plotting
     #  value is
-    x_prot_to_loc = {}
-    x_prot_to_scaf = {}
-    with open(xprottoloc, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                splitd = line.split()
-                prot = splitd[0]
-                scaf = splitd[1]
-                pos = int(splitd[2])
-                x_prot_to_loc[prot] = pos
-                x_prot_to_scaf[prot] = scaf
-    y_prot_to_loc = {}
-    y_prot_to_scaf = {}
-    with open(yprottoloc, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                splitd = line.split()
-                prot = splitd[0]
-                scaf = splitd[1]
-                pos = int(splitd[2])
-                y_prot_to_loc[prot] = pos
-                y_prot_to_scaf[prot] = scaf
+    xcoords = generate_coord_structs(xprottoloc)
+    ycoords = generate_coord_structs(yprottoloc)
 
     # now open the blast results and translate the pairs
     #  into plotting positions
@@ -322,12 +341,13 @@ def blast_plot_order_helper(coords, sample, breaks, xory, xprottoloc, yprottoloc
                   "mismatch", "gapopen", "qstart", "qend",
                   "sstart", "send", "evalue", "bitscore"]
     df = df[["xgene", "ygene", "bitscore", "evalue"]]
-    #print(x_prot_to_loc)
-    df["xpos"] = df["xgene"].map(x_prot_to_loc)
-    df["ypos"] = df["ygene"].map(y_prot_to_loc)
 
-    df["yscaf"] = df["ygene"].map(y_prot_to_scaf)
-    df["xscaf"] = df["xgene"].map(x_prot_to_scaf)
+    #print(x_prot_to_loc)
+    df["xpos"] = df["xgene"].map(xcoords["prot_to_middle"])
+    df["ypos"] = df["ygene"].map(ycoords["prot_to_middle"])
+
+    df["xscaf"] = df["xgene"].map(xcoords["prot_to_scaf"])
+    df["yscaf"] = df["ygene"].map(xcoords["prot_to_scaf"])
     df = df.dropna()
     df = df.sort_values(by=['xpos'])
     df = df.loc[df["evalue"] <= float("1E-20"), ]
@@ -371,13 +391,23 @@ def parse_coords(coords, sample, breaks, xory, xprottoloc=None, yprottoloc=None,
     df = pd.read_csv(coords, header = None, sep = " ")
     df.columns = ["scaf", "scaflen", "cumsum"]
     # now figure out if we need to sort or not
+    drop_nas = True
+    # make sure that plotorder and sort_by_x_coord_blast aren't there together
+    #  These are two conflicting sort order operations.
+    #  Specifically, sort_by_x_coord_blast will mess up plotorder.
+    if ("plotorder" in config["{}axisspecies".format(xory)][sample]) and \
+       ("sort_by_x_coord_blast" in config["{}axisspecies".format(xory)][sample]):
+        raise IOError("""can't have plotorder and sort_by_x_coord_blast in the
+        same sample.""")
+
     if xory == "x":
         if sample not in config["xaxisspecies"]:
             raise IOError("Can't find this xspecies")
         else:
             if "plotorder" in config["xaxisspecies"][sample]:
                 plotorder = config["xaxisspecies"][sample]["plotorder"]
-                print("plot order is: {}".format(plotorder))
+                #print("plot order is: {}".format(plotorder))
+                drop_nas = False
             else:
                 plotorder = None
     elif xory == "y":
@@ -387,9 +417,11 @@ def parse_coords(coords, sample, breaks, xory, xprottoloc=None, yprottoloc=None,
         else:
             #print("we're in the else of y")
             if "plotorder" in config["yaxisspecies"][sample]:
-                print("we're in the plotorder of y")
+                #print("we're in the plotorder of y")
                 plotorder = config["yaxisspecies"][sample]["plotorder"]
-            if "sort_by_x_coord_blast" in config["yaxisspecies"][sample]:
+                #print("plotorder zeroth " + plotorder[0])
+                drop_nas = False
+            elif "sort_by_x_coord_blast" in config["yaxisspecies"][sample]:
                 #print("we're in the sort_by_x_coord_blast of y")
                 if config["yaxisspecies"][sample]["sort_by_x_coord_blast"]:
                     #print("we're in the sort_by_x_coord_blast of y True")
@@ -399,19 +431,30 @@ def parse_coords(coords, sample, breaks, xory, xprottoloc=None, yprottoloc=None,
                                                         yprottoloc, recip, xorder)
                     #print("after plot order in sort_by_x_coord_blast")
             else:
+                #print("in the else")
                 plotorder = None
     else:
         raise IOError("Don't know what this is")
+    #print("df after xory")
     # now we have determined if we need to sort
-    if plotorder != None:
+    if plotorder != None: # if plotorder has something in it.
         #print(" - using custom plot order: ", plotorder)
         sortdict = {key: val for key, val in zip(plotorder, range(len(plotorder)))}
         df['rank'] = df['scaf'].map(sortdict)
         df.sort_values(by = 'rank' ,inplace=True)
-    df = df.dropna()
+    #print("df after plotorder")
+    #print(df)
+
+    # now, if we made plotorder from config then drop rows
+    if "plotorder" in config["{}axisspecies".format(xory)][sample]:
+        df = df[df["scaf"].isin(config["{}axisspecies".format(xory)][sample]["plotorder"])]
+    # only drop if we haven't specified the plot order in the config
+    #if drop_nas:
+    #    df = df.dropna()
     df.reset_index(drop=True, inplace = True)
     df["cumsum"] = df["scaflen"].cumsum()
     df["cumsum"] = df["cumsum"] - df["scaflen"]
+    print("df after cumulative sum and sorting")
     print(df)
     for i, row in df.iterrows():
         offset[row["scaf"]] = row["cumsum"]
@@ -473,6 +516,9 @@ def calc_D_for_y_and_x(df):
     df.reset_index(drop=True, inplace = True)
     return df
 
+"""
+If the user provided a plot order, then we should not skip any scaffolds
+"""
 def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
                  xbreaks, ybreaks, recip, synplot, outtable, plotorder_file, prot_to_color,
                  dropmissing, plot_x_lines = False, plot_y_lines = False):
@@ -512,7 +558,6 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
             pos  = int(thisy.split(":")[1])
             ybreaks_list.append([scaf, pos])
 
-
         # first make a lookup table of how to calculate the
         #  x and y coords. This lookup is just the amount of
         # bp to add to the value when plotting. We pass the xprot_to_loc,
@@ -539,32 +584,29 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
         # now make a lookup table of where the prots are.
         #  Use the x_offset and y_offset to recalculate where the plotting
         #  value is
-        x_prot_to_loc = {}
-        x_prot_to_scaf = {}
-        with open(xprottoloc, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    splitd = line.split()
-                    prot = splitd[0]
-                    scaf = splitd[1]
-                    if scaf in x_offset:
-                        pos = int(splitd[2]) + x_offset[scaf]
-                        x_prot_to_loc[prot] = pos
-                        x_prot_to_scaf[prot] = scaf
-        y_prot_to_loc = {}
-        y_prot_to_scaf = {}
-        with open(yprottoloc, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    splitd = line.split()
-                    prot = splitd[0]
-                    scaf = splitd[1]
-                    if scaf in y_offset:
-                        pos = int(splitd[2]) + y_offset[scaf]
-                        y_prot_to_loc[prot] = pos
-                        y_prot_to_scaf[prot] = scaf
+
+        xstruct = generate_coord_structs(xprottoloc)
+        xstruct["prot_plot_pos"] = {}
+        ystruct = generate_coord_structs(yprottoloc)
+        ystruct["prot_plot_pos"] = {}
+        # get rid of proteins that we don't need along the x axis
+        #  also set the plotting position based on the offset
+        for prot in list(xstruct["prot_to_middle"].keys()):
+            scaf = xstruct["prot_to_scaf"][prot]
+            if scaf not in x_offset:
+                for thisdict in xstruct:
+                    xstruct[thisdict].pop(prot, None)
+            else:
+                xstruct["prot_plot_pos"][prot] = xstruct["prot_to_middle"][prot] + x_offset[scaf]
+        # get rid of proteins that we don't need along the y axis
+        #  also set the plotting position based on the offset
+        for prot in list(ystruct["prot_to_middle"].keys()):
+            scaf = ystruct["prot_to_scaf"][prot]
+            if scaf not in y_offset:
+                for thisdict in xstruct:
+                    ystruct[thisdict].pop(prot, None)
+            else:
+                ystruct["prot_plot_pos"][prot] = ystruct["prot_to_middle"][prot] + y_offset[scaf]
 
         # now open the blast results and translate the pairs
         #  into plotting positions
@@ -574,17 +616,19 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
                       "sstart", "send", "evalue", "bitscore"]
         df = df[["xgene", "ygene", "bitscore", "evalue"]]
         #print(x_prot_to_loc)
-        df["xpos"] = df["xgene"].map(x_prot_to_loc)
-        df["ypos"] = df["ygene"].map(y_prot_to_loc)
+        df["xpos"] = df["xgene"].map(xstruct["prot_plot_pos"])
+        df["ypos"] = df["ygene"].map(ystruct["prot_plot_pos"])
         print(df)
 
-        df["xgene_on_which_y_scaf"] = df["ygene"].map(y_prot_to_scaf)
-        df["ygene_on_which_x_scaf"] = df["xgene"].map(x_prot_to_scaf)
-        df = df.dropna()
+        # I don't remember why the x and y is switched here.
+        df["xgene_on_which_y_scaf"] = df["ygene"].map(ystruct["prot_to_scaf"])
+        df["ygene_on_which_x_scaf"] = df["xgene"].map(xstruct["prot_to_scaf"])
+        #df = df.dropna() # this messed up plotting order if there were no hits on that scaf.
         df = df.sort_values(by=['xpos'])
         df = df.loc[df["evalue"] <= float("1E-20"), ]
         df.reset_index(drop=True, inplace = True)
 
+        print(df)
         # Now calculate D and Dw for both X and Y axes
         df = calc_D_for_y_and_x(df)
         print(df)
@@ -688,7 +732,6 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
             arr = xtickpos
             idx = np.round(np.linspace(0, len(arr) - 1, numElems)).astype(int)
             newarr       = [arr[i] for i in idx]
-            newarrlabels = [round(arr[i]/1000000, 1) for i in idx]
             newarrNumScaf     = [i for i in idx]
             # turn on y-axis ticks on the left - plot scaffolds
             panel1.tick_params(bottom=True)
@@ -696,15 +739,15 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
             panel1.set_xticklabels(newarrNumScaf, fontsize=8, rotation=90)
             panel1.set_xlabel(xsample + " number of scaffolds")
         else:
-            newarr = xtickpos
-            newarrlabels = [round(x/1000000, 1) for x in newarr]
+            newarr = [0] + vertical_lines_at + [xmax]
             panel1.set_xticks(xtickpos)
-            panel1.set_xticklabels(xticklabel, fontsize=8)
+            panel1.set_xticklabels(xticklabel, fontsize=8, rotation = 90)
             panel1.set_xlabel(xsample + " scaffolds")
         # turn on x-axis ticks on the Dx plot
+        newarrlabels = [round(x/1000000, 1) for x in newarr]
         panelxd.tick_params(top=True, labeltop=True)
         panelxd.set_xticks(newarr)
-        panelxd.set_xticklabels(newarrlabels, fontsize=8, rotation=-90)
+        panelxd.set_xticklabels(newarrlabels, fontsize=8, rotation=90)
         panelxd.xaxis.set_label_position("top")
         panelxd.set_xlabel("Mb")
 
@@ -726,12 +769,12 @@ def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
             panel1.set_yticklabels(newarrNumScaf, fontsize=8)
             panel1.set_ylabel(ysample + " number of scaffolds")
         else:
-            newarr = ytickpos
-            newarrlabels = [round(x/1000000, 1) for x in newarr]
+            newarr = [0] + horizontal_lines_at + [ymax]
             panel1.set_yticks(ytickpos)
             panel1.set_yticklabels(yticklabel, fontsize=8)
             panel1.set_ylabel(ysample + " scaffolds")
         # turn on y-axis ticks on the Dy plot
+        newarrlabels = [round(x/1000000, 1) for x in newarr]
         panelyd.tick_params(right=True, labelright=True)
         panelyd.set_yticks(newarr)
         panelyd.set_yticklabels(newarrlabels, fontsize=8)
@@ -791,8 +834,8 @@ rule plot_synteny:
         ysample = lambda wildcards: wildcards.ysample,
         xbreaks  = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["breaks"],
         ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["breaks"],
-        keep_x   = lambda wildcards: False if "sort_by_x_coord_blast" in config["xaxisspecies"][wildcards.xsample] else True,
-        keep_y   = lambda wildcards: False if "sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample] else True
+        keep_x   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["xaxisspecies"][wildcards.xsample]) or ("noxlines" in config["xaxisspecies"][wildcards.xsample])) else True,
+        keep_y   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample]) or ("noylines" in config["yaxisspecies"][wildcards.ysample])) else True
     run:
         synteny_plot(input.ycoords, input.xcoords,
                      input.xprottoloc, input.yprottoloc,
@@ -836,21 +879,17 @@ rule xprot_to_color:
         print(df)
         #df["colors_py"] =  df["color"].apply(matplotlib.colors.to_rgba)
         out_handle = open(output.prot_to_color, "w")
-        with open(input.x_prot_to_loc, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    splitd = line.split()
-                    prot = splitd[0]
-                    scaf = splitd[1]
-                    if scaf in list(df["scaf"]):
-                        pos  = int(splitd[2])
-                        query = "scaf == '{}' & pos_min <= {} & pos_max >= {}".format(scaf, pos, pos)
-                        color = df.query(query)["color"].values[0]
-                        print("{}\t{}".format(prot, color), file=out_handle)
-                    else:
-                        color = "#000000"
-                        print("{}\t{}".format(prot, color), file=out_handle)
+        xstruct = generate_coord_structs(input.x_prot_to_loc)
+        for prot in list(xstruct["prot_to_scaf"].keys()):
+            scaf = xstruct["prot_to_scaf"][prot]
+            if scaf in list(df["scaf"]):
+                pos  = xstruct["prot_to_middle"][prot]
+                query = "scaf == '{}' & pos_min <= {} & pos_max >= {}".format(scaf, pos, pos)
+                color = df.query(query)["color"].values[0]
+                print("{}\t{}".format(prot, color), file=out_handle)
+            else:
+                color = "#000000"
+                print("{}\t{}".format(prot, color), file=out_handle)
         out_handle.close()
 
 """
@@ -881,8 +920,9 @@ rule plot_synteny_x_colored_by_x:
         color_sample = lambda wildcards: wildcards.colorby,
         xbreaks  = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["breaks"],
         ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["breaks"],
-        keep_x   = lambda wildcards: False if "sort_by_x_coord_blast" in config["xaxisspecies"][wildcards.xsample] else True,
-        keep_y   = lambda wildcards: False if "sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample] else True
+        keep_x   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["xaxisspecies"][wildcards.xsample]) or ("noxlines" in config["xaxisspecies"][wildcards.xsample])) else True,
+        keep_y   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample]) or ("noylines" in config["yaxisspecies"][wildcards.ysample])) else True
+
     run:
         #first figure out what the color should be for each protein pair
         colorby_prot_to_color = {}
