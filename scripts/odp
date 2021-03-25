@@ -6,6 +6,7 @@ from Bio import SeqIO
 import matplotlib
 import pandas as pd
 import numpy as np
+import statistics
 import sys
 
 configfile: "config.yaml"
@@ -106,7 +107,7 @@ rule all:
 
         #make the correlation plots
         expand_avoid_matching_x_and_y(
-            "synteny_analysis/plots/significance/wholechr/{}_and_{}_test.density",
+            "synteny_analysis/plots/significance/wholechr/{}_and_{}_fisher.pdf",
              config["xaxisspecies"], config["yaxisspecies"])
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
@@ -900,12 +901,49 @@ rule plot_synteny:
                      output.plot_order, None,
                      False, params.keep_x, params.keep_y)
 
+def sizes_and_scale_minp(smallest_p):
+    """
+    This outputs two lists. One of scale, and one of sizes,
+    based on the smallest_p.
 
-"""
-correlation plot makes a plot of the Fisher's exact test for each chromosome
-"""
+    This is used for plotting elipses in the figure and the legend
+    """
+    scale     = [1,       0.84,     0.67,     0.5,    0.3   ]
+
+    if smallest_p == 0:
+        sizes = [0,       "1E-20", "1E-10", "1E-5", "1E-2"]
+    elif smallest_p <= float("1E-20"):
+        sizes = ["1E-20", "1E-15", "1E-7",  "1E-4", "5E-2"]
+    elif smallest_p <= float("1E-15"):
+        sizes = ["1E-15", "1E-10", "1E-5",  "1E-2", "1E-1"]
+    elif smallest_p <= float("1E-10"):
+        sizes = ["1E-10", "1E-7",  "1E-4",  "1E-2", "1E-1"]
+    elif smallest_p <= float("1E-8"):
+        sizes = ["1E-8",  "1E-6",  "1E-4",  "1E-2", "1E-1"]
+    elif smallest_p <= float("1E-6"):
+        sizes = ["1E-6",  "1E-5",  "1E-3",  "1E-2", "1E-1"]
+    elif smallest_p <= float("1E-5"):
+        sizes = ["1E-5",  "1E-4",  "1E-3",  "1E-2", "0.5"]
+    else:
+        sizes = ["1E-4",  "1E-3",  "1E-2",  "1E-1", "0.5"]
+    return [scale, sizes]
+
+def quantize_pvalue(xsize, ysize, p, smallest_p):
+    """
+    This quantizes the pvalues using standard values cutoffs
+    returns [xsize, ysize]
+    """
+    scale, sizes = sizes_and_scale_minp(smallest_p)
+    for i in range(len(sizes)):
+        if p <= float(sizes[i]):
+            return [xsize * scale[i], ysize * scale[i]]
+    return [xsize * 0.15, ysize * 0.15]
+
 def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
-                     xbreaks, ybreaks, recip, density_file):
+                     xbreaks, ybreaks, recip, densityplot):
+    """
+    correlation plot makes a plot of the Fisher's exact test for each chromosome
+    """
     from scipy import stats
     import pandas as pd
     import seaborn as sns; sns.set()
@@ -953,6 +991,7 @@ def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
     print("found {} x chromosomes".format(len(x_offset)))
     x_genome_coords = pd.read_csv(xcoords, header = None, sep = " ")
     x_genome_coords.columns = ["scaf", "scaflen", "cumsum"]
+    print(x_offset)
 
     y_offset, horizontal_lines_at, ymax, ybreaks, yticklabel, ytickpos, yorder = parse_coords(
         ycoords, ysample, ybreaks_list, "y",
@@ -1021,29 +1060,158 @@ def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
         for yscaf in yorder: #Wi
             #calculate the cells for fisher exact
             query = "xgene_on_which_y_scaf == '{}' & ygene_on_which_x_scaf == '{}'".format(yscaf, xscaf)
-            inL_inW   = len(df.query(query))
+            inX_inY   = len(df.query(query))
             query = "xgene_on_which_y_scaf == '{}' & ygene_on_which_x_scaf != '{}'".format(yscaf, xscaf)
-            inL_outW  = len(df.query(query))
+            inX_outY  = len(df.query(query))
             query = "xgene_on_which_y_scaf != '{}' & ygene_on_which_x_scaf == '{}'".format(yscaf, xscaf)
-            outL_inW  = len(df.query(query))
+            outX_inY  = len(df.query(query))
             query = "xgene_on_which_y_scaf != '{}' & ygene_on_which_x_scaf != '{}'".format(yscaf, xscaf)
-            outL_outW = len(df.query(query))
-            table = [[inL_inW, outL_inW], [inL_outW, outL_outW]]
-            print(xscaf, yscaf)
-            print(table)
+            outX_outY = len(df.query(query))
+            table = [[inX_inY, outX_inY], [inX_outY, outX_outY]]
             oddsratio, pvalue = stats.fisher_exact(table, alternative="greater")
-            print(oddsratio, pvalue)
-            print()
-            #fisher_dict.append({"xscaf": xscaf, "yscaf": yscaf,
-            #                    "inL_inW": inL_inW, "inL_outW": inL_outW,
-            #                    "outL_inW": outL_inW, "outL_outW": outL_outW})
-    sys.exit()
+            fisher_dict.append({"xscaf": xscaf, "yscaf": yscaf,
+                                "inX_inY": inX_inY, "inX_outY": inX_outY,
+                                "outX_inY": outX_inY, "outX_outY": outX_outY,
+                                "oddsratio": oddsratio, "pvalue": pvalue,
+                                "x_plot_pos": xtickpos[xticklabel.index(xscaf)],
+                                "y_plot_pos": ytickpos[yticklabel.index(yscaf)]})
+    fisherdf = pd.DataFrame(fisher_dict)
+    # figure out the widths of the cells to find the optimal dot size
+    widths = []
+    #for this_list in [horizontal_lines_at, vertical_lines_at
+    for this_list in [list(sorted(x_offset.values()))]:
+        for i in range(len(this_list)-1):
+            widths.append(this_list[i+1]-this_list[i])
+    x_median_size = statistics.median(sorted(widths))
+    x_median_size = np.percentile(sorted(widths), 85)
+    max_x = max(x_offset.values())
+    max_y = max(y_offset.values())
+    y_median_size = (x_median_size/max_x)*max_y
+
+    # now make a scatter plot
+    figWidth = 8
+    figHeight = 8
+    plt.figure(figsize=(figWidth,figHeight))
+    #set the panel dimensions
+    panelWidth = 4
+    panelHeight = 4
+    dpanel_width = 0.25
+    #find the margins to center the panel in figure
+    leftMargin = (figWidth - panelWidth)/2
+    bottomMargin = ((figHeight - panelHeight)/2)
+    panel1 = plt.axes([leftMargin/figWidth, #left
+                         bottomMargin/figHeight,    #bottom
+                         panelWidth/figWidth,   #width
+                         panelHeight/figHeight])     #height
+    panel1.tick_params(axis='both',which='both',
+                        bottom=False, labelbottom=True,
+                        left=False, labelleft=True,
+                        right=False, labelright=False,
+                        top=False, labeltop=False)
+    panelleg = plt.axes([(leftMargin+panelWidth + 0.1)/figWidth, #left
+                         bottomMargin/figHeight,    #bottom
+                         (dpanel_width*4)/figWidth,   #width
+                         panelHeight/figHeight])     #height
+    panelleg.tick_params(axis='both',which='both',
+                        bottom=False, labelbottom=False,
+                        left=False, labelleft=False,
+                        right=False, labelright=False,
+                        top=False, labeltop=False)
+
+    # plot the circles for the significance
+    smallest_p = min(fisherdf["pvalue"])
+    for index, row in fisherdf.iterrows():
+        x, y = quantize_pvalue(x_median_size/2,
+                              y_median_size/2,
+                              float(row["pvalue"]),
+                              smallest_p)
+        circ = matplotlib.patches.Ellipse(
+                   (row["x_plot_pos"], row["y_plot_pos"]),
+                   x, y, ec = None, lw = None, color="gray")
+        panel1.add_patch(circ)
+
+
+    # set the panel linewidth thinner
+    for this_panel in [panel1]:
+        for axis in ['top','bottom','left','right']:
+            this_panel.spines[axis].set_linewidth(0.5)
+
+    # remove spines on legend
+    for this_panel in [panelleg]:
+        for axis in ['top','bottom','left','right']:
+            this_panel.spines[axis].set_visible(False)
+
+    # set mins and max
+    panel1.set_xlim([0,xmax])
+    panel1.set_ylim([0,ymax])
+    xscalar = (dpanel_width*4)/panelWidth
+    panelleg.set_xlim([0,xmax*xscalar]) # percent
+    panelleg.set_ylim([0,ymax])
+
+    # now plot the legend
+    # there are 6 sizes to plot
+    # take up the top 1/3 of the panel
+    legend_bottom_y = ymax - int(ymax/3)
+    legend_top_y    = ymax
+    leg_y_seglen        = int(ymax/3/7)
+    # set the points 15% away from left edge
+    leg_x_offset        = 0.15 * (xmax*xscalar)
+    leg_x_pos_ellipse = [leg_x_offset]*6
+    leg_y_pos_ellipse = [legend_top_y - leg_y_seglen]
+    for i in range(6):
+        leg_y_pos_ellipse.append(leg_y_pos_ellipse[-1] - leg_y_seglen)
+    # now actually plot the ellipses
+    legscale, legsize = sizes_and_scale_minp(smallest_p)
+    legscale.append(0.15)
+    legsize.append("1")
+    for i in range(6):
+        x, y = quantize_pvalue(x_median_size/2,
+                              y_median_size/2,
+                              float(legsize[i]),
+                              min([float(x) for x in legsize]))
+        circ = matplotlib.patches.Ellipse(
+                   (leg_x_pos_ellipse[i], leg_y_pos_ellipse[i]),
+                   x, y, ec = None, lw = None, color="gray")
+        panelleg.add_patch(circ)
+        textx = leg_x_pos_ellipse[i] + leg_x_offset
+        texty = leg_y_pos_ellipse[i]
+        s = "p <= {}".format(legsize[i])
+        matplotlib.pyplot.text(textx, texty, s, ha="left", fontsize = 8)
+
+    # set x ticks
+    panel1.set_xticks(xtickpos)
+    panel1.set_xticklabels(xticklabel, fontsize=8, rotation = 90)
+    panel1.set_xlabel(xsample + " scaffolds")
+
+    # set y ticks
+    panel1.set_yticks(ytickpos)
+    panel1.set_yticklabels(yticklabel, fontsize=8)
+    panel1.set_ylabel(ysample + " scaffolds")
+
+    for this_axis in [panel1]:
+        this_axis.xaxis.get_offset_text().set_visible(False)
+        this_axis.yaxis.get_offset_text().set_visible(False)
+
+    #plot vertical lines
+    for value in vertical_lines_at:
+        panel1.axvline(x=value, color="black", lw=0.5)
+    #plot horizontal lines
+    for value in horizontal_lines_at:
+        panel1.axhline(y=value, color="black", lw=0.5)
+
+    # plot vertical BOS
+    for value in xbreaks:
+        panel1.axvline(x=value, color=[0,0,0,0.25], lw=0.5, linestyle="dotted")
+    # plot horizontal BOS
+    for value in ybreaks:
+        panel1.axhline(y=value, color=[0,0,0,0.25], lw=0.5, linestyle="dotted")
+    plt.savefig(densityplot)
 
 
 """
 This handles the correlation matrices
 """
-rule plot_correlation:
+rule plot_fishers:
     input:
         ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
         xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
@@ -1051,7 +1219,7 @@ rule plot_correlation:
         yprottoloc = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"],
         recip = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp"
     output:
-        density = "synteny_analysis/plots/significance/wholechr/{xsample}_and_{ysample}_test.density",
+        density = "synteny_analysis/plots/significance/wholechr/{xsample}_and_{ysample}_fisher.pdf",
     threads:
         1
     params:
