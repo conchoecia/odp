@@ -3,7 +3,9 @@ This script performs mutual-best protein diamond BLAST searches,
  then makes synteny plots of those results.
 """
 from Bio import SeqIO
+from itertools import groupby
 import matplotlib
+from operator import itemgetter
 import pandas as pd
 import numpy as np
 import statistics
@@ -18,13 +20,16 @@ for this_axis in ["xaxisspecies", "yaxisspecies"]:
             if "breaks" not in config[this_axis][this_one]:
                 config[this_axis][this_one]["breaks"] = []
 
-
 #make a function to add entries into y, if the entry is in x but not yet in y
 if "yaxisspecies" not in config:
     config["yaxisspecies"] = {}
 for thisx in config["xaxisspecies"]:
     if thisx not in config["yaxisspecies"]:
         config["yaxisspecies"][thisx] = config["xaxisspecies"][thisx]
+
+def flatten(list_of_lists):
+    """flatten a list of lists"""
+    return [item for sublist in list_of_lists for item in sublist]
 
 def expand_avoid_matching_x_and_y(filestring, xsamples, ysamples):
     """
@@ -72,32 +77,22 @@ rule all:
         #       ysample = config["yaxisspecies"])
         expand_avoid_matching_x_and_y("synteny_analysis/plots/synteny_uncolored/{}_and_{}_synteny.pdf",
                 config["xaxisspecies"], config["yaxisspecies"]),
-        #expand("synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny.pdf",
-        #        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
         expand_avoid_matching_x_and_y("synteny_analysis/dvalue_table/{}_and_{}_info.tsv",
                 config["xaxisspecies"],  config["yaxisspecies"]),
-        #expand("synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
-        #        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
 
         # working on plotting for color
         expand("synteny_analysis/prot_to_color/{colorby}_prottocolor.tsv",
                colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
-        expand_avoid_matching_x_and_y_third(
-            "synteny_analysis/plots/synteny_colored_by/{}_and_{}_coloredby_{}_synteny.pdf",
-            config["xaxisspecies"], config["yaxisspecies"],
-            [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-            ),
-        #expand("synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
-        #       xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-        #       colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
-        expand_avoid_matching_x_and_y_third(
-            "synteny_analysis/plots/synteny_colored_by_no_missing/{}_and_{}_coloredby_{}_synteny.pdf",
-            config["xaxisspecies"], config["yaxisspecies"],
-            [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-            ),
-        #expand("synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
-        #       xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-        #       colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
+        #expand_avoid_matching_x_and_y_third(
+        #    "synteny_analysis/plots/synteny_colored_by/{}_and_{}_coloredby_{}_synteny.pdf",
+        #    config["xaxisspecies"], config["yaxisspecies"],
+        #    [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+        #    ),
+        #expand_avoid_matching_x_and_y_third(
+        #    "synteny_analysis/plots/synteny_colored_by_no_missing/{}_and_{}_coloredby_{}_synteny.pdf",
+        #    config["xaxisspecies"], config["yaxisspecies"],
+        #    [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+        #    ),
         # make protein similarity plots
         expand_avoid_matching_x_and_y(
             "synteny_analysis/plots/sample_similarity/{}_and_{}_peridentity_length.pdf",
@@ -375,7 +370,7 @@ def generate_coord_structs(prot_to_loc_file):
              "prot_to_stop":   prot_to_stop,
              "prot_to_middle": prot_to_middle }
 
-def blast_plot_order_helper(coords, sample, breaks, xory, xprottoloc, yprottoloc, recip, xorder):
+def blast_plot_order_helper(coords, sample, xory, xprottoloc, yprottoloc, recip, xorder):
     """
     This uses the reciprocal blast results to come up with the sort order
      for the y-axis scaffolds. Returns a list of the plot order.
@@ -430,13 +425,15 @@ def blast_plot_order_helper(coords, sample, breaks, xory, xprottoloc, yprottoloc
     #print(list(df.yscaf))
     return(list(df.yscaf))
 
-def parse_coords(coords, sample, breaks, xory, xprottoloc=None, yprottoloc=None, recip=None, xorder=None):
+def parse_coords(coords, sample, xory,
+                 xprottoloc=None, yprottoloc=None,
+                 recip=None, xorder=None):
     """
     This parses the coordinates and returns a
       - coord-to-offset dict (I don't remember what this is for),
+      - the size of each scaffold (a dictionary)
       - a list of locations to plot lines (These are the scaf/chrom divisions)
       - the max value for that axis
-      - the BOS positions for that to plot (dotted, translucent line)
       - the tick labels
       - the tick positions
       - the yorder or xorder
@@ -482,9 +479,9 @@ def parse_coords(coords, sample, breaks, xory, xprottoloc=None, yprottoloc=None,
                 if config["yaxisspecies"][sample]["sort_by_x_coord_blast"]:
                     #print("we're in the sort_by_x_coord_blast of y True")
                     # we need to set up the sort order based on the occurrence in the blast results
-                    plotorder = blast_plot_order_helper(coords, sample, breaks,
-                                                        xory, xprottoloc,
-                                                        yprottoloc, recip, xorder)
+                    plotorder = blast_plot_order_helper(coords, sample, xory,
+                                                        xprottoloc, yprottoloc,
+                                                        recip, xorder)
                     #print("after plot order in sort_by_x_coord_blast")
             else:
                 #print("in the else")
@@ -518,362 +515,724 @@ def parse_coords(coords, sample, breaks, xory, xprottoloc=None, yprottoloc=None,
             lines_at.append(row["cumsum"])
     max_coord = list(df["scaflen"].cumsum())[-1]
 
-    # now get the break of synteny positions
-    BOS_here = []
-    for pair in breaks:
-        scaf = pair[0]
-        pos  = pair[1]
-        BOS_here.append( offset[scaf] + pos )
-
     #tick labels
     tick_labels = list(df["scaf"])
     tick_pos    = list(df["cumsum"] + (df["scaflen"]/2))
-    return (offset, lines_at, max_coord, BOS_here, tick_labels, tick_pos, list(df["scaf"]))
 
-def calc_D_for_y_and_x(df):
+    scaf_to_len = {}
+    for i, row in df.iterrows():
+        scaf_to_len[row["scaf"]] = row["scaflen"]
+
+    return (offset, scaf_to_len, lines_at, max_coord, tick_labels, tick_pos, list(df["scaf"]))
+
+
+def calc_D_for_y_and_x(df, x_offset, y_offset, x_scaf_to_len, y_scaf_to_len):
     """
     This calculates D for both the x and y axes.
     Defined in the 2020 vertebrate synteny paper.
     """
     df = df.dropna()
-    df = df.sort_values(by=['xpos'])
-    df.reset_index(drop=True, inplace = True)
+    # some variable names in this for loop are "x" but it doesn't matter.
+    #  everything important is variable between x and y
+    for thisdir in ["x", "y"]:
+        df = df.sort_values(by=["{}middle".format(thisdir)])
+        df.reset_index(drop=True, inplace = True)
 
-    # this just calculates Dx
-    df2 = pd.get_dummies(df["xgene_on_which_y_scaf"])
-    # tried to weight the values but didn't work well
-    #df2 = df.pivot_table(values='bitscore', index=df.index, columns='xgene_on_which_y_scaf', fill_value=0)
-    #df2 = df2/df["bitscore"].max()
-    #print(df2)
-    #sys.exit()
-    df2_xiL = df2.apply(lambda x: x.rolling(20).mean(), axis = 0)
-    df2_xiR = df2.apply(lambda x: x.iloc[::-1].rolling(20).mean(), axis = 0).iloc[::-1]
-    df2_xiR = df2_xiR.set_index(df2_xiR.index - 1)
-    df2_xiR = df2_xiR.iloc[1:]
-    subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
-    D = subtractdf.apply(lambda x: np.sqrt(np.square(x).sum()), axis = 1)
-    df["Dx"] = D
-    df["Dx_barwidth"] = [(list(df["xpos"])[i+1] - list(df["xpos"])[i])*0.8 for i in range(len(list(df["Dx"]))-1)] + [1]
-
-    # this just calculates Dy
-    df = df.sort_values(by=['ypos'])
-    df.reset_index(drop=True, inplace = True)
-    df2 = pd.get_dummies(df["ygene_on_which_x_scaf"])
-    df2_yiL = df2.apply(lambda x: x.rolling(20).mean(), axis = 0)
-    df2_yiR = df2.apply(lambda x: x.iloc[::-1].rolling(20).mean(), axis = 0).iloc[::-1]
-    df2_yiR = df2_yiR.set_index(df2_yiR.index - 1)
-    df2_yiR = df2_yiR.iloc[1:]
-    subtractdf_y = df2_yiR.fillna(0) - df2_yiL.fillna(0)
-    D = subtractdf_y.apply(lambda x: np.sqrt(np.square(x).sum()), axis = 1)
-    df["Dy"] = D
-    df["Dy_barwidth"] = [(list(df["ypos"])[i+1] - list(df["ypos"])[i])*0.8 for i in range(len(list(df["Dy"]))-1)] + [1]
-
-    df = df.sort_values(by=['xpos'])
+        unique_x = df["{}scaf".format(thisdir)].unique()
+        thisdir_dfs = []
+        # this just calculates Dx
+        for thisx in unique_x:
+            xdf = df.loc[df["{}scaf".format(thisdir)] == thisx, ].copy()
+            xdf = xdf.reset_index(drop=True)
+            oppositexy = "d"
+            this_offset = {}
+            this_scaf_to_len = {}
+            if thisdir == "x":
+                oppositexy = "y"
+                this_offset = x_offset
+                this_scaf_to_len = x_scaf_to_len
+            elif thisdir == "y":
+                oppositexy = "x"
+                this_offset = y_offset
+                this_scaf_to_len = y_scaf_to_len
+            df2 = pd.get_dummies(xdf["{}scaf".format(oppositexy)])
+            df2_xiL = df2.apply(lambda x: x.rolling(20).mean(), axis = 0)
+            df2_xiR = df2.apply(lambda x: x.iloc[::-1].rolling(20).mean(), axis = 0).iloc[::-1]
+            df2_xiR = df2_xiR.set_index(df2_xiR.index - 1)
+            df2_xiR = df2_xiR.iloc[1:]
+            subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
+            D = subtractdf.apply(lambda x: np.sqrt(np.square(x).sum()), axis = 1)
+            xdf["D{}".format(thisdir)] = D
+            xdf["D{}_barleft".format(thisdir)] = 0
+            xdf["D{}_barmiddle".format(thisdir)] = 0
+            xdf["D{}_barright".format(thisdir)] = 0
+            xdf["D{}_barwidth".format(thisdir)] = 0
+            for i, row in xdf.iterrows():
+                barleft   = -1
+                barright  = -1
+                barmiddle = -1
+                barwidth  = -1
+                if i == 0:
+                    thisend   = row["{}stop".format(thisdir)]
+                    nextstart = xdf.loc[i+1, "{}start".format(thisdir)]
+                    barleft   = this_offset[thisx]
+                    barright  = thisend + ((nextstart-thisend)/2)
+                elif i == (len(xdf) - 1):
+                    prevend   = xdf.loc[i-1, "{}stop".format(thisdir)]
+                    thisstart = row["{}start".format(thisdir)]
+                    barleft   = prevend + ((thisstart-prevend)/2)
+                    barright  = this_scaf_to_len[thisx]
+                else:
+                    prevend   = xdf.loc[i-1, "{}stop".format(thisdir)]
+                    thisstart = row["{}start".format(thisdir)]
+                    thisend   = row["{}stop".format(thisdir)]
+                    nextstart = xdf.loc[i+1, "{}start".format(thisdir)]
+                    barleft   = prevend + ((thisstart-prevend)/2)
+                    barright  = thisend + ((nextstart-thisend)/2)
+                xdf.loc[i, "D{}_barleft".format(thisdir)]   = barleft
+                xdf.loc[i, "D{}_barright".format(thisdir)]  = barright
+                xdf.loc[i, "D{}_barmiddle".format(thisdir)] = barleft + ((barright - barleft)/2)
+                xdf.loc[i, "D{}_barwidth".format(thisdir)]  = barright - barleft + 1
+            thisdir_dfs.append(xdf)
+        df = pd.concat(thisdir_dfs)
+    df = df.sort_values(by=["xmiddle"])
     df.reset_index(drop=True, inplace = True)
     return df
 
-"""
-If the user provided a plot order, then we should not skip any scaffolds
-"""
+def determine_breaks(df, sort_direction):
+    """
+    determines the major breaks in Dx or Dy to use as partitions.
+
+    The input parameters are:
+      - df: the analysis df at the end of synteny plot.
+      - sort_direction: either "x" or "y"
+    """
+    # MAGIC NUMBERS
+    # set window to change how many genes on either side are considered when
+    #  looking for peaks. A value of 20 means 20 on either side, so 41 genes total
+    window = 20
+    smallwindow = 5
+    # set small_window to resolve nearby peaks from different datasources
+
+    sort_order = {"x": {"pos": "xmiddle",
+                        "chrom": "xscaf",
+                        "D": "Dx"},
+                  "y": {"pos": "ymiddle",
+                        "chrom": "yscaf",
+                        "D": "Dy"}}
+
+    # sort the dataframe based on which axis we're looking at
+    df = df.sort_values(by=[sort_order[sort_direction]["pos"]])
+    df = df.reset_index(drop=True)
+
+    unique_chroms = []
+    #chrom_breakpoints = []
+    for index, row in df.iterrows():
+        thischrom = row[sort_order[sort_direction]["chrom"]]
+        thispos  = row[sort_order[sort_direction]["pos"]]
+        if thischrom not in unique_chroms:
+            unique_chroms.append(thischrom)
+            #chrom_breakpoints.append(thispos)
+    ## this line is solely for plotting. Not useful
+    #chrom_breakpoints = chrom_breakpoints[1::]
+
+    # There are three different analysis types that we will use to figure
+    #  out the seps.
+    # - deltMA is the derivative of the smoothed data
+    # - deltD is the derivative of the raw data
+    # - Dx2 is the raw D data.
+    #
+    # All of the data are selected based on the max value of what was above
+    #  the median for that chromosome.
+    all_ranges = set()
+    for thiscol in ["MA", "deltMA","deltD", "Dx2"]:
+        for thischrom in unique_chroms:
+            # use .copy() to make sure we're not modifying the original df
+            subdf = df.loc[df[sort_order[sort_direction]["chrom"]] == thischrom, ].copy()
+            # Dx2 is just the raw data that is above the median
+            subdf["Dx2"] = subdf[sort_order[sort_direction]["D"]]
+            subdf['Dx2'] = np.where((subdf[sort_order[sort_direction]["D"]] < subdf[sort_order[sort_direction]["D"]].median()),np.NaN,subdf["Dx2"])
+            # MA is the moving average of the raw data
+            subdf["MA"] = subdf["Dx2"].rolling(window=3, center=True).mean()
+            subdf["MA2"] = subdf["Dx2"].rolling(window=19, center=True).mean()
+            # deltMA is the derivative of the moving average
+            subdf["deltMA"] = subdf["MA"].diff() / subdf["MA"].index.to_series().diff()
+            subdf['deltMA'] = np.where((subdf["MA"] < subdf["MA"].median()),np.NaN,subdf["deltMA"])
+            # deltD is the derivative of the raw data
+            subdf["deltD"] = subdf["Dx2"].diff() / subdf["Dx2"].index.to_series().diff()
+            subdf['deltD'] = np.where((subdf.Dx2 < subdf["Dx2"].median()),np.NaN,subdf.deltD)
+
+            # get the groups of consecutive values in each category
+            idxmaxes = set()
+            ind = list(subdf[~subdf[thiscol].isnull()].index)
+            ranges =[]
+            for k,g in groupby(enumerate(ind),lambda x:x[0]-x[1]):
+                group = (map(itemgetter(1),g))
+                group = list(map(int,group))
+                ranges.append((group[0],group[-1]))
+
+            # now get the peak from each contiguous range of values
+            if len(ranges) > 0:
+                for this_range in ranges:
+                    if this_range[0] != this_range[-1]:
+                        #this_range = [x for x in range(this_range[0], this_range[1]+1)]
+                        this_range = list(this_range)
+                        which_d_col = sort_order[sort_direction]["D"]
+                        temp = subdf.loc[this_range[0]:this_range[-1]][which_d_col].idxmax()
+                        idxmaxes.add(temp)
+
+            # picks the best in large windows of genes.
+            #  See the description for the 'window' variable above
+            keep_idx_maxes = set()
+            ignore_set = set()
+            done = False
+            consider_ranges = set()
+            while not done:
+                consider_ranges = set()
+                # get peaks within the window if they're not in the ignore set
+                for this_idx in idxmaxes:
+                    thistup = tuple([x for x in idxmaxes
+                         if ((x > this_idx - window)
+                             and (x < this_idx + window)
+                             and (x not in ignore_set))])
+                    if len(thistup) > 0:
+                        consider_ranges.add(thistup)
+
+                # now for each set of peaks, get the best in each window
+                consider_ranges = sorted(list(consider_ranges), key=len, reverse=True)
+                if len(consider_ranges) > 0: # skip the empty ranges
+                    thisrange = list(consider_ranges[0])
+                    if len(thisrange) == 1:
+                        done = True
+                    else:
+                        submax = df.loc[thisrange, ][sort_order[sort_direction]["D"]].idxmax()
+                        for thisid in thisrange:
+                            if thisid != submax:
+                                ignore_set.add(thisid)
+                else: # if it is empty, leave
+                    done = True
+            # We found the biggest peaks in the windows, add them to all_ranges
+            for entry in consider_ranges:
+                all_ranges.add(entry)
+
+    # flatten the results of what we got from the last analysis
+    idxmaxes = flatten(all_ranges)
+
+    # From the dataset of all peaks, find the best in small windows.
+    #  See the variable `smallwindow` above
+    # The reason we have this block is that the same peak, or something near it,
+    #  could have been added multiple times, at slightly different indices.
+    #  This collapses the similar indices to get the best.
+    ignore_set = set()
+    done = False
+    consider_ranges = set()
+    while not done:
+        consider_ranges = set()
+        for this_idx in idxmaxes:
+            # get windows of ranges if they're not in the ignore set
+            thistup = tuple([x for x in idxmaxes
+                 if ((x > this_idx - smallwindow)
+                     and (x < this_idx + smallwindow)
+                     and (x not in ignore_set))])
+            if len(thistup) > 0:
+                consider_ranges.add(thistup)
+
+        consider_ranges = sorted(list(consider_ranges), key=len, reverse=True)
+        if len(consider_ranges) > 0:
+            thisrange = list(consider_ranges[0])
+            if len(thisrange) == 1:
+                done = True
+            else:
+                submax = df.loc[thisrange, ][sort_order[sort_direction]["D"]].idxmax()
+                for thisid in thisrange:
+                    if thisid != submax:
+                        ignore_set.add(thisid)
+        else:
+            # there's nothing here
+            done = True
+
+    # vert_lines is the list of indices from the df that have the peaks that
+    #  we want to keep.
+    vert_lines = flatten(consider_ranges)
+    # return a dataframe of the intersections we want
+    return df.loc[vert_lines].copy()
+
+def gen_plotting_df(ycoords, xcoords,
+                    xprottoloc, yprottoloc,
+                    xsample, ysample,
+                    recip, outtable, plotorder_file):
+    """
+    Generates a dataframe that will be used by the other parts of the program
+     for plotting.
+    Saves it to a file
+    """
+    import pandas as pd
+    import numpy as np
+    # set seaborn stuff
+
+    # first make a lookup table of how to calculate the
+    #  x and y coords. This lookup is just the amount of
+    # bp to add to the value when plotting. We pass the xprot_to_loc,
+    #  xprot_to_scaf in case we need to sort everything based on order of
+    #  occurrence on the scaffolds
+    x_offset, x_scaf_to_len, vertical_lines_at, xmax, xticklabel, xtickpos, xorder = parse_coords(
+        xcoords, xsample, "x")
+    print("found {} x chromosomes".format(len(x_offset)))
+
+    y_offset, y_scaf_to_len, horizontal_lines_at, ymax, yticklabel, ytickpos, yorder = parse_coords(
+        ycoords, ysample, "y",
+        xprottoloc, yprottoloc, recip, xticklabel)
+    print("found {} y chromosomes".format(len(y_offset)))
+
+    # now save the plot order to a file
+    with open(plotorder_file, "w") as f:
+        print("xplotorder:", file=f)
+        for entry in xorder:
+            print("  - {}".format(entry), file=f)
+        print("yplotorder:", file=f)
+        for entry in yorder:
+            print("  - {}".format(entry), file=f)
+
+    # now make a lookup table of where the prots are.
+    #  Use the x_offset and y_offset to recalculate where the plotting
+    #  value is
+    xstruct = generate_coord_structs(xprottoloc)
+    xstruct["prot_plot_start"] = {}
+    xstruct["prot_plot_middle"] = {}
+    xstruct["prot_plot_stop"] = {}
+    ystruct = generate_coord_structs(yprottoloc)
+    ystruct["prot_plot_start"] = {}
+    ystruct["prot_plot_middle"] = {}
+    ystruct["prot_plot_stop"] = {}
+    # get rid of proteins that we don't need along the x axis
+    #  also set the plotting position based on the offset
+    for prot in list(xstruct["prot_to_middle"].keys()):
+        scaf = xstruct["prot_to_scaf"][prot]
+        if scaf not in x_offset:
+            for thisdict in xstruct:
+                xstruct[thisdict].pop(prot, None)
+        else:
+            xstruct["prot_plot_start"][prot]  = xstruct["prot_to_start"][prot] + x_offset[scaf]
+            xstruct["prot_plot_middle"][prot] = xstruct["prot_to_middle"][prot] + x_offset[scaf]
+            xstruct["prot_plot_stop"][prot]   = xstruct["prot_to_stop"][prot] + x_offset[scaf]
+    # get rid of proteins that we don't need along the y axis
+    #  also set the plotting position based on the offset
+    for prot in list(ystruct["prot_to_middle"].keys()):
+        scaf = ystruct["prot_to_scaf"][prot]
+        if scaf not in y_offset:
+            for thisdict in xstruct:
+                ystruct[thisdict].pop(prot, None)
+        else:
+            ystruct["prot_plot_start"][prot]  = ystruct["prot_to_start"][prot] + y_offset[scaf]
+            ystruct["prot_plot_middle"][prot] = ystruct["prot_to_middle"][prot] + y_offset[scaf]
+            ystruct["prot_plot_stop"][prot]   = ystruct["prot_to_stop"][prot] + y_offset[scaf]
+
+    # now open the blast results and translate the pairs
+    #  into plotting positions
+    df = pd.read_csv(recip, header=None, sep = "\t")
+    df.columns = ["xgene", "ygene", "pident", "length",
+                  "mismatch", "gapopen", "qstart", "qend",
+                  "sstart", "send", "evalue", "bitscore"]
+    df = df[["xgene", "ygene", "bitscore", "evalue"]]
+    #print(x_prot_to_loc)
+    df["xstart"]  = df["xgene"].map(xstruct["prot_plot_start"])
+    df["xmiddle"] = df["xgene"].map(xstruct["prot_plot_middle"])
+    df["xstop"]   = df["xgene"].map(xstruct["prot_plot_stop"])
+
+    df["ystart"]  = df["ygene"].map(ystruct["prot_plot_start"])
+    df["ymiddle"] = df["ygene"].map(ystruct["prot_plot_middle"])
+    df["ystop"]   = df["ygene"].map(ystruct["prot_plot_stop"])
+    print(df)
+
+    # I don't remember why the x and y is switched here.
+    df["yscaf"] = df["ygene"].map(ystruct["prot_to_scaf"])
+    df["xscaf"] = df["xgene"].map(xstruct["prot_to_scaf"])
+    #df = df.dropna() # this messed up plotting order if there were no hits on that scaf.
+    df = df.sort_values(by=['xmiddle'])
+    df = df.loc[df["evalue"] <= float("1E-20"), ]
+    df.reset_index(drop=True, inplace = True)
+
+    # Now calculate D and Dw for both X and Y axes
+    df = calc_D_for_y_and_x(df, x_offset, y_offset, x_scaf_to_len, y_scaf_to_len)
+    if outtable:
+        df.to_csv(outtable, sep="\t")
+
+rule generate_plotting_df_and_plot_order:
+    """
+    This parses all of the various types of input and generates the df that
+     contains the plotting information like genes, reciprocal-best orthologs.
+
+    Also outputs a file of the plotting order.
+    """
+    input:
+        ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
+        xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
+        xprottoloc = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["prot_to_loc"],
+        yprottoloc = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"],
+        recip = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp"
+    output:
+        table = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
+        plot_order = "synteny_analysis/plot_order/{xsample}_and_{ysample}_plotorder.tsv",
+    threads:
+        1
+    params:
+        xsample  = lambda wildcards: wildcards.xsample,
+        ysample  = lambda wildcards: wildcards.ysample,
+    run:
+        print("printing x")
+        print(config["xaxisspecies"][wildcards.xsample])
+        gen_plotting_df(input.ycoords, input.xcoords,
+                     input.xprottoloc, input.yprottoloc,
+                     params.xsample, params.ysample,
+                     input.recip, output.table,
+                     output.plot_order)
+
 def synteny_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
-                 xbreaks, ybreaks, recip, synplot, outtable, plotorder_file, prot_to_color,
-                 dropmissing, plot_x_lines = False, plot_y_lines = False):
-        import pandas as pd
-        import seaborn as sns; sns.set()
-        import matplotlib
-        import matplotlib.pyplot as plt
-        import matplotlib.ticker as ticker
-        from matplotlib.ticker import StrMethodFormatter, NullFormatter
-        import numpy as np
-        # set seaborn stuff
-        #sns.set(rc={'text.usetex' : True})
-        sns.set_style("ticks", {'font.family': ['sans-serif'],
-                                    'font.sans-serif': ['Helvetica'],
-                                    'grid.color': '.95'})
-        # Preserve the vertical order of embedded images:
-        matplotlib.rcParams['image.composite_image'] = False
-        # text as font in pdf
-        matplotlib.rcParams['pdf.fonttype'] = 42
-        matplotlib.rcParams['ps.fonttype'] = 42
+                 xbreaks, ybreaks, recip, synplot, outtable, plotorder_file,
+                 prot_to_color, dropmissing,
+                 plot_x_lines = False, plot_y_lines = False,
+                 auto_determine_x_breaks = False, auto_determine_y_breaks = False):
+    """
+    If the user provided a plot order, then we should not skip any scaffolds.
 
-        # parse the xbreaks and the ybreaks.
-        # These are where there are low-opacity,
-        #  dotted lines to show breaks in synteny
-        # example entries are like this:
-          #"CM022887.1_chromosome_2:4392062"
-          #"CM022887.1_chromosome_2:8784125"
+    This is the main plotting script for the synteny plot
+    """
+    import pandas as pd
+    import seaborn as sns; sns.set()
+    import matplotlib
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as ticker
+    import matplotlib.patches as mplpatches
+    from matplotlib.ticker import StrMethodFormatter, NullFormatter
+    import numpy as np
+    # set seaborn stuff
+    #sns.set(rc={'text.usetex' : True})
+    sns.set_style("ticks", {'font.family': ['sans-serif'],
+                                'font.sans-serif': ['Helvetica'],
+                                'grid.color': '.95'})
+    # Preserve the vertical order of embedded images:
+    matplotlib.rcParams['image.composite_image'] = False
+    # text as font in pdf
+    matplotlib.rcParams['pdf.fonttype'] = 42
+    matplotlib.rcParams['ps.fonttype'] = 42
 
-        xbreaks_list = []
-        for thisx in xbreaks:
-            scaf = thisx.split(":")[0]
-            pos  = int(thisx.split(":")[1])
-            xbreaks_list.append([scaf, pos])
-        ybreaks_list = []
-        for thisy in ybreaks:
-            scaf = thisy.split(":")[0]
-            pos  = int(thisy.split(":")[1])
-            ybreaks_list.append([scaf, pos])
+    # parse the xbreaks and the ybreaks.
+    # These are where there are low-opacity,
+    #  dotted lines to show breaks in synteny
+    # example entries are like this:
+    #"CM022887.1_chromosome_2:4392062"
+    #"CM022887.1_chromosome_2:8784125"
 
-        # first make a lookup table of how to calculate the
-        #  x and y coords. This lookup is just the amount of
-        # bp to add to the value when plotting. We pass the xprot_to_loc,
-        #  xprot_to_scaf in case we need to sort everything based on order of
-        #  occurrence on the scaffolds
-        x_offset, vertical_lines_at, xmax, xbreaks, xticklabel, xtickpos, xorder = parse_coords(
-            xcoords, xsample, xbreaks_list, "x")
-        print("found {} x chromosomes".format(len(x_offset)))
+    xbreaks_list = []
+    for thisx in xbreaks:
+        scaf = thisx.split(":")[0]
+        pos  = int(thisx.split(":")[1])
+        xbreaks_list.append([scaf, pos])
+    ybreaks_list = []
+    for thisy in ybreaks:
+        scaf = thisy.split(":")[0]
+        pos  = int(thisy.split(":")[1])
+        ybreaks_list.append([scaf, pos])
 
-        y_offset, horizontal_lines_at, ymax, ybreaks, yticklabel, ytickpos, yorder = parse_coords(
-            ycoords, ysample, ybreaks_list, "y",
-            xprottoloc, yprottoloc, recip, xticklabel)
-        print("found {} y chromosomes".format(len(y_offset)))
+    # first make a lookup table of how to calculate the
+    #  x and y coords. This lookup is just the amount of
+    # bp to add to the value when plotting. We pass the xprot_to_loc,
+    #  xprot_to_scaf in case we need to sort everything based on order of
+    #  occurrence on the scaffolds
+    x_offset, x_scaf_to_len, vertical_lines_at, xmax, xticklabel, xtickpos, xorder = parse_coords(
+        xcoords, xsample, "x")
+    print("found {} x chromosomes".format(len(x_offset)))
 
-        # now save the plot order to a file
-        with open(plotorder_file, "w") as f:
-            print("xplotorder:", file=f)
-            for entry in xorder:
-                print("  - {}".format(entry), file=f)
-            print("yplotorder:", file=f)
-            for entry in yorder:
-                print("  - {}".format(entry), file=f)
+    y_offset, y_scaf_to_len, horizontal_lines_at, ymax, yticklabel, ytickpos, yorder = parse_coords(
+        ycoords, ysample, "y",
+        xprottoloc, yprottoloc, recip, xticklabel)
+    print("found {} y chromosomes".format(len(y_offset)))
 
-        # now make a lookup table of where the prots are.
-        #  Use the x_offset and y_offset to recalculate where the plotting
-        #  value is
+    # now save the plot order to a file
+    with open(plotorder_file, "w") as f:
+        print("xplotorder:", file=f)
+        for entry in xorder:
+            print("  - {}".format(entry), file=f)
+        print("yplotorder:", file=f)
+        for entry in yorder:
+            print("  - {}".format(entry), file=f)
 
-        xstruct = generate_coord_structs(xprottoloc)
-        xstruct["prot_plot_pos"] = {}
-        ystruct = generate_coord_structs(yprottoloc)
-        ystruct["prot_plot_pos"] = {}
-        # get rid of proteins that we don't need along the x axis
-        #  also set the plotting position based on the offset
-        for prot in list(xstruct["prot_to_middle"].keys()):
-            scaf = xstruct["prot_to_scaf"][prot]
-            if scaf not in x_offset:
-                for thisdict in xstruct:
-                    xstruct[thisdict].pop(prot, None)
-            else:
-                xstruct["prot_plot_pos"][prot] = xstruct["prot_to_middle"][prot] + x_offset[scaf]
-        # get rid of proteins that we don't need along the y axis
-        #  also set the plotting position based on the offset
-        for prot in list(ystruct["prot_to_middle"].keys()):
-            scaf = ystruct["prot_to_scaf"][prot]
-            if scaf not in y_offset:
-                for thisdict in xstruct:
-                    ystruct[thisdict].pop(prot, None)
-            else:
-                ystruct["prot_plot_pos"][prot] = ystruct["prot_to_middle"][prot] + y_offset[scaf]
+    # now make a lookup table of where the prots are.
+    #  Use the x_offset and y_offset to recalculate where the plotting
+    #  value is
 
-        # now open the blast results and translate the pairs
-        #  into plotting positions
-        df = pd.read_csv(recip, header=None, sep = "\t")
-        df.columns = ["xgene", "ygene", "pident", "length",
-                      "mismatch", "gapopen", "qstart", "qend",
-                      "sstart", "send", "evalue", "bitscore"]
-        df = df[["xgene", "ygene", "bitscore", "evalue"]]
-        #print(x_prot_to_loc)
-        df["xpos"] = df["xgene"].map(xstruct["prot_plot_pos"])
-        df["ypos"] = df["ygene"].map(ystruct["prot_plot_pos"])
-        print(df)
-
-        # I don't remember why the x and y is switched here.
-        df["xgene_on_which_y_scaf"] = df["ygene"].map(ystruct["prot_to_scaf"])
-        df["ygene_on_which_x_scaf"] = df["xgene"].map(xstruct["prot_to_scaf"])
-        #df = df.dropna() # this messed up plotting order if there were no hits on that scaf.
-        df = df.sort_values(by=['xpos'])
-        df = df.loc[df["evalue"] <= float("1E-20"), ]
-        df.reset_index(drop=True, inplace = True)
-
-        print(df)
-        # Now calculate D and Dw for both X and Y axes
-        df = calc_D_for_y_and_x(df)
-        print(df)
-
-        xgene = df["xgene"]
-        x = df["xpos"]
-        y = df["ypos"]
-        bitscore = df["bitscore"]
-
-        print("found {} points to plot".format(len(df["xpos"])))
-        print("max bitscore: ", max(bitscore))
-        bitscore_adjusted = [(x/max(bitscore))*60 for x in bitscore]
-        colors = [(0, 0, 1.0, min( 1.0, (x/max(bitscore))*(max(bitscore)/np.mean(bitscore)))) for x in bitscore]
-        drops = set()
-        if prot_to_color:
-            for i in range(len(xgene)):
-                alpha = colors[i][3]
-                try:
-                    newcolor = list(matplotlib.colors.to_rgba(prot_to_color[xgene[i]]))
-                except:
-                    print("couldn't find a color for: {}".format(xgene[i]))
-                    newcolor = [0,0,0,1]
-                    drops.add(i)
-                newcolor[3] = alpha
-                colors[i] = newcolor
-
-        if dropmissing:
-            vararray = [xgene, x, y, bitscore, bitscore_adjusted, colors]
-            for j in range(len(vararray)):
-                vararray[j] = [vararray[j][i] for i in range(len(vararray[j])) if i not in drops]
-            xgene = vararray[0]
-            x     = vararray[1]
-            y     = vararray[2]
-            bitscore = vararray[3]
-            bitscore_adjusted = vararray[4]
-            colors = vararray[5]
-
-        # save the output
-        if outtable:
-            df.to_csv(outtable, sep="\t")
-
-        # now make a scatter plot
-        figWidth = 8
-        figHeight = 8
-        plt.figure(figsize=(figWidth,figHeight))
-        #set the panel dimensions
-        panelWidth = 4
-        panelHeight = 4
-        dpanel_width = 0.25
-        #find the margins to center the panel in figure
-        leftMargin = (figWidth - panelWidth)/2
-        bottomMargin = ((figHeight - panelHeight)/2)
-        panel1 = plt.axes([leftMargin/figWidth, #left
-                             bottomMargin/figHeight,    #bottom
-                             panelWidth/figWidth,   #width
-                             panelHeight/figHeight])     #height
-        panelxd = plt.axes([leftMargin/figWidth, #left
-                             (bottomMargin+panelHeight+0.1)/figHeight,    #bottom
-                             panelWidth/figWidth,   #width
-                             dpanel_width/figHeight])     #height
-        panelyd = plt.axes([(leftMargin+panelWidth + 0.1)/figWidth, #left
-                             bottomMargin/figHeight,    #bottom
-                             dpanel_width/figWidth,   #width
-                             panelHeight/figHeight])     #height
-        panel1.tick_params(axis='both',which='both',
-                            bottom=False, labelbottom=True,
-                            left=False, labelleft=True,
-                            right=False, labelright=False,
-                            top=False, labeltop=False)
-        panelxd.tick_params(axis='both',which='both',
-                            bottom=False, labelbottom=False,
-                            left=False, labelleft=False,
-                            right=False, labelright=False,
-                            top=False, labeltop=False)
-        panelyd.tick_params(axis='both',which='both',
-                            bottom=False, labelbottom=False,
-                            left=False, labelleft=False,
-                            right=False, labelright=False,
-                            top=False, labeltop=False)
-        # set the panel linewidth thinner
-        for this_panel in [panel1, panelxd, panelyd]:
-            for axis in ['top','bottom','left','right']:
-                this_panel.spines[axis].set_linewidth(0.5)
-        # turn off the axis spines
-        for this_panel in [panelxd, panelyd]:
-            this_panel.spines['top'].set_visible(False)
-            this_panel.spines['right'].set_visible(False)
-
-        panel1.scatter(x, y, color = colors,
-                       ec = None, s=6, linewidths = 0)
-        # set mins and max
-        panel1.set_xlim([0,xmax])
-        panel1.set_ylim([0,ymax])
-        # set x ticks
-        newarr = []
-        newarrlabels=[]
-        if not plot_x_lines:
-            #there are inevitably going to be many scaffolds. We need to subset
-            # get a list of evenly spaced indices
-            numElems = min(20, len(xtickpos)) # this could break if there are fewer elements
-            arr = xtickpos
-            idx = np.round(np.linspace(0, len(arr) - 1, numElems)).astype(int)
-            newarr       = [arr[i] for i in idx]
-            newarrNumScaf     = [i for i in idx]
-            # turn on y-axis ticks on the left - plot scaffolds
-            panel1.tick_params(bottom=True)
-            panel1.set_xticks(newarr)
-            panel1.set_xticklabels(newarrNumScaf, fontsize=8, rotation=90)
-            panel1.set_xlabel(xsample + " number of scaffolds")
+    xstruct = generate_coord_structs(xprottoloc)
+    xstruct["prot_plot_start"] = {}
+    xstruct["prot_plot_middle"] = {}
+    xstruct["prot_plot_stop"] = {}
+    ystruct = generate_coord_structs(yprottoloc)
+    ystruct["prot_plot_start"] = {}
+    ystruct["prot_plot_middle"] = {}
+    ystruct["prot_plot_stop"] = {}
+    # get rid of proteins that we don't need along the x axis
+    #  also set the plotting position based on the offset
+    for prot in list(xstruct["prot_to_middle"].keys()):
+        scaf = xstruct["prot_to_scaf"][prot]
+        if scaf not in x_offset:
+            for thisdict in xstruct:
+                xstruct[thisdict].pop(prot, None)
         else:
-            newarr = [0] + vertical_lines_at + [xmax]
-            panel1.set_xticks(xtickpos)
-            panel1.set_xticklabels(xticklabel, fontsize=8, rotation = 90)
-            panel1.set_xlabel(xsample + " scaffolds")
-        # turn on x-axis ticks on the Dx plot
-        newarrlabels = [round(x/1000000, 1) for x in newarr]
-        panelxd.tick_params(top=True, labeltop=True)
-        panelxd.set_xticks(newarr)
-        panelxd.set_xticklabels(newarrlabels, fontsize=8, rotation=90)
-        panelxd.xaxis.set_label_position("top")
-        panelxd.set_xlabel("Mb")
-
-        # set y ticks
-        newarr=[]
-        newarrlabels=[]
-        if not plot_y_lines:
-            #there are inevitably going to be many scaffolds. We need to subset
-            # get a list of evenly spaced indices
-            numElems = min(20, len(ytickpos))
-            arr = ytickpos
-            idx = np.round(np.linspace(0, len(arr) - 1, numElems)).astype(int)
-            newarr       = [arr[i] for i in idx]
-            newarrlabels = [round(arr[i]/1000000, 1) for i in idx]
-            newarrNumScaf     = [i for i in idx]
-            # turn on y-axis ticks on the left - plot scaffolds
-            panel1.tick_params(left=True)
-            panel1.set_yticks(newarr)
-            panel1.set_yticklabels(newarrNumScaf, fontsize=8)
-            panel1.set_ylabel(ysample + " number of scaffolds")
+            xstruct["prot_plot_start"][prot]  = xstruct["prot_to_start"][prot] + x_offset[scaf]
+            xstruct["prot_plot_middle"][prot] = xstruct["prot_to_middle"][prot] + x_offset[scaf]
+            xstruct["prot_plot_stop"][prot]   = xstruct["prot_to_stop"][prot] + x_offset[scaf]
+    # get rid of proteins that we don't need along the y axis
+    #  also set the plotting position based on the offset
+    for prot in list(ystruct["prot_to_middle"].keys()):
+        scaf = ystruct["prot_to_scaf"][prot]
+        if scaf not in y_offset:
+            for thisdict in xstruct:
+                ystruct[thisdict].pop(prot, None)
         else:
-            newarr = [0] + horizontal_lines_at + [ymax]
-            panel1.set_yticks(ytickpos)
-            panel1.set_yticklabels(yticklabel, fontsize=8)
-            panel1.set_ylabel(ysample + " scaffolds")
-        # turn on y-axis ticks on the Dy plot
-        newarrlabels = [round(x/1000000, 1) for x in newarr]
-        panelyd.tick_params(right=True, labelright=True)
-        panelyd.set_yticks(newarr)
-        panelyd.set_yticklabels(newarrlabels, fontsize=8)
-        panelyd.yaxis.set_label_position("right")
-        panelyd.set_ylabel("Mb")
+            ystruct["prot_plot_start"][prot]  = ystruct["prot_to_start"][prot] + y_offset[scaf]
+            ystruct["prot_plot_middle"][prot] = ystruct["prot_to_middle"][prot] + y_offset[scaf]
+            ystruct["prot_plot_stop"][prot]   = ystruct["prot_to_stop"][prot] + y_offset[scaf]
 
-        #print(list(zip(df["xpos"], df["Dx"])))
+    # now open the blast results and translate the pairs
+    #  into plotting positions
+    df = pd.read_csv(recip, header=None, sep = "\t")
+    df.columns = ["xgene", "ygene", "pident", "length",
+                  "mismatch", "gapopen", "qstart", "qend",
+                  "sstart", "send", "evalue", "bitscore"]
+    df = df[["xgene", "ygene", "bitscore", "evalue"]]
+    #print(x_prot_to_loc)
+    df["xstart"]  = df["xgene"].map(xstruct["prot_plot_start"])
+    df["xmiddle"] = df["xgene"].map(xstruct["prot_plot_middle"])
+    df["xstop"]   = df["xgene"].map(xstruct["prot_plot_stop"])
 
-        # set the x and y labels on Dy and Dx
-        panelxd.bar(x = df["xpos"], height=df["Dx"], width = df["Dx_barwidth"], lw=0, color="blue", zorder = 2)
-        panelxd.set_xlim([0,xmax])
-        panelxd.set_ylabel('Dx', fontsize=10)
+    df["ystart"]  = df["ygene"].map(ystruct["prot_plot_start"])
+    df["ymiddle"] = df["ygene"].map(ystruct["prot_plot_middle"])
+    df["ystop"]   = df["ygene"].map(ystruct["prot_plot_stop"])
+    print(df)
 
-        panelyd.barh(y = df["ypos"], width=df["Dy"], height = df["Dy_barwidth"], lw=0, color="blue", zorder = 2)
-        panelyd.set_ylim([0,ymax])
-        panelyd.set_xlabel('Dy', fontsize=10)
+    # I don't remember why the x and y is switched here.
+    df["yscaf"] = df["ygene"].map(ystruct["prot_to_scaf"])
+    df["xscaf"] = df["xgene"].map(xstruct["prot_to_scaf"])
+    #df = df.dropna() # this messed up plotting order if there were no hits on that scaf.
+    df = df.sort_values(by=['xmiddle'])
+    df = df.loc[df["evalue"] <= float("1E-20"), ]
+    df.reset_index(drop=True, inplace = True)
 
-        for this_axis in [panel1, panelxd, panelyd]:
-            this_axis.xaxis.get_offset_text().set_visible(False)
-            this_axis.yaxis.get_offset_text().set_visible(False)
+    print(df)
+    # Now calculate D and Dw for both X and Y axes
+    df = calc_D_for_y_and_x(df, x_offset, y_offset, x_scaf_to_len, y_scaf_to_len)
+    print(df)
 
-        #plot vertical lines
-        if plot_x_lines:
-            for value in vertical_lines_at:
-                panel1.axvline(x=value, color="black", lw=0.5)
-        #plot horizontal lines
-        if plot_y_lines:
-            for value in horizontal_lines_at:
-                panel1.axhline(y=value, color="black", lw=0.5)
+    xgene = df["xgene"]
+    x = df["xmiddle"]
+    y = df["ymiddle"]
+    bitscore = df["bitscore"]
 
-        # plot vertical BOS
-        for value in xbreaks:
-            panel1.axvline(x=value, color=[0,0,0,0.25], lw=0.5, linestyle="dotted")
-        # plot horizontal BOS
-        for value in ybreaks:
-            panel1.axhline(y=value, color=[0,0,0,0.25], lw=0.5, linestyle="dotted")
-        plt.savefig(synplot)
+    print("found {} points to plot".format(len(df["xmiddle"])))
+    print("max bitscore: ", max(bitscore))
+    bitscore_adjusted = [(x/max(bitscore))*60 for x in bitscore]
+    colors = [(0, 0, 1.0, min( 1.0, (x/max(bitscore))*(max(bitscore)/np.mean(bitscore)))) for x in bitscore]
+    drops = set()
+    if prot_to_color:
+        for i in range(len(xgene)):
+            alpha = colors[i][3]
+            try:
+                newcolor = list(matplotlib.colors.to_rgba(prot_to_color[xgene[i]]))
+            except:
+                print("couldn't find a color for: {}".format(xgene[i]))
+                newcolor = [0,0,0,1]
+                drops.add(i)
+            newcolor[3] = alpha
+            colors[i] = newcolor
+
+    if dropmissing:
+        vararray = [xgene, x, y, bitscore, bitscore_adjusted, colors]
+        for j in range(len(vararray)):
+            vararray[j] = [vararray[j][i] for i in range(len(vararray[j])) if i not in drops]
+        xgene = vararray[0]
+        x     = vararray[1]
+        y     = vararray[2]
+        bitscore = vararray[3]
+        bitscore_adjusted = vararray[4]
+        colors = vararray[5]
+
+    # save the output
+    if outtable:
+        df.to_csv(outtable, sep="\t")
+
+    # now make a scatter plot
+    figWidth = 8
+    figHeight = 8
+    plt.figure(figsize=(figWidth,figHeight))
+    #set the panel dimensions
+    panelWidth = 4
+    panelHeight = 4
+    dpanel_width = 0.25
+    #find the margins to center the panel in figure
+    leftMargin = (figWidth - panelWidth)/2
+    bottomMargin = ((figHeight - panelHeight)/2)
+    panel1 = plt.axes([leftMargin/figWidth, #left
+                         bottomMargin/figHeight,    #bottom
+                         panelWidth/figWidth,   #width
+                         panelHeight/figHeight])     #height
+    panelxd = plt.axes([leftMargin/figWidth, #left
+                         (bottomMargin+panelHeight+0.1)/figHeight,    #bottom
+                         panelWidth/figWidth,   #width
+                         dpanel_width/figHeight])     #height
+    panelyd = plt.axes([(leftMargin+panelWidth + 0.1)/figWidth, #left
+                         bottomMargin/figHeight,    #bottom
+                         dpanel_width/figWidth,   #width
+                         panelHeight/figHeight])     #height
+    panel1.tick_params(axis='both',which='both',
+                        bottom=False, labelbottom=True,
+                        left=False, labelleft=True,
+                        right=False, labelright=False,
+                        top=False, labeltop=False)
+    panelxd.tick_params(axis='both',which='both',
+                        bottom=False, labelbottom=False,
+                        left=False, labelleft=False,
+                        right=False, labelright=False,
+                        top=False, labeltop=False)
+    panelyd.tick_params(axis='both',which='both',
+                        bottom=False, labelbottom=False,
+                        left=False, labelleft=False,
+                        right=False, labelright=False,
+                        top=False, labeltop=False)
+    # set the panel linewidth thinner
+    for this_panel in [panel1, panelxd, panelyd]:
+        for axis in ['top','bottom','left','right']:
+            this_panel.spines[axis].set_linewidth(0.5)
+    # turn off the axis spines
+    for this_panel in [panelxd, panelyd]:
+        this_panel.spines['top'].set_visible(False)
+        this_panel.spines['right'].set_visible(False)
+
+    panel1.scatter(x, y, color = colors,
+                   ec = None, s=6, linewidths = 0)
+    # set mins and max
+    panel1.set_xlim([0,xmax])
+    panel1.set_ylim([0,ymax])
+    # set x ticks
+    newarr = []
+    newarrlabels=[]
+    if not plot_x_lines:
+        #there are inevitably going to be many scaffolds. We need to subset
+        # get a list of evenly spaced indices
+        numElems = min(20, len(xtickpos)) # this could break if there are fewer elements
+        arr = xtickpos
+        idx = np.round(np.linspace(0, len(arr) - 1, numElems)).astype(int)
+        newarr       = [arr[i] for i in idx]
+        newarrNumScaf     = [i for i in idx]
+        # turn on y-axis ticks on the left - plot scaffolds
+        panel1.tick_params(bottom=True)
+        panel1.set_xticks(newarr)
+        panel1.set_xticklabels(newarrNumScaf, fontsize=8, rotation=90)
+        panel1.set_xlabel(xsample + " number of scaffolds")
+    else:
+        newarr = [0] + vertical_lines_at + [xmax]
+        panel1.set_xticks(xtickpos)
+        panel1.set_xticklabels(xticklabel, fontsize=8, rotation = 90)
+        panel1.set_xlabel(xsample + " scaffolds")
+    # turn on x-axis ticks on the Dx plot
+    newarrlabels = [round(x/1000000, 1) for x in newarr]
+    panelxd.tick_params(top=True, labeltop=True)
+    panelxd.set_xticks(newarr)
+    panelxd.set_xticklabels(newarrlabels, fontsize=8, rotation=90)
+    panelxd.xaxis.set_label_position("top")
+    panelxd.set_xlabel("Mb")
+
+    # set y ticks
+    newarr=[]
+    newarrlabels=[]
+    if not plot_y_lines:
+        #there are inevitably going to be many scaffolds. We need to subset
+        # get a list of evenly spaced indices
+        numElems = min(20, len(ytickpos))
+        arr = ytickpos
+        idx = np.round(np.linspace(0, len(arr) - 1, numElems)).astype(int)
+        newarr       = [arr[i] for i in idx]
+        newarrlabels = [round(arr[i]/1000000, 1) for i in idx]
+        newarrNumScaf     = [i for i in idx]
+        # turn on y-axis ticks on the left - plot scaffolds
+        panel1.tick_params(left=True)
+        panel1.set_yticks(newarr)
+        panel1.set_yticklabels(newarrNumScaf, fontsize=8)
+        panel1.set_ylabel(ysample + " number of scaffolds")
+    else:
+        newarr = [0] + horizontal_lines_at + [ymax]
+        panel1.set_yticks(ytickpos)
+        panel1.set_yticklabels(yticklabel, fontsize=8)
+        panel1.set_ylabel(ysample + " scaffolds")
+    # turn on y-axis ticks on the Dy plot
+    newarrlabels = [round(x/1000000, 1) for x in newarr]
+    panelyd.tick_params(right=True, labelright=True)
+    panelyd.set_yticks(newarr)
+    panelyd.set_yticklabels(newarrlabels, fontsize=8)
+    panelyd.yaxis.set_label_position("right")
+    panelyd.set_ylabel("Mb")
+
+    #print(list(zip(df["xpos"], df["Dx"])))
+
+    # set the x and y labels on Dy and Dx
+
+    #for index, row in df.iterrows():
+    #    left   = row["xstart"]
+    #    bottom = 0
+    #    width  = row["xstart"]
+    #    hist_rectangle = mplpatches.Rectangle((left, bottom), width, height,
+    #                                          linewidth=l_width,
+    #                                          facecolor=f_color,
+    #                                          edgecolor=e_color)
+    #    panelxd.add_patch(hist_rectangle)
+    panelxd.bar(x = df["Dx_barmiddle"], height=df["Dx"], width = df["Dx_barwidth"],
+                align = "center", lw=0, color="blue", zorder = 2)
+    panelxd.set_xlim([0,xmax])
+    panelxd.set_ylabel('Dx', fontsize=10)
+
+    panelyd.barh(y = df["Dy_barmiddle"], width=df["Dy"], height = df["Dy_barwidth"],
+                 align = "center", lw=0, color="blue", zorder = 2)
+    panelyd.set_ylim([0,ymax])
+    panelyd.set_xlabel('Dy', fontsize=10)
+
+    for this_axis in [panel1, panelxd, panelyd]:
+        this_axis.xaxis.get_offset_text().set_visible(False)
+        this_axis.yaxis.get_offset_text().set_visible(False)
+
+    #plot vertical lines
+    if plot_x_lines:
+        for value in vertical_lines_at:
+            panel1.axvline(x=value, color="black", lw=0.5)
+    #plot horizontal lines
+    if plot_y_lines:
+        for value in horizontal_lines_at:
+            panel1.axhline(y=value, color="black", lw=0.5)
+
+    # auto-determine the breaks if we need them
+    print("Determining if we need to determine breaks.")
+    if auto_determine_x_breaks:
+        print("  - Determining the new xbreaks automatically.")
+        xdf = determine_breaks(df, "x")
+        xbreaks = [x + 10 for x in xdf["xmiddle"]]
+    if auto_determine_y_breaks:
+        print("  - Determining the new ybreaks automatically.")
+        ydf = determine_breaks(df, "y")
+        ybreaks = [y + 10 for y in ydf["ymiddle"]]
+
+    # plot vertical BOS
+    for value in xbreaks:
+        panel1.axvline(x=value, color=[0,0,0,0.25], lw=0.5, linestyle="dotted")
+    # plot horizontal BOS
+    for value in ybreaks:
+        panel1.axhline(y=value, color=[0,0,0,0.25], lw=0.5, linestyle="dotted")
+    plt.savefig(synplot)
+
 
 """
 This makes the synteny plot without doing any special coloring of the dots
 """
 rule plot_synteny:
     input:
+        table = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
+        plot_order = "synteny_analysis/plot_order/{xsample}_and_{ysample}_plotorder.tsv",
         ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
         xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
         xprottoloc = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["prot_to_loc"],
@@ -886,20 +1245,28 @@ rule plot_synteny:
     threads:
         1
     params:
-        xsample = lambda wildcards: wildcards.xsample,
-        ysample = lambda wildcards: wildcards.ysample,
+        xsample  = lambda wildcards: wildcards.xsample,
+        ysample  = lambda wildcards: wildcards.ysample,
         xbreaks  = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["breaks"],
         ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["breaks"],
         keep_x   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["xaxisspecies"][wildcards.xsample]) or ("noxlines" in config["xaxisspecies"][wildcards.xsample])) else True,
-        keep_y   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample]) or ("noylines" in config["yaxisspecies"][wildcards.ysample])) else True
+        keep_y   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample]) or ("noylines" in config["yaxisspecies"][wildcards.ysample])) else True,
+        autoxb   = lambda wildcards: True if ( ("auto_d_breaks" in config["xaxisspecies"][wildcards.xsample]) and (config["xaxisspecies"][wildcards.xsample]["auto_d_breaks"] == True)) else False,
+        autoyb   = lambda wildcards: True if ( ("auto_d_breaks" in config["yaxisspecies"][wildcards.ysample]) and (config["yaxisspecies"][wildcards.ysample]["auto_d_breaks"] == True)) else False,
     run:
+        print("printing x")
+        print(config["xaxisspecies"][wildcards.xsample])
         synteny_plot(input.ycoords, input.xcoords,
                      input.xprottoloc, input.yprottoloc,
                      params.xsample, params.ysample,
                      params.xbreaks, params.ybreaks,
                      input.recip, output.synplot, output.table,
                      output.plot_order, None,
-                     False, params.keep_x, params.keep_y)
+                     False,
+                     plot_x_lines = params.keep_x,
+                     plot_y_lines = params.keep_y,
+                     auto_determine_x_breaks = params.autoxb,
+                     auto_determine_y_breaks = params.autoyb)
 
 def sizes_and_scale_minp(smallest_p):
     """
@@ -987,14 +1354,14 @@ def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
     #  xprot_to_scaf in case we need to sort everything based on order of
     #  occurrence on the scaffolds
     x_offset, vertical_lines_at, xmax, xbreaks, xticklabel, xtickpos, xorder = parse_coords(
-        xcoords, xsample, xbreaks_list, "x")
+        xcoords, xsample, "x")
     print("found {} x chromosomes".format(len(x_offset)))
     x_genome_coords = pd.read_csv(xcoords, header = None, sep = " ")
     x_genome_coords.columns = ["scaf", "scaflen", "cumsum"]
     print(x_offset)
 
     y_offset, horizontal_lines_at, ymax, ybreaks, yticklabel, ytickpos, yorder = parse_coords(
-        ycoords, ysample, ybreaks_list, "y",
+        ycoords, ysample, "y",
         xprottoloc, yprottoloc, recip, xticklabel)
     print("found {} y chromosomes".format(len(y_offset)))
     y_genome_coords = pd.read_csv(ycoords, header = None, sep = " ")
@@ -1012,9 +1379,9 @@ def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
     # now make a lookup table of where the prots are.
     #  Use the x_offset and y_offset to recalculate where the plotting
     xstruct = generate_coord_structs(xprottoloc)
-    xstruct["prot_plot_pos"] = {}
+    xstruct["prot_plot_middle"] = {}
     ystruct = generate_coord_structs(yprottoloc)
-    ystruct["prot_plot_pos"] = {}
+    ystruct["prot_plot_middle"] = {}
     # get rid of proteins that we don't need along the x axis
     #  also set the plotting position based on the offset
     for prot in list(xstruct["prot_to_middle"].keys()):
@@ -1023,7 +1390,7 @@ def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
             for thisdict in xstruct:
                 xstruct[thisdict].pop(prot, None)
         else:
-            xstruct["prot_plot_pos"][prot] = xstruct["prot_to_middle"][prot] + x_offset[scaf]
+            xstruct["prot_plot_middle"][prot] = xstruct["prot_to_middle"][prot] + x_offset[scaf]
     # get rid of proteins that we don't need along the y axis
     #  also set the plotting position based on the offset
     for prot in list(ystruct["prot_to_middle"].keys()):
@@ -1032,7 +1399,7 @@ def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
             for thisdict in xstruct:
                 ystruct[thisdict].pop(prot, None)
         else:
-            ystruct["prot_plot_pos"][prot] = ystruct["prot_to_middle"][prot] + y_offset[scaf]
+            ystruct["prot_plot_middle"][prot] = ystruct["prot_to_middle"][prot] + y_offset[scaf]
 
     # now open the blast results and translate the pairs
     #  into plotting positions
@@ -1042,12 +1409,12 @@ def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
                   "sstart", "send", "evalue", "bitscore"]
     df = df[["xgene", "ygene", "bitscore", "evalue"]]
     #print(x_prot_to_loc)
-    df["xpos"] = df["xgene"].map(xstruct["prot_plot_pos"])
-    df["ypos"] = df["ygene"].map(ystruct["prot_plot_pos"])
+    df["xpos"] = df["xgene"].map(xstruct["prot_plot_middle"])
+    df["ypos"] = df["ygene"].map(ystruct["prot_plot_middle"])
 
     # I don't remember why the x and y is switched here.
-    df["xgene_on_which_y_scaf"] = df["ygene"].map(ystruct["prot_to_scaf"])
-    df["ygene_on_which_x_scaf"] = df["xgene"].map(xstruct["prot_to_scaf"])
+    df["yscaf"] = df["ygene"].map(ystruct["prot_to_scaf"])
+    df["xscaf"] = df["xgene"].map(xstruct["prot_to_scaf"])
     #df = df.dropna() # this messed up plotting order if there were no hits on that scaf.
 
     df = df.sort_values(by=['xpos'])
@@ -1059,13 +1426,13 @@ def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
     for xscaf in xorder: #Li
         for yscaf in yorder: #Wi
             #calculate the cells for fisher exact
-            query = "xgene_on_which_y_scaf == '{}' & ygene_on_which_x_scaf == '{}'".format(yscaf, xscaf)
+            query = "yscaf == '{}' & xscaf == '{}'".format(yscaf, xscaf)
             inX_inY   = len(df.query(query))
-            query = "xgene_on_which_y_scaf == '{}' & ygene_on_which_x_scaf != '{}'".format(yscaf, xscaf)
+            query = "yscaf == '{}' & xscaf != '{}'".format(yscaf, xscaf)
             inX_outY  = len(df.query(query))
-            query = "xgene_on_which_y_scaf != '{}' & ygene_on_which_x_scaf == '{}'".format(yscaf, xscaf)
+            query = "yscaf != '{}' & xscaf == '{}'".format(yscaf, xscaf)
             outX_inY  = len(df.query(query))
-            query = "xgene_on_which_y_scaf != '{}' & ygene_on_which_x_scaf != '{}'".format(yscaf, xscaf)
+            query = "yscaf != '{}' & xscaf != '{}'".format(yscaf, xscaf)
             outX_outY = len(df.query(query))
             table = [[inX_inY, outX_inY], [inX_outY, outX_outY]]
             oddsratio, pvalue = stats.fisher_exact(table, alternative="greater")
@@ -1312,9 +1679,12 @@ rule plot_synteny_x_colored_by_x:
         xbreaks  = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["breaks"],
         ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["breaks"],
         keep_x   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["xaxisspecies"][wildcards.xsample]) or ("noxlines" in config["xaxisspecies"][wildcards.xsample])) else True,
-        keep_y   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample]) or ("noylines" in config["yaxisspecies"][wildcards.ysample])) else True
-
+        keep_y   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample]) or ("noylines" in config["yaxisspecies"][wildcards.ysample])) else True,
+        autoxb   = lambda wildcards: True if ( ("auto_d_breaks" in config["xaxisspecies"][wildcards.xsample]) and (config["xaxisspecies"][wildcards.xsample]["auto_d_breaks"] == True)) else False,
+        autoyb   = lambda wildcards: True if ( ("auto_d_breaks" in config["yaxisspecies"][wildcards.ysample]) and (config["yaxisspecies"][wildcards.ysample]["auto_d_breaks"] == True)) else False,
     run:
+        print("printing x")
+        print(config["xaxisspecies"][wildcards.xsample])
         #first figure out what the color should be for each protein pair
         colorby_prot_to_color = {}
         with open(input.color_by, "r") as f:
@@ -1352,7 +1722,12 @@ rule plot_synteny_x_colored_by_x:
                      params.xbreaks, params.ybreaks,
                      input.recip, output.synplot, None,
                      output.plot_order, prot_to_color,
-                     False, params.keep_x, params.keep_y)
+                     False,
+                     plot_x_lines = params.keep_x,
+                     plot_y_lines = params.keep_y,
+                     auto_determine_x_breaks = params.autoxb,
+                     auto_determine_y_breaks = params.autoyb)
+
         # plot again, but without the black (missing) points
         synteny_plot(input.ycoords, input.xcoords,
                      input.xprottoloc, input.yprottoloc,
@@ -1360,4 +1735,8 @@ rule plot_synteny_x_colored_by_x:
                      params.xbreaks, params.ybreaks,
                      input.recip, output.nodots, None,
                      output.plot_order, prot_to_color,
-                     True, params.keep_x, params.keep_y)
+                     True,
+                     plot_x_lines = params.keep_x,
+                     plot_y_lines = params.keep_y,
+                     auto_determine_x_breaks = params.autoxb,
+                     auto_determine_y_breaks = params.autoyb)
