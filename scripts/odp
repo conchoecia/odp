@@ -65,7 +65,9 @@ def expand_avoid_matching_x_and_y_third(filestring, xsamples, ysamples, third):
 
 rule all:
     input:
-        expand_avoid_matching_x_and_y("synteny_analysis/plots/synteny_uncolored/{}_and_{}_synteny.pdf",
+        expand_avoid_matching_x_and_y("synteny_analysis/plots/synteny_uncolored/{}_and_{}_synteny_manualbreaks.pdf",
+                config["xaxisspecies"], config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y("synteny_analysis/plots/synteny_uncolored/{}_and_{}_synteny_autobreaks.pdf",
                 config["xaxisspecies"], config["yaxisspecies"]),
         #expand_avoid_matching_x_and_y("synteny_analysis/dvalue_table/{}_and_{}_info.tsv",
         #        config["xaxisspecies"],  config["yaxisspecies"]),
@@ -73,27 +75,45 @@ rule all:
         # working on plotting for color
         expand("synteny_analysis/prot_to_color/{colorby}_prottocolor.tsv",
                colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
-        #expand_avoid_matching_x_and_y_third(
-        #    "synteny_analysis/plots/synteny_colored_by/{}_and_{}_coloredby_{}_synteny.pdf",
-        #    config["xaxisspecies"], config["yaxisspecies"],
-        #    [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-        #    ),
-        #expand_avoid_matching_x_and_y_third(
-        #    "synteny_analysis/plots/synteny_colored_by_no_missing/{}_and_{}_coloredby_{}_synteny.pdf",
-        #    config["xaxisspecies"], config["yaxisspecies"],
-        #    [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-        #    ),
+        expand_avoid_matching_x_and_y_third(
+            "synteny_analysis/plots/synteny_colored_by/{}_and_{}_coloredby_{}_synteny_autobreaks.pdf",
+            config["xaxisspecies"], config["yaxisspecies"],
+            [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+            ),
+        expand_avoid_matching_x_and_y_third(
+            "synteny_analysis/plots/synteny_colored_by/{}_and_{}_coloredby_{}_synteny_manualbreaks.pdf",
+            config["xaxisspecies"], config["yaxisspecies"],
+            [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+            ),
+        expand_avoid_matching_x_and_y_third(
+            "synteny_analysis/plots/synteny_colored_by_no_missing/{}_and_{}_coloredby_{}_synteny_autobreaks.pdf",
+            config["xaxisspecies"], config["yaxisspecies"],
+            [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+            ),
+        expand_avoid_matching_x_and_y_third(
+            "synteny_analysis/plots/synteny_colored_by_no_missing/{}_and_{}_coloredby_{}_synteny_manualbreaks.pdf",
+            config["xaxisspecies"], config["yaxisspecies"],
+            [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+            ),
         # make protein similarity plots
         expand_avoid_matching_x_and_y(
             "synteny_analysis/plots/sample_similarity/{}_and_{}_peridentity_length.pdf",
              config["xaxisspecies"], config["yaxisspecies"]),
-        #expand("synteny_analysis/plots/sample_similarity/{xsample}_and_{ysample}_peridentity_length.pdf",
-        #        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
+        #make the correlation plots - whole chromosomes
+        expand_avoid_matching_x_and_y(
+            "synteny_analysis/plots/significance/wholechr/{}_and_{}_fisher_wholechr.pdf",
+             config["xaxisspecies"], config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y(
+            "synteny_analysis/plots/significance/wholechr_colors/{}_and_{}_fisher_chromcolor.pdf",
+             config["xaxisspecies"], config["yaxisspecies"]),
+        # this currently doesn't work - need to trace back where the errors are from
+        expand_avoid_matching_x_and_y(
+        "synteny_analysis/plots/significance/breaks/{}_and_{}_fisher_manualbreaks.pdf",
+             config["xaxisspecies"], config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y(
+        "synteny_analysis/plots/significance/breaks/{}_and_{}_fisher_autobreaks.pdf",
+             config["xaxisspecies"], config["yaxisspecies"])
 
-        #make the correlation plots
-        #expand_avoid_matching_x_and_y(
-        #    "synteny_analysis/plots/significance/wholechr/{}_and_{}_fisher.pdf",
-        #     config["xaxisspecies"], config["yaxisspecies"])
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     """
@@ -417,7 +437,6 @@ def blast_plot_order_helper(coords, sample, xory, xprottoloc, yprottoloc, recip,
     df["yscaf"] = df["ygene"].map(xcoords["prot_to_scaf"])
     df = df.dropna()
     df = df.sort_values(by=['xpos'])
-    df = df.loc[df["evalue"] <= float("1E-20"), ]
     df = df.dropna()
 
     grouped_df = df.groupby(["yscaf"])
@@ -882,7 +901,7 @@ def gen_plotting_df(ycoords_file, xcoords_file,
     df["xscaf"] = df["xgene"].map(xstruct["prot_to_scaf"])
     #df = df.dropna() # this messed up plotting order if there were no hits on that scaf.
     df = df.sort_values(by=['xmiddle'])
-    df = df.loc[df["evalue"] <= float("1E-20"), ]
+    #df = df.loc[df["evalue"] <= float("1E-20"), ]
     df.reset_index(drop=True, inplace = True)
 
     # Now calculate D and Dw for both X and Y axes
@@ -940,8 +959,10 @@ rule generate_breaks_file:
         ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
         xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
     output:
-        xtable = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks.tsv",
-        ytable = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks.tsv"
+        xtable_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
+        ytable_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
+        xtable_auto   = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_auto.tsv",
+        ytable_auto   = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_auto.tsv"
     threads:
         1
     params:
@@ -949,8 +970,6 @@ rule generate_breaks_file:
         ysample  = lambda wildcards: wildcards.ysample,
         xbreaks  = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["manual_breaks"],
         ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["manual_breaks"],
-        autoxbreaks   = lambda wildcards: True if ( ("auto_d_breaks" in config["xaxisspecies"][wildcards.xsample]) and (config["xaxisspecies"][wildcards.xsample]["auto_d_breaks"] == True)) else False,
-        autoybreaks   = lambda wildcards: True if ( ("auto_d_breaks" in config["yaxisspecies"][wildcards.ysample]) and (config["yaxisspecies"][wildcards.ysample]["auto_d_breaks"] == True)) else False,
     run:
         # the breaks are a dict have scafs as key, list of breaks as the values
         x_breaks = {}
@@ -978,14 +997,21 @@ rule generate_breaks_file:
 
         # parse the manual breaks in the config file
         # auto-determine the breaks if we need them
-        print("Determining if we need to determine breaks.")
         print("  - Determining the new xbreaks automatically.")
-        xdf = determine_breaks(df, x_breaks, x_offset, "x", params.autoxbreaks)
+        xdf = determine_breaks(df, x_breaks, x_offset, "x", True)
         print("  - Determining the new ybreaks automatically.")
-        ydf = determine_breaks(df, y_breaks, y_offset, "y", params.autoybreaks)
+        ydf = determine_breaks(df, y_breaks, y_offset, "y", True)
         # save the results to a file
-        xdf.to_csv(output.xtable, sep="\t")
-        ydf.to_csv(output.ytable, sep="\t")
+        xdf.to_csv(output.xtable_auto, sep="\t")
+        ydf.to_csv(output.ytable_auto, sep="\t")
+
+        print("  - Getting the manual breaks for x")
+        xdf = determine_breaks(df, x_breaks, x_offset, "x", False)
+        print("  - Getting the manual breaks for y")
+        ydf = determine_breaks(df, y_breaks, y_offset, "y", False)
+        # save the results to a file
+        xdf.to_csv(output.xtable_manual, sep="\t")
+        ydf.to_csv(output.ytable_manual, sep="\t")
 
 def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
                  xsample,        ysample,
@@ -1003,7 +1029,7 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     import matplotlib
     import matplotlib.pyplot as plt
     import matplotlib.ticker as ticker
-    import matplotlib.patches as mplpatches
+    #import matplotlib.patches as mplpatches
     from matplotlib.ticker import StrMethodFormatter, NullFormatter
     import numpy as np
     # set seaborn stuff
@@ -1023,12 +1049,6 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     # example entries are like this:
     xbreaks_df = pd.read_csv(xbreaks_file, delimiter="\t", index_col=0)
     ybreaks_df = pd.read_csv(ybreaks_file, delimiter="\t", index_col=0)
-    print("xbreaks file: ", xbreaks_file)
-    print("ybreaks file: ", ybreaks_file)
-    print("this is xbreaks_df")
-    print(xbreaks_df)
-    print("this is ybreaks_df")
-    print(ybreaks_df)
 
 
     # first make a lookup table of how to calculate the
@@ -1236,13 +1256,16 @@ rule plot_synteny:
         plot_order = "synteny_analysis/plot_order/{xsample}_and_{ysample}_plotorder.tsv",
         ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
         xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
-        xbreaks_table = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks.tsv",
-        ybreaks_table = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks.tsv",
+        xbreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_auto.tsv",
+        ybreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_auto.tsv",
+        xbreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
+        ybreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
         xprottoloc = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["prot_to_loc"],
         yprottoloc = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"],
         recip = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp"
     output:
-        synplot = "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny.pdf"
+        synplot_manual = "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_manualbreaks.pdf",
+        synplot_auto   = "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_autobreaks.pdf"
     threads:
         1
     params:
@@ -1250,17 +1273,22 @@ rule plot_synteny:
         ysample  = lambda wildcards: wildcards.ysample,
         keep_x   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["xaxisspecies"][wildcards.xsample]) or ("noxlines" in config["xaxisspecies"][wildcards.xsample])) else True,
         keep_y   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample]) or ("noylines" in config["yaxisspecies"][wildcards.ysample])) else True,
-        autoxb   = lambda wildcards: True if ( ("auto_d_breaks" in config["xaxisspecies"][wildcards.xsample]) and (config["xaxisspecies"][wildcards.xsample]["auto_d_breaks"] == True)) else False,
-        autoyb   = lambda wildcards: True if ( ("auto_d_breaks" in config["yaxisspecies"][wildcards.ysample]) and (config["yaxisspecies"][wildcards.ysample]["auto_d_breaks"] == True)) else False,
     run:
         print("printing x")
         print(config["xaxisspecies"][wildcards.xsample])
         synteny_plot(input.dtable,   input.xcoords,  input.ycoords,
                      params.xsample, params.ysample,
-                     input.xbreaks_table, input.ybreaks_table,
-                     output.synplot, None,           False,
+                     input.xbreaks_auto, input.ybreaks_auto,
+                     output.synplot_auto, None,           False,
                      plot_x_lines = params.keep_x,
                      plot_y_lines = params.keep_y)
+        synteny_plot(input.dtable,   input.xcoords,  input.ycoords,
+                     params.xsample, params.ysample,
+                     input.xbreaks_manual, input.ybreaks_manual,
+                     output.synplot_manual, None,           False,
+                     plot_x_lines = params.keep_x,
+                     plot_y_lines = params.keep_y)
+
 
 def sizes_and_scale_minp(smallest_p):
     """
@@ -1300,11 +1328,245 @@ def quantize_pvalue(xsize, ysize, p, smallest_p):
             return [xsize * scale[i], ysize * scale[i]]
     return [xsize * 0.15, ysize * 0.15]
 
-def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
-                     xbreaks, ybreaks, recip, densityplot):
+def fishers_exact(plotting_df,
+                  xcoords_file, ycoords_file,
+                  xsample,      ysample,
+                  xbreaks_file, ybreaks_file,
+                  outdf, style):
+    """
+    This test performs fishers exact test on the genome based on reciprocal
+     best hits, and breaks.
+
+    There are two styles, "whole" & "breaks"
+      - "whole" is conducted by performing Fisher's exact on whole scaffolds
+      - "breaks" is conducted by performing the test on pieces of scaffolds
+    """
+    from scipy import stats
+    # open the xbreaks and the ybreaks dataframes
+    # These are where there are low-opacity,
+    #  dotted lines to show breaks in synteny
+    # example entries are like this:
+    xbreaks_df = pd.read_csv(xbreaks_file, delimiter="\t", index_col=0)
+    ybreaks_df = pd.read_csv(ybreaks_file, delimiter="\t", index_col=0)
+
+    # first make a lookup table of how to calculate the
+    #  x and y coords. This lookup is just the amount of
+    # bp to add to the value when plotting. We pass the xprot_to_loc,
+    #  xprot_to_scaf in case we need to sort everything based on order of
+    #  occurrence on the scaffolds
+    x_offset, x_scaf_to_len, vertical_lines_at, xmax, xticklabel, xtickpos, xorder = parse_coords(
+        xcoords_file, xsample, "x")
+    print("found {} x chromosomes".format(len(x_offset)))
+
+    y_offset, y_scaf_to_len, horizontal_lines_at, ymax, yticklabel, ytickpos, yorder = parse_coords(
+        ycoords_file, ysample, "y")
+
+    # first make a lookup table
+    df = pd.read_csv(plotting_df, delimiter="\t", index_col=0)
+
+    fisher_dict = []
+    if style == "breaks":
+        xranges_to_dfdict = {}
+        yranges_to_dfdict = {}
+        print("generating breaks dfs for x scaffolds")
+        for xscaf in xorder:
+            plot_xmin  = x_offset[xscaf]
+            plot_xmax  = x_offset[xscaf] + x_scaf_to_len[xscaf]
+            subxdf = xbreaks_df.loc[xbreaks_df["xscaf"] == xscaf, ]
+            subxdf = subxdf.sort_values(by=["xstop"])
+            xbreaks = [plot_xmin] + list(subxdf["xstop"]) + [plot_xmax]
+            for xi in range(len(xbreaks)-1):
+                plotleft   = xbreaks[xi]
+                plotright  = xbreaks[xi+1]
+                query = "xmiddle >= {} & xmiddle < {}".format(plotleft, plotright)
+                inxdf  = df.query(query)
+                outxdf = df[~df.isin(inxdf).all(1)]
+                interval = "{}:{}-{}".format(xscaf, plotleft, plotright)
+                xranges_to_dfdict[interval] = {"in": inxdf, "out": outxdf}
+        print("generating breaks dfs for y scaffolds")
+        for yscaf in yorder:
+            plot_ymin  = y_offset[yscaf]
+            plot_ymax  = y_offset[yscaf] + y_scaf_to_len[yscaf]
+            subydf = ybreaks_df.loc[ybreaks_df["yscaf"] == yscaf, ]
+            subydf = subydf.sort_values(by=["ystop"])
+            ybreaks = [plot_ymin] + list(subydf["ystop"]) + [plot_ymax]
+            for yi in range(len(ybreaks)-1):
+                plotbottom = ybreaks[yi]
+                plottop    = ybreaks[yi+1]
+                query = "ymiddle >= {} & ymiddle < {}".format(plotbottom, plottop)
+                inydf  = df.query(query)
+                outydf = df[~df.isin(inydf).all(1)]
+                interval = "{}:{}-{}".format(yscaf, plotbottom, plottop)
+                yranges_to_dfdict[interval] = {"in": inydf, "out": outydf}
+        # now that we have each interval and their respective dfs, we
+        #  iterate through everything and make the fisher's exact test entry
+        counter = 0
+        num_variations = len(xranges_to_dfdict) * len(yranges_to_dfdict)
+        for xinterval in xranges_to_dfdict:
+            for yinterval in yranges_to_dfdict:
+                counter += 1
+                print("\r    Completed {}/{} interval calculations   ".format(counter, num_variations), end = "")
+                xscaf     = xinterval.split(":")[0]
+                plotleft  = int(float(xinterval.split(":")[1].split("-")[0]))
+                plotright = int(float(xinterval.split(":")[1].split("-")[1]))
+                plotwidth  = plotright - plotleft
+                yscaf     = yinterval.split(":")[0]
+                plotbottom  = int(float(yinterval.split(":")[1].split("-")[0]))
+                plottop     = int(float(yinterval.split(":")[1].split("-")[1]))
+                plotheight = plottop - plotbottom
+                inxdf     = xranges_to_dfdict[xinterval]["in"]
+                outxdf     = xranges_to_dfdict[xinterval]["out"]
+                inydf     = yranges_to_dfdict[yinterval]["in"]
+                outydf     = yranges_to_dfdict[yinterval]["out"]
+                inX_inY   = len(inxdf.merge(inydf))
+                inX_outY  = len(inxdf.merge(outydf))
+                outX_inY  = len(outxdf.merge(inydf))
+                outX_outY = len(outxdf.merge(outydf))
+                table = [[inX_inY, outX_inY], [inX_outY, outX_outY]]
+                oddsratio, pvalue = stats.fisher_exact(table, alternative="greater")
+                fisher_dict.append({"xscaf": xscaf, "yscaf": yscaf,
+                                    "inX_inY": inX_inY, "inX_outY": inX_outY,
+                                    "outX_inY": outX_inY, "outX_outY": outX_outY,
+                                    "oddsratio": oddsratio, "pvalue": pvalue,
+                                    "plotleft": plotleft,
+                                    "plotright": plotright,
+                                    "plotwidth": plotwidth,
+                                    "plotbottom": plotbottom,
+                                    "plottop": plottop,
+                                    "plotheight": plotheight,
+                                    "x_plot_pos": xtickpos[xticklabel.index(xscaf)],
+                                    "y_plot_pos": ytickpos[yticklabel.index(yscaf)]})
+
+    if style == "whole": # perform the analysis on whole chromosomes
+        for xscaf in xorder: #Li
+            for yscaf in yorder: #Wi
+                #calculate the cells for fisher exact
+                plotleft = x_offset[xscaf]
+                plotright = x_offset[xscaf] + x_scaf_to_len[xscaf]
+                plotwidth = plotright - plotleft
+                plotbottom = y_offset[yscaf]
+                plottop    = y_offset[yscaf] + y_scaf_to_len[yscaf]
+                plotheight = plottop-plotbottom
+                query = "yscaf == '{}' & xscaf == '{}'".format(yscaf, xscaf)
+                inX_inY   = len(df.query(query))
+                query = "yscaf == '{}' & xscaf != '{}'".format(yscaf, xscaf)
+                inX_outY  = len(df.query(query))
+                query = "yscaf != '{}' & xscaf == '{}'".format(yscaf, xscaf)
+                outX_inY  = len(df.query(query))
+                query = "yscaf != '{}' & xscaf != '{}'".format(yscaf, xscaf)
+                outX_outY = len(df.query(query))
+                table = [[inX_inY, outX_inY], [inX_outY, outX_outY]]
+                oddsratio, pvalue = stats.fisher_exact(table, alternative="greater")
+                fisher_dict.append({"xscaf": xscaf, "yscaf": yscaf,
+                                    "inX_inY": inX_inY, "inX_outY": inX_outY,
+                                    "outX_inY": outX_inY, "outX_outY": outX_outY,
+                                    "oddsratio": oddsratio, "pvalue": pvalue,
+                                    "plotleft": plotleft,
+                                    "plotright": plotright,
+                                    "plotwidth": plotwidth,
+                                    "plotbottom": plotbottom,
+                                    "plottop": plottop,
+                                    "plotheight": plotheight,
+                                    "x_plot_pos": xtickpos[xticklabel.index(xscaf)],
+                                    "y_plot_pos": ytickpos[yticklabel.index(yscaf)]})
+    fisherdf = pd.DataFrame(fisher_dict)
+    fisherdf.to_csv(outdf, sep="\t")
+
+rule gen_fishertable_whole:
+    """
+    generates a table of fisher's exact test results for whole chromosomes
+    output is a df that can be read back into pandas
+    """
+    input:
+        dtable = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
+        ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
+        xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
+        xbreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
+        ybreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
+    output:
+        fisherswhole   = "synteny_analysis/plots/significance/tables/{xsample}_and_{ysample}_fisher_wholechr.tsv"
+    threads:
+        1
+    params:
+        xsample = lambda wildcards: wildcards.xsample,
+        ysample = lambda wildcards: wildcards.ysample,
+        style   = "whole",
+    run:
+        fishers_exact(input.dtable,
+                      input.xcoords,         input.ycoords,
+                      params.xsample,        params.ysample,
+                      input.xbreaks_manual,  input.ybreaks_manual,
+                      output.fisherswhole,   params.style)
+
+rule gen_fishertable_manualbreaks:
+    """
+    generates a table of fisher's exact test results for the manual breaks chromosomes
+    output is a df that can be read back into pandas
+    """
+    input:
+        dtable = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
+        ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
+        xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
+        xbreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
+        ybreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
+    output:
+        fishersmanualbreaks   = "synteny_analysis/plots/significance/tables/{xsample}_and_{ysample}_fisher_manualbreaks.tsv"
+    threads:
+        1
+    params:
+        xsample = lambda wildcards: wildcards.xsample,
+        ysample = lambda wildcards: wildcards.ysample,
+        style   = "breaks",
+    run:
+        fishers_exact(input.dtable,
+                      input.xcoords,         input.ycoords,
+                      params.xsample,        params.ysample,
+                      input.xbreaks_manual,  input.ybreaks_manual,
+                      output.fishersmanualbreaks,   params.style)
+
+rule gen_fishertable_autobreaks:
+    """
+    generates a table of fisher's exact test results for the manual breaks chromosomes
+    output is a df that can be read back into pandas
+    """
+    input:
+        dtable = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
+        ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
+        xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
+        xbreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_auto.tsv",
+        ybreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_auto.tsv",
+    output:
+        fishersautobreaks   = "synteny_analysis/plots/significance/tables/{xsample}_and_{ysample}_fisher_autobreaks.tsv"
+    threads:
+        1
+    params:
+        xsample = lambda wildcards: wildcards.xsample,
+        ysample = lambda wildcards: wildcards.ysample,
+        style   = "breaks",
+    run:
+        fishers_exact(input.dtable,
+                      input.xcoords,         input.ycoords,
+                      params.xsample,        params.ysample,
+                      input.xbreaks_auto,  input.ybreaks_auto,
+                      output.fishersautobreaks,   params.style)
+
+def correlation_plot(plotting_df, fishertsv,
+                     xcoords_file, ycoords_file,
+                     xsample,      ysample,
+                     xbreaks_file, ybreaks_file,
+                     densityplot, style, autoscale_color):
     """
     correlation plot makes a plot of the Fisher's exact test for each chromosome
+
+    The style variable can be:
+      - "whole_dots"
+      - "whole_colors"
+      - "breaks"
     """
+    gray   = "#d1cbcc"
+    yellow = "#f3e056"
+    orange = "#f98e08"
+    red    = "#7d1d6c"
     from scipy import stats
     import pandas as pd
     import seaborn as sns; sns.set()
@@ -1324,119 +1586,46 @@ def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
     matplotlib.rcParams['pdf.fonttype'] = 42
     matplotlib.rcParams['ps.fonttype'] = 42
 
-    # parse the xbreaks and the ybreaks.
+    # open the xbreaks and the ybreaks dataframes
     # These are where there are low-opacity,
     #  dotted lines to show breaks in synteny
     # example entries are like this:
-      #"CM022887.1_chromosome_2:4392062"
-      #"CM022887.1_chromosome_2:8784125"
-
-    xbreaks_list = []
-    for thisx in xbreaks:
-        scaf = thisx.split(":")[0]
-        pos  = int(thisx.split(":")[1])
-        xbreaks_list.append([scaf, pos])
-    ybreaks_list = []
-    for thisy in ybreaks:
-        scaf = thisy.split(":")[0]
-        pos  = int(thisy.split(":")[1])
-        ybreaks_list.append([scaf, pos])
+    xbreaks_df = pd.read_csv(xbreaks_file, delimiter="\t", index_col=0)
+    ybreaks_df = pd.read_csv(ybreaks_file, delimiter="\t", index_col=0)
 
     # first make a lookup table of how to calculate the
     #  x and y coords. This lookup is just the amount of
     # bp to add to the value when plotting. We pass the xprot_to_loc,
     #  xprot_to_scaf in case we need to sort everything based on order of
     #  occurrence on the scaffolds
-    x_offset, vertical_lines_at, xmax, xbreaks, xticklabel, xtickpos, xorder = parse_coords(
-        xcoords, xsample, "x")
+    x_offset, x_scaf_to_len, vertical_lines_at, xmax, xticklabel, xtickpos, xorder = parse_coords(
+        xcoords_file, xsample, "x")
     print("found {} x chromosomes".format(len(x_offset)))
-    x_genome_coords = pd.read_csv(xcoords, header = None, sep = " ")
-    x_genome_coords.columns = ["scaf", "scaflen", "cumsum"]
-    print(x_offset)
 
-    y_offset, horizontal_lines_at, ymax, ybreaks, yticklabel, ytickpos, yorder = parse_coords(
-        ycoords, ysample, "y",
-        xprottoloc, yprottoloc, recip, xticklabel)
-    print("found {} y chromosomes".format(len(y_offset)))
-    y_genome_coords = pd.read_csv(ycoords, header = None, sep = " ")
-    y_genome_coords.columns = ["scaf", "scaflen", "cumsum"]
+    y_offset, y_scaf_to_len, horizontal_lines_at, ymax, yticklabel, ytickpos, yorder = parse_coords(
+        ycoords_file, ysample, "y")
 
-    # this section will be used when performing this test over smaller bins
-    ## get the max plotting length of each genome
-    #xplotlen = x_offset[xorder[-1]]
-    #yplotlen = y_offset[yorder[-1]]
-    ## now get the size divided by 200
-    #xbinsize = int(int(xplotlen/100/100)*100)
-    #ybinsize = int(int(yplotlen/100/100)*100)
-
-    # now make a dict of intervals for x and y
-    # now make a lookup table of where the prots are.
-    #  Use the x_offset and y_offset to recalculate where the plotting
-    xstruct = generate_coord_structs_from_chrom_to_loc(xprottoloc)
-    xstruct["prot_plot_middle"] = {}
-    ystruct = generate_coord_structs_from_chrom_to_loc(yprottoloc)
-    ystruct["prot_plot_middle"] = {}
-    # get rid of proteins that we don't need along the x axis
-    #  also set the plotting position based on the offset
-    for prot in list(xstruct["prot_to_middle"].keys()):
-        scaf = xstruct["prot_to_scaf"][prot]
-        if scaf not in x_offset:
-            for thisdict in xstruct:
-                xstruct[thisdict].pop(prot, None)
-        else:
-            xstruct["prot_plot_middle"][prot] = xstruct["prot_to_middle"][prot] + x_offset[scaf]
-    # get rid of proteins that we don't need along the y axis
-    #  also set the plotting position based on the offset
-    for prot in list(ystruct["prot_to_middle"].keys()):
-        scaf = ystruct["prot_to_scaf"][prot]
-        if scaf not in y_offset:
-            for thisdict in xstruct:
-                ystruct[thisdict].pop(prot, None)
-        else:
-            ystruct["prot_plot_middle"][prot] = ystruct["prot_to_middle"][prot] + y_offset[scaf]
-
-    # now open the blast results and translate the pairs
-    #  into plotting positions
-    df = pd.read_csv(recip, header=None, sep = "\t")
-    df.columns = ["xgene", "ygene", "pident", "length",
-                  "mismatch", "gapopen", "qstart", "qend",
-                  "sstart", "send", "evalue", "bitscore"]
-    df = df[["xgene", "ygene", "bitscore", "evalue"]]
-    #print(x_prot_to_loc)
-    df["xpos"] = df["xgene"].map(xstruct["prot_plot_middle"])
-    df["ypos"] = df["ygene"].map(ystruct["prot_plot_middle"])
-
-    # I don't remember why the x and y is switched here.
-    df["yscaf"] = df["ygene"].map(ystruct["prot_to_scaf"])
-    df["xscaf"] = df["xgene"].map(xstruct["prot_to_scaf"])
-    #df = df.dropna() # this messed up plotting order if there were no hits on that scaf.
-
-    df = df.sort_values(by=['xpos'])
-    df = df.dropna()
-    df.reset_index(drop=True, inplace = True)
-    print(df)
-
-    fisher_dict = []
-    for xscaf in xorder: #Li
-        for yscaf in yorder: #Wi
-            #calculate the cells for fisher exact
-            query = "yscaf == '{}' & xscaf == '{}'".format(yscaf, xscaf)
-            inX_inY   = len(df.query(query))
-            query = "yscaf == '{}' & xscaf != '{}'".format(yscaf, xscaf)
-            inX_outY  = len(df.query(query))
-            query = "yscaf != '{}' & xscaf == '{}'".format(yscaf, xscaf)
-            outX_inY  = len(df.query(query))
-            query = "yscaf != '{}' & xscaf != '{}'".format(yscaf, xscaf)
-            outX_outY = len(df.query(query))
-            table = [[inX_inY, outX_inY], [inX_outY, outX_outY]]
-            oddsratio, pvalue = stats.fisher_exact(table, alternative="greater")
-            fisher_dict.append({"xscaf": xscaf, "yscaf": yscaf,
-                                "inX_inY": inX_inY, "inX_outY": inX_outY,
-                                "outX_inY": outX_inY, "outX_outY": outX_outY,
-                                "oddsratio": oddsratio, "pvalue": pvalue,
-                                "x_plot_pos": xtickpos[xticklabel.index(xscaf)],
-                                "y_plot_pos": ytickpos[yticklabel.index(yscaf)]})
-    fisherdf = pd.DataFrame(fisher_dict)
+    # first make a lookup table
+    df       = pd.read_csv(plotting_df, delimiter="\t", index_col=0)
+    fisherdf = pd.read_csv(fishertsv, delimiter="\t", index_col=0)
+    print("Performed {} tests".format(len(fisherdf)))
+    print("0.05 equivalent for {} tests is {}".format(len(fisherdf), 0.05/len(fisherdf)))
+    p_value_dict = {x: x/len(fisherdf) for x in [0.05, 0.00005, 0.00000005]}
+    p_value_to_color = {0.05:       yellow,
+                        0.00005:    orange,
+                        0.00000005: red}
+    fisherdf["color"] = gray
+    # now add colors to each entry in the dataframe
+    for index, row in fisherdf.iterrows():
+        thisp      = row["pvalue"]
+        min_vals   = [key for key in p_value_dict if thisp <= p_value_dict[key]]
+        if len(min_vals) > 0:
+            this_color = p_value_to_color[min(min_vals)]
+            fisherdf.loc[index, "color"] = this_color
+    for key in p_value_dict:
+        subdf = fisherdf.loc[fisherdf["pvalue"] < p_value_dict[key], ]
+        print("There are {} cells with pvalues below the {} Bf-corrected pvalue, {}".format(
+            len(subdf), key, p_value_dict[key]))
     # figure out the widths of the cells to find the optimal dot size
     widths = []
     #for this_list in [horizontal_lines_at, vertical_lines_at
@@ -1478,19 +1667,31 @@ def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
                         left=False, labelleft=False,
                         right=False, labelright=False,
                         top=False, labeltop=False)
-
-    # plot the circles for the significance
     smallest_p = min(fisherdf["pvalue"])
-    for index, row in fisherdf.iterrows():
-        x, y = quantize_pvalue(x_median_size/2,
-                              y_median_size/2,
-                              float(row["pvalue"]),
-                              smallest_p)
-        circ = matplotlib.patches.Ellipse(
-                   (row["x_plot_pos"], row["y_plot_pos"]),
-                   x, y, ec = None, lw = None, color="gray")
-        panel1.add_patch(circ)
-
+    if style == "whole_dots":
+        # plot the circles for the significance
+        for index, row in fisherdf.iterrows():
+            #x, y = quantize_pvalue(x_median_size/2,
+            #                      y_median_size/2,
+            #                      float(row["pvalue"]),
+            #                      smallest_p)
+            x = x_median_size/2
+            y = y_median_size/2
+            circ = matplotlib.patches.Ellipse(
+                       (row["x_plot_pos"], row["y_plot_pos"]),
+                       x, y, ec = None, lw = None, color=row["color"])
+            panel1.add_patch(circ)
+    elif style in ["whole_colors", "breaks"]:
+        for index, row in fisherdf.iterrows():
+            left   = row["plotleft"]
+            bottom = row["plotbottom"]
+            width  = row["plotwidth"]
+            height = row["plotheight"]
+            rectangle = matplotlib.patches.Rectangle((left, bottom), width, height,
+                                              linewidth=0,
+                                              facecolor=row["color"],
+                                              edgecolor="black", zorder = 2)
+            panel1.add_patch(rectangle)
 
     # set the panel linewidth thinner
     for this_panel in [panel1]:
@@ -1512,32 +1713,60 @@ def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
     # now plot the legend
     # there are 6 sizes to plot
     # take up the top 1/3 of the panel
-    legend_bottom_y = ymax - int(ymax/3)
-    legend_top_y    = ymax
-    leg_y_seglen        = int(ymax/3/7)
-    # set the points 15% away from left edge
-    leg_x_offset        = 0.15 * (xmax*xscalar)
-    leg_x_pos_ellipse = [leg_x_offset]*6
-    leg_y_pos_ellipse = [legend_top_y - leg_y_seglen]
-    for i in range(6):
-        leg_y_pos_ellipse.append(leg_y_pos_ellipse[-1] - leg_y_seglen)
-    # now actually plot the ellipses
-    legscale, legsize = sizes_and_scale_minp(smallest_p)
-    legscale.append(0.15)
-    legsize.append("1")
-    for i in range(6):
-        x, y = quantize_pvalue(x_median_size/2,
-                              y_median_size/2,
-                              float(legsize[i]),
-                              min([float(x) for x in legsize]))
-        circ = matplotlib.patches.Ellipse(
-                   (leg_x_pos_ellipse[i], leg_y_pos_ellipse[i]),
-                   x, y, ec = None, lw = None, color="gray")
-        panelleg.add_patch(circ)
-        textx = leg_x_pos_ellipse[i] + leg_x_offset
-        texty = leg_y_pos_ellipse[i]
-        s = "p <= {}".format(legsize[i])
-        matplotlib.pyplot.text(textx, texty, s, ha="left", fontsize = 8)
+    if style == "circles":
+        legend_bottom_y = ymax - int(ymax/3)
+        legend_top_y    = ymax
+        leg_y_seglen        = int(ymax/3/7)
+        # set the points 15% away from left edge
+        leg_x_offset        = 0.15 * (xmax*xscalar)
+        leg_x_pos_ellipse = [leg_x_offset]*6
+        leg_y_pos_ellipse = [legend_top_y - leg_y_seglen]
+        for i in range(6):
+            leg_y_pos_ellipse.append(leg_y_pos_ellipse[-1] - leg_y_seglen)
+        # now actually plot the ellipses
+        legscale, legsize = sizes_and_scale_minp(smallest_p)
+        legscale.append(0.15)
+        legsize.append("1")
+        for i in range(6):
+            x, y = quantize_pvalue(x_median_size/2,
+                                  y_median_size/2,
+                                  float(legsize[i]),
+                                  min([float(x) for x in legsize]))
+            circ = matplotlib.patches.Ellipse(
+                       (leg_x_pos_ellipse[i], leg_y_pos_ellipse[i]),
+                       x, y, ec = None, lw = None, color="gray")
+            panelleg.add_patch(circ)
+            textx = leg_x_pos_ellipse[i] + leg_x_offset
+            texty = leg_y_pos_ellipse[i]
+            s = "p <= {}".format(legsize[i])
+            matplotlib.pyplot.text(textx, texty, s, ha="left", va = "center", fontsize = 8)
+    elif (("whole" in style) or (style == "breaks")):
+        legend_bottom_y = ymax - int(ymax/3)
+        legend_top_y    = ymax
+        leg_y_seglen        = int(ymax/3/7)
+        # set the points 15% away from left edge
+        leg_x_offset        = 0.15 * (xmax*xscalar)
+        leg_x_pos_ellipse = [leg_x_offset]*6
+        leg_y_pos_ellipse = [legend_top_y - leg_y_seglen]
+        for i in range(4):
+            leg_y_pos_ellipse.append(leg_y_pos_ellipse[-1] - leg_y_seglen)
+        # now actually plot the ellipses
+        legscale, legsize = sizes_and_scale_minp(smallest_p)
+        legscale.append(0.15)
+        legsize.append("1")
+        index_to_color = [gray, yellow, orange, red]
+        index_to_text  = ["> 0.05", "< 0.05", "< 5e-4", "< 5e-7"]
+        for i in range(4):
+            x = x_median_size/2
+            y = y_median_size/2
+            circ = matplotlib.patches.Ellipse(
+                       (leg_x_pos_ellipse[i], leg_y_pos_ellipse[i]),
+                       x, y, ec = None, linewidth = None, color=index_to_color[i])
+            panelleg.add_patch(circ)
+            textx = leg_x_pos_ellipse[i] + leg_x_offset
+            texty = leg_y_pos_ellipse[i]
+            s = "{}".format(index_to_text[i])
+            matplotlib.pyplot.text(textx, texty, s, ha="left", va = "center", fontsize = 8)
 
     # set x ticks
     panel1.set_xticks(xtickpos)
@@ -1560,42 +1789,123 @@ def correlation_plot(ycoords, xcoords, xprottoloc, yprottoloc, xsample, ysample,
     for value in horizontal_lines_at:
         panel1.axhline(y=value, color="black", lw=0.5)
 
-    # plot vertical BOS
-    for value in xbreaks:
-        panel1.axvline(x=value, color=[0,0,0,0.25], lw=0.5, linestyle="dotted")
-    # plot horizontal BOS
-    for value in ybreaks:
-        panel1.axhline(y=value, color=[0,0,0,0.25], lw=0.5, linestyle="dotted")
     plt.savefig(densityplot)
 
 
-"""
-This handles the correlation matrices
-"""
-rule plot_fishers:
+rule plot_fishers_whole:
+    """
+    Plots the correlation matrices of the whole scaffolds.
+    """
     input:
+        dtable = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
+        fishertsv   = "synteny_analysis/plots/significance/tables/{xsample}_and_{ysample}_fisher_wholechr.tsv",
         ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
         xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
-        xprottoloc = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["prot_to_loc"],
-        yprottoloc = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"],
-        recip = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp"
+        xbreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
+        ybreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
     output:
-        density = "synteny_analysis/plots/significance/wholechr/{xsample}_and_{ysample}_fisher.pdf",
+        density_plot   = "synteny_analysis/plots/significance/wholechr/{xsample}_and_{ysample}_fisher_wholechr.pdf"
     threads:
         1
     params:
         xsample = lambda wildcards: wildcards.xsample,
         ysample = lambda wildcards: wildcards.ysample,
-        xbreaks  = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["breaks"],
-        ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["breaks"],
-        keep_x   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["xaxisspecies"][wildcards.xsample]) or ("noxlines" in config["xaxisspecies"][wildcards.xsample])) else True,
-        keep_y   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample]) or ("noylines" in config["yaxisspecies"][wildcards.ysample])) else True
+        style   = "whole_dots",
+        autoscale = False
     run:
-        correlation_plot(input.ycoords, input.xcoords,
-                     input.xprottoloc, input.yprottoloc,
-                     params.xsample, params.ysample,
-                     params.xbreaks, params.ybreaks,
-                     input.recip, output.density)
+        correlation_plot(input.dtable,          input.fishertsv,
+                         input.xcoords,         input.ycoords,
+                         params.xsample,        params.ysample,
+                         input.xbreaks_manual,  input.ybreaks_manual,
+                         output.density_plot,   params.style,  params.autoscale)
+
+rule plot_fishers_whole_color_cells:
+    """
+    Plots the correlation matrices of the whole scaffolds.
+      - Colors in the whole cells.
+    """
+
+    input:
+        dtable = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
+        fishertsv   = "synteny_analysis/plots/significance/tables/{xsample}_and_{ysample}_fisher_wholechr.tsv",
+        ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
+        xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
+        xbreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
+        ybreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
+    output:
+        density_plot   = "synteny_analysis/plots/significance/wholechr_colors/{xsample}_and_{ysample}_fisher_chromcolor.pdf"
+    threads:
+        1
+    params:
+        xsample = lambda wildcards: wildcards.xsample,
+        ysample = lambda wildcards: wildcards.ysample,
+        style   = "whole_colors",
+        autoscale = False
+    run:
+        correlation_plot(input.dtable,          input.fishertsv,
+                         input.xcoords,         input.ycoords,
+                         params.xsample,        params.ysample,
+                         input.xbreaks_manual,  input.ybreaks_manual,
+                         output.density_plot,   params.style, params.autoscale)
+
+rule plot_fishers_manualbreaks:
+    """
+    Plots the correlation matrices of the whole scaffolds.
+      - Colors in the automatic breaks
+    """
+    input:
+        dtable = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
+        fishertsv   = "synteny_analysis/plots/significance/tables/{xsample}_and_{ysample}_fisher_manualbreaks.tsv",
+        ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
+        xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
+        #xbreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
+        #ybreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
+        xbreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
+        ybreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
+    output:
+        density_plot   = "synteny_analysis/plots/significance/breaks/{xsample}_and_{ysample}_fisher_manualbreaks.pdf"
+    threads:
+        1
+    params:
+        xsample = lambda wildcards: wildcards.xsample,
+        ysample = lambda wildcards: wildcards.ysample,
+        style   = "breaks",
+        autoscale = False
+    run:
+        correlation_plot(input.dtable,          input.fishertsv,
+                         input.xcoords,         input.ycoords,
+                         params.xsample,        params.ysample,
+                         input.xbreaks_manual,  input.ybreaks_manual,
+                         output.density_plot,   params.style, params.autoscale)
+
+rule plot_fishers_autobreaks:
+    """
+    Plots the correlation matrices of the whole scaffolds.
+      - Colors in the automatic breaks
+    """
+    input:
+        dtable = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
+        fishertsv   = "synteny_analysis/plots/significance/tables/{xsample}_and_{ysample}_fisher_manualbreaks.tsv",
+        ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
+        xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
+        xbreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_auto.tsv",
+        ybreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_auto.tsv",
+    output:
+        density_plot   = "synteny_analysis/plots/significance/breaks/{xsample}_and_{ysample}_fisher_autobreaks.pdf"
+    threads:
+        1
+    params:
+        xsample = lambda wildcards: wildcards.xsample,
+        ysample = lambda wildcards: wildcards.ysample,
+        style   = "breaks",
+        autoscale = True
+    run:
+        correlation_plot(input.dtable,          input.fishertsv,
+                         input.xcoords,         input.ycoords,
+                         params.xsample,        params.ysample,
+                         input.xbreaks_auto,  input.ybreaks_auto,
+                         output.density_plot,   params.style, params.autoscale)
+
 
 rule xprot_to_color:
     """
@@ -1653,29 +1963,32 @@ For some reason I am getting an InputFunctionException
 """
 rule plot_synteny_x_colored_by_x:
     input:
+        dtable = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
+        plot_order = "synteny_analysis/plot_order/{xsample}_and_{ysample}_plotorder.tsv",
         ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
         xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
+        xbreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_auto.tsv",
+        ybreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_auto.tsv",
+        xbreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
+        ybreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
         xprottoloc = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["prot_to_loc"],
         yprottoloc = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"],
-        recip = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp",
         color_by_blast = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{colorby}_recip.blastp",
         color_by = "synteny_analysis/prot_to_color/{colorby}_prottocolor.tsv"
     output:
-        synplot = "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
-        nodots = "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{colorby}_synteny.pdf",
-        plot_order = "synteny_analysis/plot_order/colored_by/{xsample}_and_{ysample}_coloredby_{colorby}_plotorder.tsv"
+        synplot_auto = "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{colorby}_synteny_autobreaks.pdf",
+        nodots_auto = "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{colorby}_synteny_autobreaks.pdf",
+        synplot_manual = "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{colorby}_synteny_manualbreaks.pdf",
+        nodots_manual = "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{colorby}_synteny_manualbreaks.pdf",
+
     threads:
         1
     params:
         xsample = lambda wildcards: wildcards.xsample,
         ysample = lambda wildcards: wildcards.ysample,
         color_sample = lambda wildcards: wildcards.colorby,
-        xbreaks  = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["breaks"],
-        ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["breaks"],
         keep_x   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["xaxisspecies"][wildcards.xsample]) or ("noxlines" in config["xaxisspecies"][wildcards.xsample])) else True,
         keep_y   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample]) or ("noylines" in config["yaxisspecies"][wildcards.ysample])) else True,
-        autoxb   = lambda wildcards: True if ( ("auto_d_breaks" in config["xaxisspecies"][wildcards.xsample]) and (config["xaxisspecies"][wildcards.xsample]["auto_d_breaks"] == True)) else False,
-        autoyb   = lambda wildcards: True if ( ("auto_d_breaks" in config["yaxisspecies"][wildcards.ysample]) and (config["yaxisspecies"][wildcards.ysample]["auto_d_breaks"] == True)) else False,
     run:
         print("printing x")
         print(config["xaxisspecies"][wildcards.xsample])
@@ -1710,27 +2023,34 @@ rule plot_synteny_x_colored_by_x:
                             fail_counter += 1
             print(try_counter, fail_counter)
         # now that we have the colors, plot
-        synteny_plot(input.ycoords, input.xcoords,
-                     input.xprottoloc, input.yprottoloc,
+          # auto breaks
+        synteny_plot(input.dtable,   input.xcoords,  input.ycoords,
                      params.xsample, params.ysample,
-                     params.xbreaks, params.ybreaks,
-                     input.recip, output.synplot, None,
-                     output.plot_order, prot_to_color,
-                     False,
+                     input.xbreaks_auto, input.ybreaks_auto,
+                     output.synplot_auto, prot_to_color,  False,
                      plot_x_lines = params.keep_x,
-                     plot_y_lines = params.keep_y,
-                     auto_determine_x_breaks = params.autoxb,
-                     auto_determine_y_breaks = params.autoyb)
+                     plot_y_lines = params.keep_y)
+          # manual breaks
+        synteny_plot(input.dtable,   input.xcoords,  input.ycoords,
+                     params.xsample, params.ysample,
+                     input.xbreaks_manual, input.ybreaks_manual,
+                     output.synplot_manual, prot_to_color,  False,
+                     plot_x_lines = params.keep_x,
+                     plot_y_lines = params.keep_y)
+
 
         # plot again, but without the black (missing) points
-        synteny_plot(input.ycoords, input.xcoords,
-                     input.xprottoloc, input.yprottoloc,
+          # auto breaks
+        synteny_plot(input.dtable,   input.xcoords,  input.ycoords,
                      params.xsample, params.ysample,
-                     params.xbreaks, params.ybreaks,
-                     input.recip, output.nodots, None,
-                     output.plot_order, prot_to_color,
-                     True,
+                     input.xbreaks_auto, input.ybreaks_auto,
+                     output.nodots_auto, prot_to_color,  True,
                      plot_x_lines = params.keep_x,
-                     plot_y_lines = params.keep_y,
-                     auto_determine_x_breaks = params.autoxb,
-                     auto_determine_y_breaks = params.autoyb)
+                     plot_y_lines = params.keep_y)
+          # manual breaks
+        synteny_plot(input.dtable,   input.xcoords,  input.ycoords,
+                     params.xsample, params.ysample,
+                     input.xbreaks_manual, input.ybreaks_manual,
+                     output.nodots_manual, prot_to_color,  True,
+                     plot_x_lines = params.keep_x,
+                     plot_y_lines = params.keep_y)
