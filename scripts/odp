@@ -15,7 +15,7 @@ import sys
 configfile: "config.yaml"
 
 # check for legal config entries. Useful for finding misspelled entries
-legal = ["proteins", "prot_to_loc", "genome", "minscafsize", "manual_breaks", "chrom_to_color"]
+legal = ["proteins", "prot_to_loc", "genome", "minscafsize", "manual_breaks", "chrom_to_color", "plotorder"]
 illegal = set()
 for this_axis in ["xaxisspecies", "yaxisspecies"]:
     if this_axis in config:
@@ -95,6 +95,7 @@ rule all:
         # working on plotting for color
         expand("synteny_analysis/prot_to_color/{colorby}_prottocolor.tsv",
                colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
+        # These need to be rewritten such that x and y do not match
         expand_avoid_matching_x_and_y_third(
             "synteny_analysis/plots/synteny_colored_by/{}_and_{}_coloredby_{}_synteny_autobreaks.pdf",
             config["xaxisspecies"], config["yaxisspecies"],
@@ -123,20 +124,20 @@ rule all:
             "synteny_analysis/dvalue_table_breaks/{}_and_{}_xbreaks_manual.tsv",
              config["xaxisspecies"], config["yaxisspecies"]),
 
-        ##make the correlation plots - whole chromosomes
-        #expand_avoid_matching_x_and_y(
-        #    "synteny_analysis/plots/significance/wholechr/{}_and_{}_fisher_wholechr.pdf",
-        #     config["xaxisspecies"], config["yaxisspecies"]),
-        #expand_avoid_matching_x_and_y(
-        #    "synteny_analysis/plots/significance/wholechr_colors/{}_and_{}_fisher_chromcolor.pdf",
-        #     config["xaxisspecies"], config["yaxisspecies"]),
-        ## this currently doesn't work - need to trace back where the errors are from
-        #expand_avoid_matching_x_and_y(
-        #"synteny_analysis/plots/significance/breaks/{}_and_{}_fisher_manualbreaks.pdf",
-        #     config["xaxisspecies"], config["yaxisspecies"]),
-        #expand_avoid_matching_x_and_y(
-        #"synteny_analysis/plots/significance/breaks/{}_and_{}_fisher_autobreaks.pdf",
-        #     config["xaxisspecies"], config["yaxisspecies"])
+        #make the correlation plots - whole chromosomes
+        expand_avoid_matching_x_and_y(
+            "synteny_analysis/plots/significance/wholechr/{}_and_{}_fisher_wholechr.pdf",
+             config["xaxisspecies"], config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y(
+            "synteny_analysis/plots/significance/wholechr_colors/{}_and_{}_fisher_chromcolor.pdf",
+             config["xaxisspecies"], config["yaxisspecies"]),
+        # this currently doesn't work - need to trace back where the errors are from
+        expand_avoid_matching_x_and_y(
+        "synteny_analysis/plots/significance/breaks/{}_and_{}_fisher_manualbreaks.pdf",
+             config["xaxisspecies"], config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y(
+        "synteny_analysis/plots/significance/breaks/{}_and_{}_fisher_autobreaks.pdf",
+             config["xaxisspecies"], config["yaxisspecies"])
 
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
@@ -345,7 +346,7 @@ rule get_genome_coords_x:
                            print($name, length($seq), sum)  }} \
                         }}' {input.genome} | \
           sort -k2 -nr | \
-          awk '{{sum = sum + $2; print($1, $2, sum) }}' > {output.coords}
+          awk '{{sum = sum + $2; print($1, $2, sum, sum - $2) }}' > {output.coords}
         """
 
 rule get_genome_coords_y:
@@ -363,8 +364,35 @@ rule get_genome_coords_y:
                            print($name, length($seq), sum)  }} \
                         }}' {input.genome} | \
           sort -k2 -nr | \
-          awk '{{sum = sum + $2; print($1, $2, sum) }}' > {output.coords}
+          awk '{{sum = sum + $2; print($1, $2, sum, sum - $2) }}' > {output.coords}
         """
+
+def genome_coords_to_plotstart_dict(path_to_genocoords_file):
+    """
+    Takes a genome coords file where:
+      - col1: scaf name
+      - col2: scaflen
+      - col3: cumsum of the total plot size
+      - col4: the plot starting position for that scaffold
+
+    sca1 3822568 3822568  0
+    sca2 2667796 6490364  3822568
+    sca3 2526311 9016675  2667796
+    sca4 2410750 11427425 2526311
+    sca5 2150379 13577804 2410750
+    sca6 1771964 15349768 2150379
+
+    And returns a dict where col1 (scaf name) is key
+     and col4 (plotting offset) is the value
+    """
+    offset_dict = {}
+    with open(path_to_genocoords_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                splitd = line.split()
+                offset_dict[splitd[0]] = int(splitd[3])
+    return offset_dict
 
 def genome_coords_to_offset_dict(path_to_genocoords_file):
     """
@@ -372,13 +400,14 @@ def genome_coords_to_offset_dict(path_to_genocoords_file):
       - col1: scaf name
       - col2: scaflen
       - col3: cumsum of the total plot size
+      - col4: the plot starting position for that scaffold
 
-    sca1 3822568 3822568
-    sca2 2667796 6490364
-    sca3 2526311 9016675
-    sca4 2410750 11427425
-    sca5 2150379 13577804
-    sca6 1771964 15349768
+    sca1 3822568 3822568  0
+    sca2 2667796 6490364  3822568
+    sca3 2526311 9016675  2667796
+    sca4 2410750 11427425 2526311
+    sca5 2150379 13577804 2410750
+    sca6 1771964 15349768 2150379
 
     And returns a dict where col1 (scaf name) is key
      and col3 (plotting offset) is the value
@@ -501,7 +530,7 @@ def parse_coords(coords_file, sample, xory,
     max_coord = 0
     lines_at = []
     df = pd.read_csv(coords_file, header = None, sep = " ")
-    df.columns = ["scaf", "scaflen", "cumsum"]
+    df.columns = ["scaf", "scaflen", "cumsum", "coordstart"]
     # now figure out if we need to sort or not
     drop_nas = True
     # make sure that plotorder and sort_by_x_coord_blast aren't there together
@@ -631,23 +660,24 @@ def calc_D_for_y_and_x(df, x_offset, y_offset, x_scaf_to_len, y_scaf_to_len):
                 barright  = -1
                 barmiddle = -1
                 barwidth  = -1
-                if i == 0:
-                    thisend   = row["{}stop".format(thisdir)]
-                    nextstart = xdf.loc[i+1, "{}start".format(thisdir)]
-                    barleft   = this_offset[thisx]
-                    barright  = thisend + ((nextstart-thisend)/2)
-                elif i == (len(xdf) - 1):
-                    prevend   = xdf.loc[i-1, "{}stop".format(thisdir)]
-                    thisstart = row["{}start".format(thisdir)]
-                    barleft   = prevend + ((thisstart-prevend)/2)
-                    barright  = this_scaf_to_len[thisx]
-                else:
-                    prevend   = xdf.loc[i-1, "{}stop".format(thisdir)]
-                    thisstart = row["{}start".format(thisdir)]
-                    thisend   = row["{}stop".format(thisdir)]
-                    nextstart = xdf.loc[i+1, "{}start".format(thisdir)]
-                    barleft   = prevend + ((thisstart-prevend)/2)
-                    barright  = thisend + ((nextstart-thisend)/2)
+                if len(xdf) > 1:
+                    if i == 0:
+                        thisend   = row["{}stop".format(thisdir)]
+                        nextstart = xdf.loc[i+1, "{}start".format(thisdir)]
+                        barleft   = this_offset[thisx]
+                        barright  = thisend + ((nextstart-thisend)/2)
+                    elif i == (len(xdf) - 1):
+                        prevend   = xdf.loc[i-1, "{}stop".format(thisdir)]
+                        thisstart = row["{}start".format(thisdir)]
+                        barleft   = prevend + ((thisstart-prevend)/2)
+                        barright  = this_scaf_to_len[thisx]
+                    else:
+                        prevend   = xdf.loc[i-1, "{}stop".format(thisdir)]
+                        thisstart = row["{}start".format(thisdir)]
+                        thisend   = row["{}stop".format(thisdir)]
+                        nextstart = xdf.loc[i+1, "{}start".format(thisdir)]
+                        barleft   = prevend + ((thisstart-prevend)/2)
+                        barright  = thisend + ((nextstart-thisend)/2)
                 xdf.loc[i, "D{}_barleft".format(thisdir)]   = barleft
                 xdf.loc[i, "D{}_barright".format(thisdir)]  = barright
                 xdf.loc[i, "D{}_barmiddle".format(thisdir)] = barleft + ((barright - barleft)/2)
@@ -658,7 +688,8 @@ def calc_D_for_y_and_x(df, x_offset, y_offset, x_scaf_to_len, y_scaf_to_len):
     df.reset_index(drop=True, inplace = True)
     return df
 
-def determine_breaks(df, scaf_to_breaks_set, scaf_to_offset_dict, sort_direction, auto_breaks):
+def determine_breaks(df, scaf_to_breaks_set, scaf_to_offset_dict,
+                     sort_direction, auto_breaks):
     """
     determines the major breaks in Dx or Dy to use as partitions.
 
@@ -696,8 +727,17 @@ def determine_breaks(df, scaf_to_breaks_set, scaf_to_offset_dict, sort_direction
             offset_position = thisposition + scaf_to_offset_dict[thisscaf]
             subdf = df.loc[df[sort_order[sort_direction]["end"]] <= offset_position, ]
             subdf = subdf.sort_values(by=[sort_order[sort_direction]["end"]])
+            tempdf = df.loc[df[sort_order[sort_direction]["chrom"]] == thisscaf, ["xgene", "ygene", "xstart"]]
+            #print(thisscaf, thisposition, offset_position)
+            #print(tempdf)
+            #print(subdf.loc[subdf.index[-1]])
+            #print()
+            #sys.exit()
             manual_breaks_indices.add(subdf.index[-1])
     manual_breaks_indices = list(manual_breaks_indices)
+    #if not auto_breaks:
+    #    print("manual_breaks")
+    #    print(manual_breaks_indices)
 
     all_ranges = set()
     if auto_breaks:
@@ -880,6 +920,8 @@ def gen_plotting_df(ycoords_file, xcoords_file,
     ystruct["prot_plot_start"] = {}
     ystruct["prot_plot_middle"] = {}
     ystruct["prot_plot_stop"] = {}
+    #print("xstruct")
+    #print(xstruct)
     # get rid of proteins that we don't need along the x axis
     #  also set the plotting position based on the offset
     for prot in list(xstruct["prot_to_middle"].keys()):
@@ -910,6 +952,8 @@ def gen_plotting_df(ycoords_file, xcoords_file,
                   "mismatch", "gapopen", "qstart", "qend",
                   "sstart", "send", "evalue", "bitscore"]
     df = df[["xgene", "ygene", "bitscore", "evalue"]]
+    df["xgene"] = df["xgene"].astype(str)
+    df["ygene"] = df["ygene"].astype(str)
     #print(x_prot_to_loc)
     df["xstart"]  = df["xgene"].map(xstruct["prot_plot_start"])
     df["xmiddle"] = df["xgene"].map(xstruct["prot_plot_middle"])
@@ -1012,11 +1056,13 @@ rule generate_breaks_file:
             if scaf not in y_breaks:
                 y_breaks[scaf] = set()
             y_breaks[scaf].add(position)
-        x_offset = genome_coords_to_offset_dict(input.xcoords)
-        y_offset = genome_coords_to_offset_dict(input.ycoords)
+        x_offset = genome_coords_to_plotstart_dict(input.xcoords)
+        y_offset = genome_coords_to_plotstart_dict(input.ycoords)
 
         print("printing the input before finding the breaks")
         df = pd.read_csv(input.table, delimiter="\t", index_col=0)
+        df["xgene"] = df["xgene"].astype(str)
+        df["ygene"] = df["ygene"].astype(str)
         print(df)
 
         # parse the manual breaks in the config file
@@ -1072,7 +1118,11 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     #  dotted lines to show breaks in synteny
     # example entries are like this:
     xbreaks_df = pd.read_csv(xbreaks_file, delimiter="\t", index_col=0)
+    xbreaks_df["xgene"] = xbreaks_df["xgene"].astype(str)
+    xbreaks_df["ygene"] = xbreaks_df["ygene"].astype(str)
     ybreaks_df = pd.read_csv(ybreaks_file, delimiter="\t", index_col=0)
+    ybreaks_df["xgene"] = ybreaks_df["xgene"].astype(str)
+    ybreaks_df["ygene"] = ybreaks_df["ygene"].astype(str)
 
 
     # first make a lookup table of how to calculate the
@@ -1090,6 +1140,8 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
 
     # first make a lookup table
     df = pd.read_csv(plotting_df, delimiter="\t", index_col=0)
+    df["xgene"] = df["xgene"].astype(str)
+    df["ygene"] = df["ygene"].astype(str)
 
     xgene = df["xgene"]
     x = df["xmiddle"]
@@ -1387,6 +1439,8 @@ def fishers_exact(plotting_df,
 
     # first make a lookup table
     df = pd.read_csv(plotting_df, delimiter="\t", index_col=0)
+    df["xgene"] = df["xgene"].astype(str)
+    df["ygene"] = df["ygene"].astype(str)
 
     fisher_dict = []
     if style == "breaks":
