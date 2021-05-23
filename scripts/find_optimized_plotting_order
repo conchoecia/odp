@@ -3,6 +3,8 @@ This script performs mutual-best protein diamond BLAST searches,
 then it determines the optimal order to plot the y-axis sequences
 """
 from Bio import SeqIO
+from Bio import SeqRecord
+from Bio import Seq
 from itertools import groupby
 import matplotlib
 import math
@@ -44,12 +46,10 @@ for this_axis in ["xaxisspecies", "yaxisspecies"]:
             if "minscafsize" not in config[this_axis][this_one]:
                 config[this_axis][this_one]["minscafsize"] = 5000
 
-#make a function to add entries into y, if the entry is in x but not yet in y
+# we require that you define yaxisspecies for this. Only the yaxisspecies
+#  will have a pseudogenome created based on the xaxisspecies
 if "yaxisspecies" not in config:
-    config["yaxisspecies"] = {}
-for thisx in config["xaxisspecies"]:
-    if thisx not in config["yaxisspecies"]:
-        config["yaxisspecies"][thisx] = config["xaxisspecies"][thisx]
+    raise IOError(" you must have yaxisspecies")
 
 def flatten(list_of_lists):
     """flatten a list of lists, unique only"""
@@ -71,6 +71,26 @@ def expand_avoid_matching_x_and_y(filestring, xsamples, ysamples):
     #print(type(outlist))
     return [x for x in outlist]
 
+def expand_avoid_matching_x_and_y_kwargs(filestring, **kwargs):
+    """
+    this works like snakemake's expand function but does not generate
+     files where xsample equals ysample
+
+    outputs a list of files
+    """
+    outlist = []
+    keys = [x for x in kwargs]
+    values = [[y for y in kwargs[x]] for x in keys]
+    for pos0 in values[0]:
+        for pos1 in values[1]:
+            if pos0 != pos1:
+                thesekwargs = {keys[0]: pos0, keys[1]: pos1}
+                print(thesekwargs)
+                outlist.append(filestring.format(**thesekwargs))
+    #print(outlist)
+    #print(type(outlist))
+    return [x for x in outlist]
+
 def expand_avoid_matching_x_and_y_third(filestring, xsamples, ysamples, third):
     """
     this works like snakemake's expand function but does not generate
@@ -88,22 +108,19 @@ def expand_avoid_matching_x_and_y_third(filestring, xsamples, ysamples, third):
                     outlist.append(filestring.format(xsamp, ysamp, t))
     return outlist
 
-autobreak_files = []
-make_autobreaks = True
-if "ignore_autobreaks" in config:
-    if config["ignore_autobreaks"]:
-        make_autobreaks = False
-    else:
-        pass
-else:
-    pass
-
 
 rule all:
     input:
-        autobreak_files,
         expand_avoid_matching_x_and_y("synteny_analysis/plots/synteny_uncolored/{}_and_{}_synteny_manualbreaks.pdf",
                 config["xaxisspecies"], config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y("synteny_analysis/xblast_grouporder/{}_and_{}_ygrouporder.tsv",
+                config["xaxisspecies"], config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y_kwargs("synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.fasta",
+                xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y_kwargs("synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.chrom",
+                xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y_kwargs("synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.pep",
+                xsample = config["xaxisspecies"], ysample = config["yaxisspecies"])
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     """
@@ -425,7 +442,7 @@ def generate_coord_structs_from_chrom_to_loc(prot_to_loc_file):
              "prot_to_middle": prot_to_middle }
 
 def blast_plot_order_helper(coords, sample, xory, xprottoloc, yprottoloc, recip,
-                            xorder):
+                            xorder, group_file):
     """
     This uses the reciprocal blast results to come up with the sort order
      for the y-axis scaffolds. Returns a list of the plot order.
@@ -479,12 +496,16 @@ def blast_plot_order_helper(coords, sample, xory, xprottoloc, yprottoloc, recip,
     df = df.dropna()
     df.reset_index(drop=True, inplace = True)
     print(df)
+    print(group_file)
+    df.to_csv(group_file, sep="\t")
+
     #print(list(df.yscaf))
     return(list(df.yscaf))
 
 def parse_coords(coords_file, sample, xory,
                  xprottoloc=None, yprottoloc=None,
-                 recip=None, xorder=None):
+                 recip=None, xorder=None, sort_table = None,
+                 group_file = None):
     """
     This parses the coordinates and returns a
       - coord-to-offset dict (I don't remember what this is for),
@@ -531,7 +552,8 @@ def parse_coords(coords_file, sample, xory,
             print(xorder)
             plotorder = blast_plot_order_helper(coords_file, sample, xory,
                                                 xprottoloc, yprottoloc,
-                                                recip, xorder)
+                                                recip, xorder,
+                                                group_file)
             #print("after plot order in sort_by_x_coord_blast")
     else:
         raise IOError("Don't know what this is")
@@ -835,7 +857,8 @@ def determine_breaks(df, scaf_to_breaks_set, scaf_to_offset_dict,
 def gen_plotting_df(ycoords_file, xcoords_file,
                     xprottoloc, yprottoloc,
                     xsample, ysample,
-                    recip, outtable, plotorder_file):
+                    recip, outtable, plotorder_file,
+                    group_file = False):
     """
     Generates a dataframe that will be used by the other parts of the program
      for plotting.
@@ -856,7 +879,7 @@ def gen_plotting_df(ycoords_file, xcoords_file,
 
     y_offset, y_scaf_to_len, horizontal_lines_at, ymax, yticklabel, ytickpos, yorder = parse_coords(
         ycoords_file, ysample, "y",
-        xprottoloc, yprottoloc, recip, xticklabel)
+        xprottoloc, yprottoloc, recip, xticklabel, group_file = group_file)
     print("found {} y chromosomes".format(len(y_offset)))
 
     # now save the plot order to a file
@@ -952,6 +975,7 @@ rule generate_plotting_df_and_plot_order:
     output:
         table = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
         plot_order = "synteny_analysis/plot_order/{xsample}_and_{ysample}_plotorder.tsv",
+        group_file     = "synteny_analysis/xblast_grouporder/{xsample}_and_{ysample}_ygrouporder.tsv"
     threads:
         1
     params:
@@ -964,7 +988,7 @@ rule generate_plotting_df_and_plot_order:
                      input.xprottoloc, input.yprottoloc,
                      params.xsample, params.ysample,
                      input.recip, output.table,
-                     output.plot_order)
+                     output.plot_order, group_file = output.group_file)
 
 rule generate_breaks_file:
     """
@@ -1042,7 +1066,8 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
                  plot_y_lines = False,
                  xprottoloc = False,
                  yprottoloc = False,
-                 recip = False):
+                 recip = False,
+                 group_file = False):
     """
     If the user provided a plot order, then we should not skip any scaffolds.
 
@@ -1300,7 +1325,7 @@ rule plot_synteny:
         recip = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp"
     output:
         synplot_manual = "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_manualbreaks.pdf",
-        synplot_auto   = "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_autobreaks.pdf"
+        synplot_auto   = "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_autobreaks.pdf",
     threads:
         1
     params:
@@ -1403,3 +1428,141 @@ rule xprot_to_color:
                 color = "#000000"
                 print("{}\t{}".format(prot, color), file=out_handle)
         out_handle.close()
+
+rule make_pseudo_genome:
+    """
+    After getting the new grouping order for the scaffolds, generate a pseudogenome.
+    """
+    input:
+        grouporder = "synteny_analysis/xblast_grouporder/{xsample}_and_{ysample}_ygrouporder.tsv",
+        ygenome    = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["genome"]
+    output:
+        ygenome = "synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.fasta"
+    params:
+        yname = lambda wildcards: wildcards.ysample,
+        xname = lambda wildcards: wildcards.xsample
+    threads: 1
+    run:
+        df = pd.read_csv(input.grouporder, delimiter="\t", index_col=0)
+        df = df[["yscaf", "xscaf"]]
+        print(df)
+        #print(df["yscaf"])
+        inhandle =  open(input.ygenome, "r")
+        outhandle = open(output.ygenome, "w")
+        seq_to_record = {}
+        for record in SeqIO.parse(inhandle, "fasta"):
+            if record.id in set(df["yscaf"]):
+                seq_to_record[record.id] = record
+
+        # now that we have the sequences
+        # go through the chromosomes and cat everything
+        for xchr in df["xscaf"].unique():
+            subdf = df.loc[df["xscaf"] == xchr, ]
+            pseudo_records = [str(seq_to_record[x].seq) for x in subdf["yscaf"]]
+            newid = "{}_pseudo_{}_{}".format(params.yname, params.xname, xchr)
+            catd = SeqRecord.SeqRecord(Seq.Seq("".join(["N"]*100).join(pseudo_records)), id = newid)
+            SeqIO.write(catd, outhandle, "fasta")
+        inhandle.close()
+        outhandle.close()
+
+rule make_pseudo_chrom_to_loc:
+    """
+    get a new chrom_to_loc for the new genome
+    """
+    input:
+        grouporder = "synteny_analysis/xblast_grouporder/{xsample}_and_{ysample}_ygrouporder.tsv",
+        y_prot_to_loc = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"],
+        ygenome    = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["genome"]
+    output:
+        ychrom = temp("synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.temp.chrom")
+    params:
+        yname = lambda wildcards: wildcards.ysample,
+        xname = lambda wildcards: wildcards.xsample
+    threads: 1
+    run:
+        df = pd.read_csv(input.grouporder, delimiter="\t", index_col=0)
+        df = df[["yscaf", "xscaf"]]
+        df["ylen"] = 0
+        df["ystart"] = 0
+        df["ystop"] = 0
+        #print(df["yscaf"])
+        inhandle =  open(input.ygenome, "r")
+        seq_to_record = {}
+        for record in SeqIO.parse(inhandle, "fasta"):
+            if record.id in set(df["yscaf"]):
+                df.loc[df["yscaf"] == record.id, "ylen"] = len(record.seq)
+
+        # now that we have the sequences
+        # go through the chromosomes and figure out the offsets
+        for xchr in df["xscaf"].unique():
+            subdf = df.loc[df["xscaf"] == xchr, ]
+            counter    = 0
+            prev_start = -100
+            prev_end   = -100
+            for index, row in subdf.iterrows():
+                df.loc[index, "ystart"] = prev_end + 100
+                prev_start = prev_end + 100
+                df.loc[index, "ystop"] = df.loc[index, "ystart"] + row["ylen"] - 1
+                prev_end = df.loc[index, "ystart"] + row["ylen"] - 1
+        print(df)
+        # we have the offsets now. go through the chrom file and print an
+        #  updated version
+        outhandle = open(output.ychrom, "w")
+        with open(input.y_prot_to_loc, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    #Hcv1.av93.c1.g10.i1     c1      -       69053   70505
+                    splitd = line.split()
+                    gene  = str(splitd[0])
+                    chrom = str(splitd[1])
+                    direc = str(splitd[2])
+                    start = int(splitd[3])
+                    stop  = int(splitd[4])
+                    if chrom in set(df["yscaf"]):
+                        offset = int(df.loc[df["yscaf"] == chrom, "ystart"])
+                        start += offset
+                        stop  += offset
+                        xchr = df.loc[df["yscaf"] == chrom, "xscaf"].values[0]
+                        newid = "{}_pseudo_{}_{}".format(params.yname, params.xname, xchr)
+                        print("{}\t{}\t{}\t{}\t{}".format(
+                            gene, newid, direc, start, stop),
+                              file = outhandle)
+        outhandle.close()
+        inhandle.close()
+
+rule sort_chrom:
+    input:
+        ychrom = "synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.temp.chrom"
+    output:
+        ychrom = "synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.chrom"
+    threads: 1
+    shell:
+        """
+        cat {input.ychrom} | sort -k2,2 -k4,4n > {output.ychrom}
+        """
+rule filter_prots:
+    """
+    Now that we have a filtered chrom file, file the pep file
+    """
+    input:
+        ychrom = "synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.chrom",
+        yprots = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["proteins"]
+    output:
+        yprots = "synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.pep"
+    threads: 1
+    run:
+        keep_genes = set()
+        with open(input.ychrom, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    keep_genes.add( line.split()[0])
+
+        inhandle =  open(input.yprots, "r")
+        outhandle = open(output.yprots, "w")
+        for record in SeqIO.parse(inhandle, "fasta"):
+            if record.id in keep_genes:
+                SeqIO.write(record, outhandle, "fasta")
+        inhandle.close()
+        outhandle.close()
