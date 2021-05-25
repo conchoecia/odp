@@ -2,15 +2,12 @@
 This script performs mutual-best protein diamond BLAST searches,
  then makes synteny plots of those results.
 """
-
 from Bio import SeqIO
 from itertools import groupby
-from itertools import product
 import matplotlib
 import math
 from operator import itemgetter
 import pandas as pd
-import odp_functions as OdpF
 import numpy as np
 import statistics
 import sys
@@ -20,7 +17,7 @@ configfile: "config.yaml"
 # check for legal config entries. Useful for finding misspelled entries
 legal = ["proteins", "prot_to_loc", "genome", "minscafsize",
          "manual_breaks", "chrom_to_color", "plotorder",
-         "noylines", "noxlines"]
+         "noylines", "noxlines", "sort_by_x_coord_blast" ]
 illegal = set()
 for this_axis in ["xaxisspecies", "yaxisspecies"]:
     if this_axis in config:
@@ -59,6 +56,39 @@ def flatten(list_of_lists):
     """flatten a list of lists, unique only"""
     return list(set([item for sublist in list_of_lists for item in sublist]))
 
+def expand_avoid_matching_x_and_y(filestring, xsamples, ysamples):
+    """
+    this works like snakemake's expand function but does not generate
+     files where xsample equals ysample
+
+    outputs a list of files
+    """
+    outlist = []
+    for xsamp in xsamples:
+        for ysamp in ysamples:
+            if xsamp != ysamp:
+                outlist.append(filestring.format(xsamp, ysamp))
+    #print(outlist)
+    #print(type(outlist))
+    return [x for x in outlist]
+
+def expand_avoid_matching_x_and_y_third(filestring, xsamples, ysamples, third):
+    """
+    this works like snakemake's expand function but does not generate
+     files where xsample equals ysample
+
+    outputs a list of files.
+
+    Note March 20th, 2021 - the "third" aspect is related to coloring by another species
+    """
+    outlist = []
+    for xsamp in xsamples:
+        for ysamp in ysamples:
+            if xsamp != ysamp:
+                for t in third:
+                    outlist.append(filestring.format(xsamp, ysamp, t))
+    return outlist
+
 autobreak_files = []
 make_autobreaks = True
 if "ignore_autobreaks" in config:
@@ -71,89 +101,74 @@ else:
 
 if make_autobreaks:
     # uncolored autobreaks
-    outfiles = OdpF.expand_avoid_matching(
-        "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_autobreaks.pdf",
-        xsample = config["xaxisspecies"],
-        ysample = config["yaxisspecies"])
+    outfiles = expand_avoid_matching_x_and_y("synteny_analysis/plots/synteny_uncolored/{}_and_{}_synteny_autobreaks.pdf",
+                config["xaxisspecies"], config["yaxisspecies"])
     autobreak_files.append(list(outfiles))
     # coloredby autobreaks - needs to be rewritten
-    outfiles = OdpF.expand_avoid_matching(
-        "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{third}_synteny_autobreaks.pdf",
-        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-        third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+    outfiles = expand_avoid_matching_x_and_y_third(
+        "synteny_analysis/plots/synteny_colored_by/{}_and_{}_coloredby_{}_synteny_autobreaks.pdf",
+        config["xaxisspecies"], config["yaxisspecies"],
+        [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
         )
     autobreak_files.append(list(outfiles))
     # coloredby autobreaks - no missing - needs to be rewritten
-    outfiles = OdpF.expand_avoid_matching(
-        "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{third}_synteny_autobreaks.pdf",
-        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-        third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+    outfiles = expand_avoid_matching_x_and_y_third(
+        "synteny_analysis/plots/synteny_colored_by_no_missing/{}_and_{}_coloredby_{}_synteny_autobreaks.pdf",
+        config["xaxisspecies"], config["yaxisspecies"],
+        [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
         )
     autobreak_files.append(list(outfiles))
     # significance plots
-    outfiles = OdpF.expand_avoid_matching(
-        "synteny_analysis/plots/significance/breaks/{xsample}_and_{ysample}_fisher_autobreaks.pdf",
-             xsample = config["xaxisspecies"], ysample = config["yaxisspecies"])
+    outfiles = expand_avoid_matching_x_and_y(
+        "synteny_analysis/plots/significance/breaks/{}_and_{}_fisher_autobreaks.pdf",
+             config["xaxisspecies"], config["yaxisspecies"])
     autobreak_files.append(list(outfiles))
+    print(autobreak_files)
     autobreak_files = flatten(autobreak_files)
 
-ignore_Fisher = False
-if "ignore_Fisher" in config:
-    if config["ignore_Fisher"]:
-        ignore_Fisher = True
-    else:
-        pass
-else:
-    pass
-
-fisher_files = []
-if not ignore_Fisher:
-    #make the correlation plots - whole chromosomes
-    outfiles = OdpF.expand_avoid_matching(
-        "synteny_analysis/plots/significance/wholechr/{xsample}_and_{ysample}_fisher_wholechr.pdf",
-         xsample = config["xaxisspecies"], ysample = config["yaxisspecies"])
-    fisher_files.append(list(outfiles))
-    outfiles = OdpF.expand_avoid_matching(
-        "synteny_analysis/plots/significance/wholechr_colors/{xsample}_and_{ysample}_fisher_chromcolor.pdf",
-         xsample = config["xaxisspecies"], ysample = config["yaxisspecies"])
-    fisher_files.append(list(outfiles))
-    # this currently doesn't work - need to trace back where the errors are from
-    outfiles = OdpF.expand_avoid_matching(
-    "synteny_analysis/plots/significance/breaks/{xsample}_and_{ysample}_fisher_manualbreaks.pdf",
-         xsample = config["xaxisspecies"], ysample = config["yaxisspecies"])
-    fisher_files.append(list(outfiles))
-    fisher_files = flatten(fisher_files)
 
 rule all:
     input:
         autobreak_files,
-        fisher_files,
-        OdpF.expand_avoid_matching("synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_manualbreaks.pdf",
-                xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
-        #expand_avoid_matching_x_and_y_kwargs("synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
-        #        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
-        OdpF.expand_avoid_matching("synteny_analysis/blastp_results/xsamp_to_all/{xsample}_to_all_recip.tsv",
-                                             xsample = config["xaxisspecies"]),
+        expand_avoid_matching_x_and_y("synteny_analysis/plots/synteny_uncolored/{}_and_{}_synteny_manualbreaks.pdf",
+                config["xaxisspecies"], config["yaxisspecies"]),
+        #expand_avoid_matching_x_and_y("synteny_analysis/dvalue_table/{}_and_{}_info.tsv",
+        #        config["xaxisspecies"],  config["yaxisspecies"]),
+
         # working on plotting for color
         expand("synteny_analysis/prot_to_color/{colorby}_prottocolor.tsv",
                colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
-        # now make a config file for other odp plotting functions
-        "synteny_analysis/odp_plotting_configs/odp_plotting_configs.yaml",
         # These need to be rewritten such that x and y do not match
-        OdpF.expand_avoid_matching(
-            "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
-            xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-            third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+        expand_avoid_matching_x_and_y_third(
+            "synteny_analysis/plots/synteny_colored_by/{}_and_{}_coloredby_{}_synteny_manualbreaks.pdf",
+            config["xaxisspecies"], config["yaxisspecies"],
+            [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
             ),
-        OdpF.expand_avoid_matching(
-            "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
-            xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-            third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+        expand_avoid_matching_x_and_y_third(
+            "synteny_analysis/plots/synteny_colored_by_no_missing/{}_and_{}_coloredby_{}_synteny_manualbreaks.pdf",
+            config["xaxisspecies"], config["yaxisspecies"],
+            [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
             ),
         # make protein similarity plots
-        OdpF.expand_avoid_matching(
-            "synteny_analysis/plots/sample_similarity/{xsample}_and_{ysample}_peridentity_length.pdf",
-             xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y(
+            "synteny_analysis/plots/sample_similarity/{}_and_{}_peridentity_length.pdf",
+             config["xaxisspecies"], config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y(
+            "synteny_analysis/dvalue_table_breaks/{}_and_{}_xbreaks_manual.tsv",
+             config["xaxisspecies"], config["yaxisspecies"]),
+
+        #make the correlation plots - whole chromosomes
+        expand_avoid_matching_x_and_y(
+            "synteny_analysis/plots/significance/wholechr/{}_and_{}_fisher_wholechr.pdf",
+             config["xaxisspecies"], config["yaxisspecies"]),
+        expand_avoid_matching_x_and_y(
+            "synteny_analysis/plots/significance/wholechr_colors/{}_and_{}_fisher_chromcolor.pdf",
+             config["xaxisspecies"], config["yaxisspecies"]),
+        # this currently doesn't work - need to trace back where the errors are from
+        expand_avoid_matching_x_and_y(
+        "synteny_analysis/plots/significance/breaks/{}_and_{}_fisher_manualbreaks.pdf",
+             config["xaxisspecies"], config["yaxisspecies"]),
+
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     """
@@ -313,76 +328,6 @@ rule reciprocal_best_hits:
                     if check_this in pairs:
                         print(line, file=out_handle)
         out_handle.close()
-
-rule xsamp_to_all_recip_table:
-    input:
-        xtoyblastp = lambda wildcards: OdpF.expand_avoid_matching(
-            "synteny_analysis/blastp_results/reciprocal_best/{{xsample}}_and_{ysample}_recip.blastp",
-            xsample = [wildcards.xsample],
-            ysample = config["yaxisspecies"]),
-        xprottoloc = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["prot_to_loc"]
-    output:
-        xall = "synteny_analysis/blastp_results/xsamp_to_all/{xsample}_to_all_recip.tsv"
-    threads: 1
-    params:
-        xsample = lambda wildcards: wildcards.xsample
-    run:
-        xchrom = OdpF.generate_coord_structs_from_chrom_to_loc(input.xprottoloc)
-        columns = {}
-        for blasttablefile in input.xtoyblastp:
-            ysample = blasttablefile.split("_")[-2]
-            with open(blasttablefile, "r") as f:
-                entries = {}
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        splitd = line.split()
-                        entries[splitd[0]] = splitd[1]
-                columns[ysample] = entries
-        df = pd.DataFrame(columns)
-
-        # shift column 'Name' to first position
-        for entry in ["stop", "start", "strand", "scaf"]:
-            df[entry] = None
-            first_column = df.pop(entry)
-            df.insert(0, entry, first_column)
-
-        df.reset_index(inplace=True)
-        df = df.rename(columns = {'index':params.xsample})
-        df["scaf"] = df[params.xsample].map(xchrom["prot_to_scaf"])
-        df["strand"] = df[params.xsample].map(xchrom["prot_to_strand"])
-        df["start"] = df[params.xsample].map(xchrom["prot_to_start"])
-        df["stop"] = df[params.xsample].map(xchrom["prot_to_stop"])
-        df = df.sort_values(["scaf", "start"])
-        df.reset_index(inplace=True, drop = True)
-        df.to_csv(output.xall, index=False, sep = "\t")
-
-rule make_plotting_config:
-    input:
-        xtoyblastp = OdpF.expand_avoid_matching(
-            "synteny_analysis/blastp_results/xsamp_to_all/{xsample}_to_all_recip.tsv",
-            xsample = config["xaxisspecies"]),
-    output:
-        config = "synteny_analysis/odp_plotting_configs/odp_plotting_configs.yaml"
-    threads: 1
-    run:
-        # this makes a config file for the separate plotting script
-        outhandle = open(output.config, "w")
-        print("# use the orthologs from species A chrom 1 to plot the", file = outhandle)
-        print("#  synteny between species B chrom 2 and species C chrom 3", file = outhandle)
-        print("#  using hex color #fd8bfd", file = outhandle)
-        print("plot:", file = outhandle)
-        print("  plot1: [\"A\", \"chr1\", \"B\", \"chr2\", \"C\", \"chr3\", \"fd8bfd\"]", file = outhandle)
-        print("", file = outhandle)
-        print("samples:", file = outhandle)
-        for xsample in config["xaxisspecies"]:
-            print("  {}:".format(xsample), file = outhandle)
-            print("    proteins: {}".format(config["xaxisspecies"][xsample]["proteins"]), file = outhandle)
-            print("    prot_to_loc: {}".format(config["xaxisspecies"][xsample]["prot_to_loc"]), file = outhandle)
-            print("    genome: {}".format(config["xaxisspecies"][xsample]["genome"]), file = outhandle)
-            blasthits = os.path.abspath("synteny_analysis/blastp_results/xsamp_to_all/{}_to_all_recip.tsv".format(xsample))
-            print("    blasthits: {}".format(blasthits), file = outhandle)
-        outhandle.close()
 
 rule make_recip_table_for_marginplot:
     input:
@@ -596,6 +541,7 @@ def blast_plot_order_helper(coords, sample, xory, xprottoloc, yprottoloc, recip,
         ascending = [True, True], inplace = True)
     df = df.dropna()
     df.reset_index(drop=True, inplace = True)
+    print(df)
     #print(list(df.yscaf))
     return(list(df.yscaf))
 
@@ -1113,12 +1059,13 @@ rule generate_breaks_file:
         ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
         xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
     output:
-        xtable = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_{man_or_auto}.tsv",
-        ytable = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_{man_or_auto}.tsv",
+        xtable_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
+        ytable_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
+        xtable_auto   = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_auto.tsv",
+        ytable_auto   = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_auto.tsv"
     threads:
         1
     params:
-        man_or_auto = lambda wildcards: wildcards.man_or_auto,
         xsample  = lambda wildcards: wildcards.xsample,
         ysample  = lambda wildcards: wildcards.ysample,
         xbreaks  = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["manual_breaks"],
@@ -1150,24 +1097,23 @@ rule generate_breaks_file:
         df["ygene"] = df["ygene"].astype(str)
         print(df)
 
-        if params.man_or_auto == "manual":
-            # parse the manual breaks in the config file
-            print("  - Getting the manual breaks for x")
-            xdf = determine_breaks(df, x_breaks, x_offset, "x", False)
-            print("  - Getting the manual breaks for y")
-            ydf = determine_breaks(df, y_breaks, y_offset, "y", False)
-            # save the results to a file
-            xdf.to_csv(output.xtable, sep="\t")
-            ydf.to_csv(output.ytable, sep="\t")
-        elif params.man_or_auto == "auto":
-            # auto-determine the breaks if we need them
-            print("  - Determining the new xbreaks automatically.")
-            xdf = determine_breaks(df, x_breaks, x_offset, "x", True)
-            print("  - Determining the new ybreaks automatically.")
-            ydf = determine_breaks(df, y_breaks, y_offset, "y", True)
-            # save the results to a file
-            xdf.to_csv(output.xtable, sep="\t")
-            ydf.to_csv(output.ytable, sep="\t")
+        # parse the manual breaks in the config file
+        # auto-determine the breaks if we need them
+        print("  - Determining the new xbreaks automatically.")
+        xdf = determine_breaks(df, x_breaks, x_offset, "x", True)
+        print("  - Determining the new ybreaks automatically.")
+        ydf = determine_breaks(df, y_breaks, y_offset, "y", True)
+        # save the results to a file
+        xdf.to_csv(output.xtable_auto, sep="\t")
+        ydf.to_csv(output.ytable_auto, sep="\t")
+
+        print("  - Getting the manual breaks for x")
+        xdf = determine_breaks(df, x_breaks, x_offset, "x", False)
+        print("  - Getting the manual breaks for y")
+        ydf = determine_breaks(df, y_breaks, y_offset, "y", False)
+        # save the results to a file
+        xdf.to_csv(output.xtable_manual, sep="\t")
+        ydf.to_csv(output.ytable_manual, sep="\t")
 
 def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
                  xsample,        ysample,

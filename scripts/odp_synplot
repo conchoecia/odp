@@ -1,0 +1,36 @@
+"""
+this script makes plots of syntehny between different sets of chromosomes
+
+useful for tracking synteny
+"""
+
+configfile: "odp_plotting_configs.yaml"
+
+rule all:
+    input:
+        expand("synteny_plots/{plotparam}.pdf", plotparam = config["plot"])
+
+rule plot_synteny:
+    """
+    plots synteny.
+    """
+    input:
+        source_PTL = lambda wildcards: config["samples"][config["plot"][wildcards.plotparam][0]]["prot_to_loc"],
+        source_blast = lambda wildcards: config["samples"][config["plot"][wildcards.plotparam][0]]["blasthits"],
+        top_PTL = lambda wildcards: config["samples"][config["plot"][wildcards.plotparam][2]]["prot_to_loc"],
+        top_blast = lambda wildcards: config["samples"][config["plot"][wildcards.plotparam][2]]["blasthits"],
+        bottm_PTL = lambda wildcards: config["samples"][config["plot"][wildcards.plotparam][4]]["prot_to_loc"],
+        bottm_blast = lambda wildcards: config["samples"][config["plot"][wildcards.plotparam][4]]["blasthits"],
+    output:
+        fig ="synteny_plots/{plotparam}.pdf"
+    params:
+        sourceLU = lambda wildcards: config["plot"][wildcards.plotparam][0],
+        sourcechrom = lambda wildcards: config["plot"][wildcards.plotparam][1],
+        topLU = lambda wildcards: config["plot"][wildcards.plotparam][2],
+        topchrom = lambda wildcards: config["plot"][wildcards.plotparam][3],
+        bottomLU = lambda wildcards: config["plot"][wildcards.plotparam][4],
+        bottomchrom = lambda wildcards: config["plot"][wildcards.plotparam][5],
+        color = lambda wildcards: config["plot"][wildcards.plotparam][6]
+    threads: 1
+    run:
+        sourcedf =
