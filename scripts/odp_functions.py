@@ -76,3 +76,42 @@ def expand_avoid_matching(filestring, **kwargs):
             these_kwargs[keys[i]] = entry[i]
         outlist.append(filestring.format(**these_kwargs))
     return [x for x in outlist]
+
+def generate_coord_structs_from_chrom_to_loc(prot_to_loc_file):
+    """
+    This parses a .chrom file and outputs five data structures that are easily
+     used for mapping pandas dataframes.
+    The output is a dict of dicts. Not the most intuitive format but easy for
+     mapping to column values.
+     { "prot_to_scaf":   prot_to_scaf,
+       "prot_to_strand": prot_to_strand,
+       "prot_to_start":  prot_to_start,
+       "prot_to_stop":   prot_to_stop,
+       "prot_to_middle": prot_to_middle }
+    """
+    prot_to_scaf   = {}
+    prot_to_strand = {}
+    prot_to_start  = {}
+    prot_to_stop   = {}
+    prot_to_middle = {}
+    print("prot_to_loc_file", prot_to_loc_file)
+    with open(prot_to_loc_file, "r") as f:
+       for line in f:
+           line = line.strip()
+           if line:
+               splitd = line.split()
+               prot = splitd[0]
+               # add things now
+               prot_to_scaf[prot]   = splitd[1]
+               prot_to_strand[prot] = splitd[2]
+               start = int(splitd[3])
+               prot_to_start[prot]  = start
+               stop = int(splitd[4])
+               prot_to_stop[prot]   = stop
+               stop = int(splitd[4])
+               prot_to_middle[prot] = int(start + (stop - start)/2)
+    return { "prot_to_scaf":   prot_to_scaf,
+             "prot_to_strand": prot_to_strand,
+             "prot_to_start":  prot_to_start,
+             "prot_to_stop":   prot_to_stop,
+             "prot_to_middle": prot_to_middle }
