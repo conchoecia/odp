@@ -20,7 +20,7 @@ configfile: "config.yaml"
 # check for legal config entries. Useful for finding misspelled entries
 legal = ["proteins", "prot_to_loc", "genome", "minscafsize",
          "manual_breaks", "chrom_to_color", "plotorder",
-         "noylines", "noxlines"]
+         "noylines", "noxlines", "genus", "species"]
 illegal = set()
 for this_axis in ["xaxisspecies", "yaxisspecies"]:
     if this_axis in config:
@@ -38,7 +38,14 @@ if len(illegal) > 0:
         print("  - {}".format(key))
     sys.exit()
 
-#make fake breaks
+# check diamond_or_blastp
+if "diamond_or_blastp" not in config:
+    config["diamond_or_blastp"] = "blastp"
+else:
+    if config["diamond_or_blastp"] not in ["diamond", "blastp"]:
+        raise IOError("diamond_or_blastp must be either 'diamond' or 'blastp'")
+
+#make fake breaks for later analyses
 for this_axis in ["xaxisspecies", "yaxisspecies"]:
     if this_axis in config:
         for this_one in config[this_axis]:
@@ -46,7 +53,6 @@ for this_axis in ["xaxisspecies", "yaxisspecies"]:
                 config[this_axis][this_one]["manual_breaks"] = []
             if "minscafsize" not in config[this_axis][this_one]:
                 config[this_axis][this_one]["minscafsize"] = 5000
-
 
 #make a function to add entries into y, if the entry is in x but not yet in y
 if "yaxisspecies" not in config:
@@ -95,7 +101,7 @@ if make_autobreaks:
         "synteny_analysis/plots/significance/breaks/{xsample}_and_{ysample}_fisher_autobreaks.pdf",
              xsample = config["xaxisspecies"], ysample = config["yaxisspecies"])
     autobreak_files.append(list(outfiles))
-    autobreak_files = flatten(autobreak_files)
+    autobreak_files = OdpF.flatten(autobreak_files)
 
 ignore_Fisher = False
 if "ignore_Fisher" in config:
@@ -122,7 +128,7 @@ if not ignore_Fisher:
     "synteny_analysis/plots/significance/breaks/{xsample}_and_{ysample}_fisher_manualbreaks.pdf",
          xsample = config["xaxisspecies"], ysample = config["yaxisspecies"])
     fisher_files.append(list(outfiles))
-    fisher_files = flatten(fisher_files)
+    fisher_files = OdpF.flatten(fisher_files)
 
 rule all:
     input:
@@ -140,12 +146,12 @@ rule all:
         # now make a config file for other odp plotting functions
         "synteny_analysis/odp_plotting_configs/odp_plotting_configs.yaml",
         # These need to be rewritten such that x and y do not match
-        OdpF.expand_avoid_matching(
+        OdpF.expand_avoid_matching_all_third(
             "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
             xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
             third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
             ),
-        OdpF.expand_avoid_matching(
+        OdpF.expand_avoid_matching_all_third(
             "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
             xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
             third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
@@ -206,76 +212,74 @@ rule filter_prots_y:
         filter_fasta_chrom(input.chrom, input.prots, output.pep)
 
 
-rule make_diamonddb_x:
+rule make_diamond_and_blast_db_x:
     input:
-        prots = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["proteins"],
         pep = "synteny_analysis/db/xaxis/{xsample}_prots.pep"
     output:
-        dmnd = "synteny_analysis/db/xaxis/dmnd/{xsample}_prots.dmnd"
+        dmnd = "synteny_analysis/db/xaxis/dmnd/{xsample}_prots.dmnd",
+        pdb = "synteny_analysis/db/xaxis/{xsample}_prots.pep.pdb"
     threads: workflow.cores - 1
     shell:
         """
         diamond makedb --in {input.pep} --db {output.dmnd}
+        makeblastdb -in {input.pep} -dbtype prot
         """
 
-rule make_diamonddb_y:
+rule make_diamond_and_blast_db_y:
     input:
-        prots = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["proteins"],
         pep = "synteny_analysis/db/yaxis/{ysample}_prots.pep"
     output:
-        dmnd = "synteny_analysis/db/yaxis/dmnd/{ysample}_prots.dmnd"
+        dmnd = "synteny_analysis/db/yaxis/dmnd/{ysample}_prots.dmnd",
+        pep = "synteny_analysis/db/yaxis/{ysample}_prots.pep.pdb"
     threads: workflow.cores - 1
     shell:
         """
         diamond makedb --in {input.pep} --db {output.dmnd}
+        makeblastdb -in {input.pep} -dbtype prot
         """
 
 rule diamond_blast_x_to_y:
     input:
         xpep = "synteny_analysis/db/xaxis/{xsample}_prots.pep",
         ydmnd = "synteny_analysis/db/yaxis/dmnd/{ysample}_prots.dmnd",
+        ypep = "synteny_analysis/db/yaxis/{ysample}_prots.pep",
+        ypdb = "synteny_analysis/db/yaxis/{ysample}_prots.pep.pdb"
     output:
         blastp = "synteny_analysis/blastp_results/xtoy/{xsample}_against_{ysample}.blastp",
     threads: workflow.cores - 1
+    params:
+        diamond_or_blastp = config["diamond_or_blastp"]
     shell:
         """
-        diamond blastp --query {input.xpep} --db {input.ydmnd} \
-          --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
+        if [ "{params.diamond_or_blastp}" = "blastp" ]; then
+            blastp -query {input.xpep} -db {input.ypep} \
+              -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
+        elif [ "{params.diamond_or_blastp}" = "diamond" ]; then
+            diamond blastp --query {input.xpep} --db {input.ydmnd} \
+              --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
+        fi
         """
 
 rule diamond_blast_y_to_x:
     input:
         ypep = "synteny_analysis/db/yaxis/{ysample}_prots.pep",
         xdmnd = "synteny_analysis/db/xaxis/dmnd/{xsample}_prots.dmnd",
+        xpep = "synteny_analysis/db/xaxis/{xsample}_prots.pep",
+        xpdb = "synteny_analysis/db/xaxis/{xsample}_prots.pep.pdb"
     output:
         blastp = "synteny_analysis/blastp_results/ytox/{ysample}_against_{xsample}.blastp",
     threads: workflow.cores - 1
+    params:
+        diamond_or_blastp = config["diamond_or_blastp"]
     shell:
         """
-        diamond blastp --query {input.ypep} --db {input.xdmnd} \
-          --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
-        """
-
-rule absolute_best_from_blast_x_to_y:
-    input:
-        blastp = "synteny_analysis/blastp_results/xtoy/{xsample}_against_{ysample}.blastp",
-    output:
-        blastp = "synteny_analysis/blastp_results/xtoybest/{xsample}_against_{ysample}.blastp",
-    threads: 1
-    shell:
-        """
-        awk 'BEGIN{{former = ""}} {{if ($1 != former){{print($0)}}; former=$1}}' {input.blastp} > {output.blastp}
-        """
-
-rule absolute_best_from_blast_y_to_x:
-    input:
-        blastp = "synteny_analysis/blastp_results/ytox/{ysample}_against_{xsample}.blastp",
-    output:
-        blastp = "synteny_analysis/blastp_results/ytoxbest/{ysample}_against_{xsample}.blastp",
-    threads: 1
-    shell:
-        """
-        awk 'BEGIN{{former = ""}} {{if ($1 != former){{print($0)}}; former=$1}}' {input.blastp} > {output.blastp}
+        if [ "{params.diamond_or_blastp}" = "blastp" ]; then
+            blastp -query {input.ypep} -db {input.xpep} \
+              -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
+        elif [ "{params.diamond_or_blastp}" = "diamond" ]; then
+            diamond blastp --query {input.ypep} --db {input.xdmnd} \
+              --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
+        fi
         """
 
 rule reciprocal_best_hits:
@@ -284,37 +288,22 @@ rule reciprocal_best_hits:
     reports it in the form of the blastp results from x -> y search
     """
     input:
-        ytoxblastp = "synteny_analysis/blastp_results/ytoxbest/{ysample}_against_{xsample}.blastp",
-        xtoyblastp = "synteny_analysis/blastp_results/xtoybest/{xsample}_against_{ysample}.blastp",
+        xtoyblastp = "synteny_analysis/blastp_results/xtoy/{xsample}_against_{ysample}.blastp",
+        ytoxblastp = "synteny_analysis/blastp_results/ytox/{ysample}_against_{xsample}.blastp",
     output:
         xtoyblastp = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp",
     threads: 1
     run:
-        pairs = set()
-        #first look in y_to_x
-        with open(input.ytoxblastp, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    splitd = line.split("\t")
-                    add_this = (splitd[1], splitd[0])
-                    if add_this in pairs:
-                        raise IOError("This set was already found")
-                    else:
-                        pairs.add(add_this)
-        # now go through x_to_y and filter
-        out_handle = open(output.xtoyblastp, "w")
-        with open(input.xtoyblastp, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    splitd = line.split("\t")
-                    check_this = (splitd[0], splitd[1])
-                    if check_this in pairs:
-                        print(line, file=out_handle)
-        out_handle.close()
+        OdpF.reciprocal_best_hits_blastp_or_diamond_blastp(
+           input.xtoyblastp,
+           input.ytoxblastp,
+           output.xtoyblastp)
 
 rule xsamp_to_all_recip_table:
+    """
+    This is just used to get a table of the best reciprocal blast hits from
+     a species x, against everything else.
+    """
     input:
         xtoyblastp = lambda wildcards: OdpF.expand_avoid_matching(
             "synteny_analysis/blastp_results/reciprocal_best/{{xsample}}_and_{ysample}_recip.blastp",
@@ -917,8 +906,8 @@ def determine_breaks(df, scaf_to_breaks_set, scaf_to_offset_dict,
                     all_ranges.add(entry)
 
     # flatten the results of what we got from the last analysis
-    idxmaxes = flatten(all_ranges)
-    idxmaxes = flatten([idxmaxes, manual_breaks_indices])
+    idxmaxes = OdpF.flatten(all_ranges)
+    idxmaxes = OdpF.flatten([idxmaxes, manual_breaks_indices])
 
     # From the dataset of all peaks, find the best in small windows.
     #  See the variable `smallwindow` above
@@ -955,7 +944,7 @@ def determine_breaks(df, scaf_to_breaks_set, scaf_to_offset_dict,
 
     # vert_lines is the list of indices from the df that have the peaks that
     #  we want to keep.
-    vert_lines = flatten(consider_ranges)
+    vert_lines = OdpF.flatten(consider_ranges)
     # return a dataframe of the intersections we want
     return df.loc[vert_lines].copy()
 
@@ -1228,6 +1217,28 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
 
     # first make a lookup table
     df = pd.read_csv(plotting_df, delimiter="\t", index_col=0)
+    # get genes in x-axis
+    cumsum_genes = 0
+    cumsum_len   = 0
+    num_genes_x_tick_pos      = [0]
+    num_genes_x_tick_quantity = [0]
+    for thisx in xorder:
+        cumsum_genes += len(df.loc[df["xscaf"] == thisx, ])
+        cumsum_len   += x_scaf_to_len[thisx]
+        num_genes_x_tick_quantity.append(cumsum_genes)
+        num_genes_x_tick_pos.append(cumsum_len)
+
+    # get genes in y-axis
+    cumsum_genes = 0
+    cumsum_len   = 0
+    num_genes_y_tick_pos      = [0]
+    num_genes_y_tick_quantity = [0]
+    for thisy in yorder:
+        cumsum_genes += len(df.loc[df["yscaf"] == thisy, ])
+        cumsum_len   += y_scaf_to_len[thisy]
+        num_genes_y_tick_quantity.append(cumsum_genes)
+        num_genes_y_tick_pos.append(cumsum_len)
+
     df["xgene"] = df["xgene"].astype(str)
     df["ygene"] = df["ygene"].astype(str)
 
@@ -1280,17 +1291,17 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
                          panelWidth/figWidth,   #width
                          panelHeight/figHeight])     #height
     panelxd = plt.axes([leftMargin/figWidth, #left
-                         (bottomMargin+panelHeight+0.1)/figHeight,    #bottom
+                         (bottomMargin+panelHeight+0.5)/figHeight,    #bottom
                          panelWidth/figWidth,   #width
                          dpanel_width/figHeight])     #height
-    panelyd = plt.axes([(leftMargin+panelWidth + 0.1)/figWidth, #left
+    panelyd = plt.axes([(leftMargin+panelWidth + 0.5)/figWidth, #left
                          bottomMargin/figHeight,    #bottom
                          dpanel_width/figWidth,   #width
                          panelHeight/figHeight])     #height
     panel1.tick_params(axis='both',which='both',
                         bottom=False, labelbottom=True,
                         left=False, labelleft=True,
-                        right=False, labelright=False,
+                        right=False, labelright=True,
                         top=False, labeltop=False)
     panelxd.tick_params(axis='both',which='both',
                         bottom=False, labelbottom=False,
@@ -1340,6 +1351,11 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
         panel1.set_xticks(xtickpos)
         panel1.set_xticklabels(xticklabel, fontsize=8, rotation = 90)
         panel1.set_xlabel(xsample + " scaffolds")
+        # now display the number of genes
+        axT = panel1.twiny()
+        axT.set_xticks(num_genes_x_tick_pos)
+        axT.set_xticklabels(num_genes_x_tick_quantity, fontsize = 8, rotation = 90)
+
     # turn on x-axis ticks on the Dx plot
     newarrlabels = [round(x/1000000, 1) for x in newarr]
     panelxd.tick_params(top=True, labeltop=True)
@@ -1370,6 +1386,12 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
         panel1.set_yticks(ytickpos)
         panel1.set_yticklabels(yticklabel, fontsize=8)
         panel1.set_ylabel(ysample + " scaffolds")
+        # show the number of genes
+        axR = panel1.twinx()
+        axR.set_yticks(num_genes_y_tick_pos)
+        axR.set_yticklabels(num_genes_y_tick_quantity, fontsize = 8)
+
+
     # turn on y-axis ticks on the Dy plot
     newarrlabels = [round(x/1000000, 1) for x in newarr]
     panelyd.tick_params(right=True, labelright=True)
@@ -1530,6 +1552,8 @@ def fishers_exact(plotting_df,
     df["ygene"] = df["ygene"].astype(str)
 
     fisher_dict = []
+    num_xscaf = len(df["xscaf"].unique())
+    num_yscaf = len(df["yscaf"].unique())
     if style == "breaks":
         xranges_to_dfdict = {}
         yranges_to_dfdict = {}
@@ -1592,7 +1616,10 @@ def fishers_exact(plotting_df,
                 fisher_dict.append({"xscaf": xscaf, "yscaf": yscaf,
                                     "inX_inY": inX_inY, "inX_outY": inX_outY,
                                     "outX_inY": outX_inY, "outX_outY": outX_outY,
-                                    "oddsratio": oddsratio, "pvalue": pvalue,
+                                    "oddsratio": oddsratio,
+                                    "pvalue": pvalue,
+                                    "pvalue_numTests": num_variations,
+                                    "pvalue_bonferroni": pvalue * num_variations,
                                     "plotleft": plotleft,
                                     "plotright": plotright,
                                     "plotwidth": plotwidth,
@@ -1625,7 +1652,10 @@ def fishers_exact(plotting_df,
                 fisher_dict.append({"xscaf": xscaf, "yscaf": yscaf,
                                     "inX_inY": inX_inY, "inX_outY": inX_outY,
                                     "outX_inY": outX_inY, "outX_outY": outX_outY,
-                                    "oddsratio": oddsratio, "pvalue": pvalue,
+                                    "oddsratio": oddsratio,
+                                    "pvalue": pvalue,
+                                    "pvalue_numTests": num_xscaf * num_yscaf,
+                                    "pvalue_bonferroni": pvalue * num_xscaf * num_yscaf,
                                     "plotleft": plotleft,
                                     "plotright": plotright,
                                     "plotwidth": plotwidth,
@@ -1760,6 +1790,7 @@ def correlation_plot(plotting_df, fishertsv,
       - "breaks"
     """
     gray   = "#d1cbcc"
+    bbblue = "#bbe3f2"
     yellow = "#f3e056"
     orange = "#f98e08"
     red    = "#7d1d6c"
@@ -1813,9 +1844,11 @@ def correlation_plot(plotting_df, fishertsv,
     fisherdf["pval01_log_rev"] = scale_pvalue_to_0_1(np.log(fisherdf["pvalue"]), reverse = True)
 
     print("Performed {} tests".format(len(fisherdf)))
+    print("0.10 equivalent for {} tests is {}".format(len(fisherdf), 0.10/len(fisherdf)))
     print("0.05 equivalent for {} tests is {}".format(len(fisherdf), 0.05/len(fisherdf)))
-    p_value_dict = {x: x/len(fisherdf) for x in [0.05, 0.00005, 0.00000005]}
-    p_value_to_color = {0.05:       yellow,
+    p_value_dict = {x: x/len(fisherdf) for x in [0.1, 0.05, 0.00005, 0.00000005]}
+    p_value_to_color = {0.1:        bbblue,
+                        0.05:       yellow,
                         0.00005:    orange,
                         0.00000005: red}
     fisherdf["color"] = gray
@@ -1971,8 +2004,8 @@ def correlation_plot(plotting_df, fishertsv,
         legscale, legsize = sizes_and_scale_minp(smallest_p)
         legscale.append(0.15)
         legsize.append("1")
-        index_to_color = [gray, yellow, orange, red]
-        index_to_text  = ["> 0.05", "< 0.05", "< 5e-4", "< 5e-7"]
+        index_to_color = [gray, bbblue, yellow, orange, red]
+        index_to_text  = ["> 0.1", "< 0.10", "< 0.05", "< 5e-4", "< 5e-7"]
         for i in range(4):
             x = x_median_size/2
             y = y_median_size/2
