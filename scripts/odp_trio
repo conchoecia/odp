@@ -1,0 +1,883 @@
+"""
+This script performs reciprocal-best protein diamond BLAST searches, n-ways,
+  then shows how many pairs are conserved between them
+
+This script does not support y-axis species
+"""
+
+from Bio import SeqIO
+import copy
+from itertools import groupby
+from itertools import combinations
+from itertools import permutations
+import matplotlib
+from matplotlib import pyplot as plt
+from multiprocessing import Pool
+import math
+import networkx as nx
+from operator import itemgetter
+import pandas as pd
+import numpy as np
+import statistics
+import sys
+import odp_functions as odpf
+
+configfile: "config.yaml"
+
+odpf.check_legality(config)
+
+# check diamond_or_blastp
+if "diamond_or_blastp" not in config:
+    config["diamond_or_blastp"] = "blastp"
+else:
+    if config["diamond_or_blastp"] not in ["diamond", "blastp"]:
+        raise IOError("diamond_or_blastp must be either 'diamond' or 'blastp'")
+
+# make sure none of the sample names have underscores
+for thissample in config["xaxisspecies"]:
+    if "_" in thissample:
+        raise IOError("Sample names can't have '_' char: {}".format(thissample))
+
+# make sure there are at least 2 samples
+if len(config["xaxisspecies"]) < 2:
+    raise IOError("There must be at least 2 samples")
+# make sure that nways is there
+if not "nways" in config:
+    raise IOError("you must specify nways in the config file. must be at least 2.")
+# make sure that nways is greater than equal to 2
+if config["nways"] < 2:
+    raise IOError("nways must be at least 2")
+
+# make sure that num species is gteq nways
+if not len(config["xaxisspecies"]) >= config["nways"]:
+    raise IOError("The number of species must be greater than or equal to nways")
+
+# come up with all of the analyses
+#all_species = [x for x in config["xaxisspecies"]]
+#analyses_list = [list(sorted(x)) for x in combinations(all_species, config["nways"])]
+analyses_list = [list(sorted(x)) for x in config["analyses"]]
+all_species = list(set([x for x in odpf.flatten(analyses_list)]))
+print("Here is an example of the first few analyses: {}".format(analyses_list[0:3]))
+print("There are {} possible combinations.".format(len(analyses_list)))
+
+# make sure all of the species in the analyses are in the config
+for entry in analyses_list:
+    for thisspecies in entry:
+        if thisspecies not in config["xaxisspecies"]:
+            raise IOError ("You specified {} in the analyses, but it isn't defined in xaxisspecies".format(thisspecies))
+# This is specifically for the trio odp
+config["yaxisspecies"] = config["xaxisspecies"]
+
+rule all:
+    input:
+        # find the reciprocal best hits
+        ["synteny_analysis/blastp_results/reciprocal_best/{}_acceptable_prots.txt".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        ["synteny_analysis/blastp_results/reciprocal_best/{}_edges.txt".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        ["synteny_analysis/RBH/{}_reciprocal_best_hits.tsv".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        # calculate the alpha value here
+        ["synteny_analysis/RBH_groupby/alpha/{}_reciprocal_best_hits.alpha.tsv".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+
+        # now perform the pairs analysis
+        #["synteny_analysis/pair_analysis/{}_pairs_analysis.tsv".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        #["synteny_analysis/RBH/{}_reciprocal_best_hits_pair_analysis.tsv".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        ["synteny_analysis/RBH_groupby/{}_reciprocal_best_hits.groupby.tsv".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        #"synteny_analysis/clustering/MST_cladogram.pdf",
+        #"synteny_analysis/clustering/UPGMA_cladogram.pdf",
+        #"synteny_analysis/clustering/WPGMA_cladogram.pdf",
+        #"synteny_analysis/clustering/UPGMC_cladogram.pdf",
+        #"synteny_analysis/clustering/WPGMC_cladogram.pdf",
+        #"synteny_analysis/clustering/Ward_cladogram.pdf",
+        #"synteny_analysis/clustering/graph.pdf",
+        ## individual
+        #["synteny_analysis/clustering/individual/{}_MST_cladogram.pdf".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        #["synteny_analysis/clustering/individual/{}_UPGMA_cladogram.pdf".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        #["synteny_analysis/clustering/individual/{}_WPGMA_cladogram.pdf".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        #["synteny_analysis/clustering/individual/{}_UPGMC_cladogram.pdf".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        #["synteny_analysis/clustering/individual/{}_WPGMC_cladogram.pdf".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        #["synteny_analysis/clustering/individual/{}_Ward_cladogram.pdf".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        #["synteny_analysis/clustering/individual/{}_graph.pdf".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list]
+
+def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
+    """
+    takes a chrom file, only keeps proteins in input_fasta from chrom file,
+     saves those prots to output_fasta
+    """
+    keep_these = set()
+    printed_already = set()
+    with open(chrom_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                splitd = line.split()
+                keep_these.add(splitd[0])
+    outhandle = open(output_fasta, "w")
+    inhandle =  open(input_fasta, "r")
+    for record in SeqIO.parse(inhandle, "fasta"):
+        if record.id in keep_these and record.id not in printed_already:
+            SeqIO.write(record, outhandle, "fasta")
+            printed_already.add(record.id)
+    inhandle.close()
+    outhandle.close()
+
+rule filter_prots_x:
+    """
+    Sometimes the prot file with have sequences that are not present in
+     the chrom file. Make a prot file of only the proteins in the chrom file.
+    """
+    input:
+        prots = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["proteins"],
+        chrom = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["prot_to_loc"]
+    output:
+        pep = "synteny_analysis/db/xaxis/{xsample}_prots.pep"
+    threads: 1
+    run:
+        filter_fasta_chrom(input.chrom, input.prots, output.pep)
+
+rule filter_prots_y:
+    """
+    Sometimes the prot file with have sequences that are not present in
+     the chrom file. Make a prot file of only the proteins in the chrom file.
+    """
+    input:
+        prots = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["proteins"],
+        chrom = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"]
+    output:
+        pep = "synteny_analysis/db/yaxis/{ysample}_prots.pep"
+    threads: 1
+    run:
+        filter_fasta_chrom(input.chrom, input.prots, output.pep)
+
+
+rule make_diamond_and_blast_db_x:
+    input:
+        pep = ancient("synteny_analysis/db/xaxis/{xsample}_prots.pep")
+    output:
+        dmnd = "synteny_analysis/db/xaxis/dmnd/{xsample}_prots.dmnd",
+        pdb = "synteny_analysis/db/xaxis/{xsample}_prots.pep.pdb"
+    threads: workflow.cores - 1
+    shell:
+        """
+        diamond makedb --in {input.pep} --db {output.dmnd}
+        makeblastdb -in {input.pep} -dbtype prot
+        """
+
+rule make_diamond_and_blast_db_y:
+    input:
+        pep = ancient("synteny_analysis/db/yaxis/{ysample}_prots.pep")
+    output:
+        dmnd = "synteny_analysis/db/yaxis/dmnd/{ysample}_prots.dmnd",
+        pep = "synteny_analysis/db/yaxis/{ysample}_prots.pep.pdb"
+    threads: workflow.cores - 1
+    shell:
+        """
+        diamond makedb --in {input.pep} --db {output.dmnd}
+        makeblastdb -in {input.pep} -dbtype prot
+        """
+
+rule diamond_blast_x_to_y:
+    input:
+        xpep  = ancient("synteny_analysis/db/xaxis/{xsample}_prots.pep"),
+        ydmnd = ancient("synteny_analysis/db/yaxis/dmnd/{ysample}_prots.dmnd"),
+        ypep  = ancient("synteny_analysis/db/yaxis/{ysample}_prots.pep"),
+        ypdb  = ancient("synteny_analysis/db/yaxis/{ysample}_prots.pep.pdb")
+    output:
+        blastp = "synteny_analysis/blastp_results/xtoy/{xsample}_against_{ysample}.blastp",
+    threads: int(workflow.cores/2) if (config["search_method"] == "jackhmmer") else (workflow.cores - 1)
+    params:
+        search_method = config["search_method"],
+    priority: 1
+    shell:
+        """
+        if [ "{params.search_method}" = "blastp" ]; then
+            blastp -query {input.xpep} -db {input.ypep} \
+              -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
+        elif [ "{params.search_method}" = "diamond" ]; then
+            diamond blastp --query {input.xpep} --db {input.ydmnd} \
+              --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
+        elif [ "{params.search_method}" = "jackhmmer" ]; then
+            jackhmmer --cpu {threads} --noali --tblout {output.blastp} \
+              {input.xpep} {input.ypep} > /dev/null
+        fi
+        """
+
+rule diamond_blast_y_to_x:
+    input:
+        ypep  = ancient("synteny_analysis/db/yaxis/{ysample}_prots.pep"),
+        xdmnd = ancient("synteny_analysis/db/xaxis/dmnd/{xsample}_prots.dmnd"),
+        xpep  = ancient("synteny_analysis/db/xaxis/{xsample}_prots.pep"),
+        xpdb  = ancient("synteny_analysis/db/xaxis/{xsample}_prots.pep.pdb")
+    output:
+        blastp = "synteny_analysis/blastp_results/ytox/{ysample}_against_{xsample}.blastp",
+    threads: int(workflow.cores/2) if (config["search_method"] == "jackhmmer") else (workflow.cores - 1)
+    params:
+        search_method = config["search_method"]
+    priority: 1
+    shell:
+        """
+        if [ "{params.search_method}" = "blastp" ]; then
+            blastp -query {input.ypep} -db {input.xpep} \
+              -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
+        elif [ "{params.search_method}" = "diamond" ]; then
+            diamond blastp --query {input.ypep} --db {input.xdmnd} \
+              --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
+        elif [ "{params.search_method}" = "jackhmmer" ]; then
+            jackhmmer --cpu {threads} --noali --tblout {output.blastp} \
+              {input.ypep} {input.xpep} > /dev/null
+        fi
+        """
+
+rule reciprocal_best_hits:
+    """
+    finds the reciprocal best hits.
+    reports it in the form of the blastp results from x -> y search
+    """
+    input:
+        xtoyblastp = "synteny_analysis/blastp_results/xtoy/{xsample}_against_{ysample}.blastp",
+        ytoxblastp = "synteny_analysis/blastp_results/ytox/{ysample}_against_{xsample}.blastp"
+    output:
+        xtoyblastp = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.temp.blastp",
+    threads: 1
+    run:
+        odpf.reciprocal_best_hits_blastp_or_diamond_blastp(
+            input.xtoyblastp, input.ytoxblastp, output.xtoyblastp)
+
+def get_component_size_dict(G):
+    """
+    Prints out a dictionary of the component sizes of the graph.
+    G is the graph.
+
+    keys are the sizes of the components.
+    values are the number of components of that size
+    """
+    component_size = {}
+    for thisentry in list(nx.connected_components(G)):
+        if len(thisentry) not in component_size:
+            component_size[len(thisentry)] = 0
+        component_size[len(thisentry)] += 1
+    print(component_size)
+
+rule n_ways_reciprocal_best:
+    """
+    Gets reciprocal best hits from 3 or more samples
+    For a protein to be retained, it must be a reciprocal-best hit in three samples.
+
+              A      B
+             / \    /|\
+            B___C  A-+-C , et cetera
+                    \|/
+                     D
+
+    The output of this rule is a yaml file with admissible proteins from each sample
+    """
+    input:
+        xtoyblastp =["synteny_analysis/blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(x[0], x[1])
+            for x in permutations(
+               ["{{sample{}}}".format(i)
+                for i in range(config["nways"])], config["nways"])],
+        chrom = lambda wildcards: [config["xaxisspecies"][x]["prot_to_loc"]
+                    for x in all_species]
+    output:
+        acceptable_prots = "synteny_analysis/blastp_results/reciprocal_best/{}_acceptable_prots.txt".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])])),
+        blast_network      = "synteny_analysis/blastp_results/reciprocal_best/{}_edges.txt".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])])),
+        RBH                = "synteny_analysis/RBH/{}_reciprocal_best_hits.tsv".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+    threads: 1
+    params:
+        num_ways = config["nways"]
+    run:
+        # prot to group
+        prot_to_group = {}
+        if "prot_to_group" in config:
+            if os.path.exists(config["prot_to_group"]):
+                with open(config["prot_to_group"], "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        fields = line.split("\t")
+                        prot_to_group[fields[0]] = fields[1]
+        #print(prot_to_group)
+        species_string = output.acceptable_prots.split("/")[-1].replace("_acceptable_prots.txt", "")
+        all_species = [x for x in species_string.split("_")]
+        combos = list(combinations(all_species, 2))
+        blastfiles = [["synteny_analysis/blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(x[0], x[1]),
+             x[0], x[1]] for x in combos]
+        gene_to_species = {}
+        gene_list = set()
+
+        # get the chrom files
+        chrom_dicts = {}
+        for thisspecies in all_species:
+            if not os.path.exists(config["xaxisspecies"][thisspecies]["prot_to_loc"]):
+                raise IOError("This chrom file doesn't exist: {}".format(
+                    config["xaxisspecies"][thisspecies]["prot_to_loc"]))
+            chrom_dicts[thisspecies] = pd.read_csv(
+                config["xaxisspecies"][thisspecies]["prot_to_loc"],
+                header=None, sep = "\t")
+            chrom_dicts[thisspecies].columns = ["prot",
+                "scaf", "direction", "start", "stop"]
+
+        # initialize the graph
+        G = nx.Graph()
+        checked_names = set()
+        for analysis in blastfiles:
+            print(analysis)
+            thisfile = analysis[0]
+            a = analysis[1]
+            b = analysis[2]
+            with open(thisfile, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        splitb = line.split("\t")
+                        agene = "{}_{}".format(a, splitb[0])
+                        bgene = "{}_{}".format(b, splitb[1])
+                        evalue = float(splitb[-2])
+                        bitscore = float(splitb[-1])
+                        if a not in checked_names:
+                            if agene in gene_list:
+                                raise IOError("""We saw a gene twice. {}.
+                                This means that two species have the same prot ids.""".format(agene))
+                        gene_list.add(agene)
+                        if b not in checked_names:
+                            if bgene in gene_list:
+                                raise IOError("""We saw a gene twice. {}.
+                                This means that two species have the same prot ids.""".format(bgene))
+                        gene_list.add(bgene)
+                        gene_to_species[agene] = a
+                        gene_to_species[bgene] = b
+                        #add these since we've added the genes already
+                        checked_names.add(a)
+                        checked_names.add(b)
+                        # now add the edge
+                        G.add_edge(agene, bgene, weight = bitscore)
+        remnodes = set()
+        #get rid of things that couldn't possibly be an n-way best
+        for thisentry in list(nx.connected_components(G)):
+            if len(thisentry) < len(all_species):
+                for node in thisentry:
+                    remnodes.add(node)
+        for node in remnodes:
+            G.remove_node(node)
+        remnodes.clear()
+
+        # now get rid of nodes that don't have the correct degree
+        #  to be n-connected
+        for thisnode in G.nodes:
+            if G.degree[thisnode] != (len(all_species) - 1):
+                remnodes.add(thisnode)
+        for node in remnodes:
+            G.remove_node(node)
+        remnodes.clear()
+        # now get the n-connected components
+        nwaybest = []
+        for thisentry in list(nx.connected_components(G)):
+            if len(thisentry) == len(all_species):
+                nwaybest.append(thisentry)
+            else:
+                for node in thisentry:
+                    remnodes.add(node)
+        #cleanup the graph
+        for node in remnodes:
+            G.remove_node(node)
+        remnodes.clear()
+        # print out the graph
+        uniquenodes = set()
+        with open(output.blast_network, "w") as f:
+            for thisedge in G.edges:
+                agene = "_".join(thisedge[0].split("_")[1::])
+                bgene = "_".join(thisedge[1].split("_")[1::])
+                print("{}\t{}".format(agene, bgene), file = f)
+                uniquenodes.add(thisedge[0])
+                uniquenodes.add(thisedge[1])
+        with open(output.acceptable_prots, "w") as f:
+            for thisnode in uniquenodes:
+                thisgene = "_".join(thisnode.split("_")[1::])
+                print(thisgene, file = f)
+        # print out the list of genes
+        CCs = []
+        for thisentry in list(nx.connected_components(G)):
+            ccdict = {"RBH": "RBH{}way_{}_{}".format(
+                len(all_species), "_".join(all_species), len(CCs)+1)}
+            for node in thisentry:
+                thisgene = "_".join(node.split("_")[1::])
+                ccdict["{}_gene".format(gene_to_species[node])] = thisgene
+            CCs.append(ccdict)
+        genesdf = pd.DataFrame(CCs)
+        genesdf["gene_group"] = "None"
+        print(genesdf)
+
+        # now add the other info
+        for thisspecies in all_species:
+            genesdf["{}_scaf".format(thisspecies)] = genesdf[
+                "{}_gene".format(thisspecies)].map(
+                    dict(zip(chrom_dicts[thisspecies].prot,
+                             chrom_dicts[thisspecies].scaf)) )
+            genesdf["{}_pos".format(thisspecies)] = genesdf[
+                "{}_gene".format(thisspecies)].map(
+                    dict(zip(chrom_dicts[thisspecies].prot,
+                             chrom_dicts[thisspecies].start)) )
+        # add the gene_group info
+        for index, row in genesdf.iterrows():
+            for thisspecies in all_species:
+                this_gene = row["{}_gene".format(thisspecies)]
+                if this_gene in prot_to_group:
+                    genesdf.loc[index, "gene_group"] = prot_to_group[this_gene]
+
+        genesdf.to_csv(output.RBH, sep="\t")
+
+rule pair_analysis:
+    input:
+        RBH = "synteny_analysis/RBH/{}_reciprocal_best_hits.tsv".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+    output:
+        tsv = "synteny_analysis/pair_analysis/{}_pairs_analysis.tsv".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])])),
+        RBH = "synteny_analysis/RBH/{}_reciprocal_best_hits_pair_analysis.tsv".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+    threads: 1
+    run:
+        species_string = input.RBH.split("/")[-1].replace("_reciprocal_best_hits.tsv", "")
+        all_species = [x for x in species_string.split("_")]
+        print(all_species)
+        RBHdf = pd.read_csv(input.RBH, sep = "\t", index_col = 0)
+        # we will modify this version
+        # add the columns for the binary counts
+        for n in range(1, len(all_species)+1):
+            for combo in [list(y) for y in list(combinations(all_species,n))]:
+                match_string = "_".join(combo)
+                RBHdf[match_string] = 0
+        RBHdf["NoMatches"] = 0
+
+        matches_counts = {}
+        num_analyses = 0
+        num_pairs = len(list(combinations(range(len(RBHdf)),2)))
+        for i in range(len(RBHdf)):
+            for ii in range(i+1, len(RBHdf)):
+                subdf = RBHdf.iloc[[i, ii]]
+                matches = []
+                for thisspecies in all_species:
+                    if len(subdf["{}_scaf".format(thisspecies)].unique()) == 1:
+                        matches.append(thisspecies)
+                match_string = "_".join(matches)
+                if match_string == "":
+                    match_string = "NoMatches"
+
+                # modify the dataframe
+                RBHdf.loc[i, match_string] = 1
+                RBHdf.loc[ii, match_string] = 1
+
+                # get the numerical counts
+                if match_string not in matches_counts:
+                    matches_counts[match_string] = 0
+                matches_counts[match_string] += 1
+                num_analyses += 1
+                if num_analyses % 10 == 0:
+                    print("  - Finished {}/{} ({:.2f}%) pairs.  ".format(num_analyses, num_pairs, (num_analyses/num_pairs)*100), end = "\r")
+        print(matches_counts)
+        with open(output.tsv, "w") as f:
+            for key in dict(
+                    sorted(matches_counts.items(), key=lambda item: item[0].count("_"))):
+                print("{}\t{}".format(key, matches_counts[key]), file=f)
+        RBHdf.to_csv(output.RBH, sep="\t")
+
+def permute_10k(df):
+    observations = {x: 0 for x in range(1, 5000)}
+    num_permutations = 10000
+    scafs = list(df.columns)
+    for i in range(num_permutations):
+        for thisscaf in df.columns:
+            df[thisscaf] = np.random.permutation(df[thisscaf].values)
+        subbed = df.groupby(scafs).size().reset_index(name = "counts")["counts"].value_counts().to_dict()
+        for key in subbed:
+            observations[key] += 1
+        if i % 10 == 0:
+               print("  - Finished {}/{} ({:.2f}%) analyses.  ".format(
+                   i, num_permutations,
+                   (i/num_permutations)*100), end = "\r")
+    return observations
+
+rule permutation_test_for_compariasons:
+    input:
+        RBH = "synteny_analysis/RBH/{}_reciprocal_best_hits.tsv".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+    output:
+        alpha = "synteny_analysis/RBH_groupby/alpha/{}_reciprocal_best_hits.alpha.tsv".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+    threads: workflow.cores - 1
+    params:
+        num_permutations = config["num_permutations"]
+    run:
+        species_string = input.RBH.split("/")[-1].replace("_reciprocal_best_hits.tsv", "")
+        df = pd.read_csv(input.RBH, sep = "\t", index_col = 0)
+
+        all_species = [x for x in species_string.split("_")]
+        scafs = ["{}_scaf".format(x) for x in all_species]
+        df = df[scafs]
+
+        num_analyses = int(params.num_permutations/10000)
+        values = (df.copy() for i in range(num_analyses))
+        #print(len(values))
+
+        observations = {x: 0 for x in range(1, 5000)}
+        with Pool(threads) as pool:
+            res = pool.map(permute_10k, values)
+            for thisdict in res:
+                for key in thisdict:
+                    observations[key] += thisdict[key]
+
+        resultsDF = pd.Series(observations).to_frame()
+        resultsDF.reset_index(inplace = True)
+        resultsDF.columns = ["Num_Genes_In_Chr_Group", "Num_Permutations"]
+        resultsDF["Total_Tests"] = params.num_permutations
+        resultsDF["alpha"] = resultsDF["Num_Permutations"]/params.num_permutations
+        print(resultsDF)
+        resultsDF.to_csv(output.alpha, sep="\t")
+
+rule groupby_RBH_results:
+    input:
+        RBH = "synteny_analysis/RBH/{}_reciprocal_best_hits.tsv".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])])),
+        alpha = "synteny_analysis/RBH_groupby/alpha/{}_reciprocal_best_hits.alpha.tsv".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+    output:
+        RBH = "synteny_analysis/RBH_groupby/{}_reciprocal_best_hits.groupby.tsv".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+    threads: 1
+    run:
+        species_string = input.RBH.split("/")[-1].replace("_reciprocal_best_hits.tsv", "")
+        all_species = [x for x in species_string.split("_")]
+        match_string = "_".join(all_species)
+
+        df = pd.read_csv(input.RBH, sep = "\t", index_col = 0)
+        groupbycols = ["{}_scaf".format(x) for x in all_species]
+        alphadf = pd.read_csv(input.alpha, sep = "\t", index_col = 0)
+
+        # calculate the alpha score for each level
+        df = df.reset_index(drop = True)
+        print(df)
+        print(df.columns)
+        print(groupbycols)
+        #grouped_multiple = df.groupby(groupbycols).size().to_frame(name = "count").reset_index()
+        grouped_multiple = df.groupby(groupbycols).agg(list).reset_index()
+
+        # get the size
+        grouped_multiple["count"] = grouped_multiple.RBH.str.len()
+        grouped_mutiple = grouped_multiple.loc[grouped_multiple["count"] > 1, ]
+
+        # sort
+        grouped_multiple = grouped_multiple.sort_values(by="count", ascending=False)
+        alpha_dict = dict(zip(alphadf.Num_Genes_In_Chr_Group, alphadf.alpha))
+        grouped_multiple["alpha"] = grouped_multiple["count"].map(alpha_dict)
+        grouped_multiple["alpha_type"] = "equal_to"
+        for index, row in grouped_multiple.iterrows():
+            if row["alpha"] == 0:
+                # now reassign the alpha to the next group that we've seen
+                done = False
+                countdown_index = 1
+                while not done:
+                    new_alpha = alpha_dict[row["count"] - countdown_index]
+                    if new_alpha == 0:
+                        countdown_index += 1
+                    else:
+                        done = True
+                        grouped_multiple.loc[index, "alpha"] = new_alpha
+                        grouped_multiple.loc[index, "alpha_type"] = "less_than"
+        print(grouped_multiple)
+        grouped_multiple.to_csv(output.RBH, sep="\t")
+
+
+rule generate_distance_matrix_aggregate:
+    """
+    column 1 is source, column 2 is target, column 3 is counts
+    """
+    input:
+        all_pairs = ["synteny_analysis/pair_analysis/{}_pairs_analysis.tsv".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list]
+    output:
+        pairwise_matrix = "synteny_analysis/matrices/pairwise_matrix_aggregate.tsv"
+    threads: 1
+    run:
+        pairwise_counts = {}
+        for thispairfile in input.all_pairs:
+            with open(thispairfile, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        source = line.split()[0]
+                        count  = int(line.split()[1])
+                        if source.count("_") == 1:
+                            if source not in pairwise_counts:
+                                pairwise_counts[source] = 0
+                            pairwise_counts[source] += count
+        with open(output.pairwise_matrix, "w") as f:
+            for entry in sorted(pairwise_counts):
+                source = entry.split("_")[0]
+                target = entry.split("_")[1]
+                print("{}\t{}\t{}".format(
+                    source, target, pairwise_counts[entry]),
+                      file = f)
+
+def distance_matrix(matrix_file):
+    """
+    Sets up a distance matrix using the source file
+    """
+    rows = {}
+    with open(matrix_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                source = line.split()[0]
+                target = line.split()[1]
+                count  = int(line.split()[2])
+                if source not in rows:
+                    rows[source] = {}
+                if target not in rows:
+                    rows[target] = {}
+                rows[source][target] = count
+                rows[target][source] = count
+    df = pd.DataFrame(rows)
+    df = df.sort_index()
+    df = 1/df
+    df = df.fillna(0)
+    return df
+
+#rule hierarchy_cladogram_aggregate:
+#    input:
+#        pairwise_matrix = "synteny_analysis/matrices/pairwise_matrix_aggregate.tsv"
+#    output:
+#        MST   = "synteny_analysis/clustering/MST_cladogram.pdf",
+#        UPGMA = "synteny_analysis/clustering/UPGMA_cladogram.pdf",
+#        WPGMA = "synteny_analysis/clustering/WPGMA_cladogram.pdf",
+#        UPGMC = "synteny_analysis/clustering/UPGMC_cladogram.pdf",
+#        WPGMC = "synteny_analysis/clustering/WPGMC_cladogram.pdf",
+#        Ward =  "synteny_analysis/clustering/Ward_cladogram.pdf"
+#    threads: 1
+#    threads: 1
+#    run:
+#        from scipy.cluster.hierarchy import dendrogram, linkage
+#        from scipy.spatial.distance import squareform
+#
+#        df = distance_matrix(input.pairwise_matrix)
+#        dists = squareform(df)
+#        method_to_outfile = {"single": output.MST,
+#                             "average": output.UPGMA,
+#                             "weighted": output.WPGMA,
+#                             "centroid": output.UPGMC,
+#                             "median":   output.WPGMC,
+#                             "ward":     output.Ward}
+#        method_to_title = {"single":  "Minimum spanning tree",
+#                          "average":  "UPGMA tree",
+#                          "weighted": "WPGMA tree",
+#                          "centroid": "UPGMC tree",
+#                          "median":   "WPGMC tree",
+#                          "ward":     "Ward tree"}
+#        for thismethod in method_to_outfile:
+#            print(dists)
+#            linkage_matrix = linkage(dists, thismethod)
+#            print("linkage_matrix")
+#            print(linkage_matrix)
+#            fig = dendrogram(linkage_matrix, labels=df.columns,
+#                             orientation = "left",
+#                             leaf_font_size = 6)
+#            print(fig)
+#            plt.title(method_to_title[thismethod])
+#            plt.xlabel("distance")
+#            plt.savefig(method_to_outfile[thismethod])
+#            plt.close()
+
+def plot_distance_graph(pairwise_matrix, outfile):
+    """
+    this just plots the data
+    """
+    import networkx as nx
+    source_target_weight = []
+    highest_count = 0
+    with open(pairwise_matrix, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                source = line.split()[0]
+                target = line.split()[1]
+                count  = int(line.split()[2])
+                if count > highest_count:
+                    highest_count = count
+                source_target_weight.append([source, target, count])
+    g = nx.Graph()
+
+    maxLW = 20
+    for entry in source_target_weight:
+        g.add_edge(entry[0],
+                   entry[1], weight = (entry[2]/highest_count)*maxLW)
+    pos=nx.spring_layout(g) # pos = nx.nx_agraph.graphviz_layout(G)
+    edges = g.edges()
+    weights = [g[u][v]['weight'] for u,v in edges]
+    nx.draw_networkx(g,pos, edges = edges, width = weights)
+    plt.savefig(outfile)
+
+
+#rule plot_graph_aggregate:
+#    input:
+#        pairwise_matrix = "synteny_analysis/matrices/pairwise_matrix_aggregate.tsv"
+#    output:
+#        graph = "synteny_analysis/clustering/graph.pdf"
+#    threads: 1
+#    run:
+#        plot_distance_graph(input.pairwise_matrix, output.graph)
+
+## now perform the same analysis on individual n-way RBH pairwise files
+rule generate_distance_matrix_individual:
+    """
+    column 1 is source, column 2 is target, column 3 is counts
+    """
+    input:
+        single_pair = "synteny_analysis/pair_analysis/{}_pairs_analysis.tsv".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+    output:
+        pairwise_matrix = "synteny_analysis/matrices/individual/{}_pairwise_matrix.tsv".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+    threads: 1
+    run:
+        pairwise_counts = {}
+        with open(input.single_pair, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    source = line.split()[0]
+                    count  = int(line.split()[1])
+                    if source.count("_") == 1:
+                        if source not in pairwise_counts:
+                            pairwise_counts[source] = 0
+                        pairwise_counts[source] += count
+        with open(output.pairwise_matrix, "w") as f:
+            for entry in sorted(pairwise_counts):
+                source = entry.split("_")[0]
+                target = entry.split("_")[1]
+                print("{}\t{}\t{}".format(
+                    source, target, pairwise_counts[entry]),
+                      file = f)
+
+rule hierarchy_cladogram_individual:
+    input:
+        pairwise_matrix = "synteny_analysis/matrices/individual/{}_pairwise_matrix.tsv".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+    output:
+        MST   = "synteny_analysis/clustering/individual/{}_MST_cladogram.pdf".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])])),
+        UPGMA = "synteny_analysis/clustering/individual/{}_UPGMA_cladogram.pdf".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])])),
+        WPGMA = "synteny_analysis/clustering/individual/{}_WPGMA_cladogram.pdf".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])])),
+        UPGMC = "synteny_analysis/clustering/individual/{}_UPGMC_cladogram.pdf".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])])),
+        WPGMC = "synteny_analysis/clustering/individual/{}_WPGMC_cladogram.pdf".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])])),
+        Ward =  "synteny_analysis/clustering/individual/{}_Ward_cladogram.pdf".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+    threads: 1
+    threads: 1
+    run:
+        from scipy.cluster.hierarchy import dendrogram, linkage
+        from scipy.spatial.distance import squareform
+
+        df = distance_matrix(input.pairwise_matrix)
+        dists = squareform(df)
+        method_to_outfile = {"single": output.MST,
+                             "average": output.UPGMA,
+                             "weighted": output.WPGMA,
+                             "centroid": output.UPGMC,
+                             "median":   output.WPGMC,
+                             "ward":     output.Ward}
+        method_to_title = {"single":  "Minimum spanning tree",
+                          "average":  "UPGMA tree",
+                          "weighted": "WPGMA tree",
+                          "centroid": "UPGMC tree",
+                          "median":   "WPGMC tree",
+                          "ward":     "Ward tree"}
+
+        for thismethod in method_to_outfile:
+            print(dists)
+            linkage_matrix = linkage(dists, thismethod)
+            print("linkage_matrix")
+            print(linkage_matrix)
+            fig = dendrogram(linkage_matrix, labels=df.columns,
+                             orientation = "left",
+                             leaf_font_size = 6)
+            print(fig)
+            plt.title(method_to_title[thismethod])
+            plt.xlabel("distance")
+            plt.savefig(method_to_outfile[thismethod])
+            plt.close()
+
+rule plot_graph_individual:
+    input:
+        pairwise_matrix = "synteny_analysis/matrices/individual/{}_pairwise_matrix.tsv".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+    output:
+        graph = "synteny_analysis/clustering/individual/{}_graph.pdf".format(
+            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+    threads: 1
+    run:
+        plot_distance_graph(input.pairwise_matrix, output.graph)
+
+#rule microsynteny_analysis:
+#    """
+#    June 14th 2021 - skippig this
+#    This performs the microsynteny analysis with the RBH genes.
+#     the output has the following columns:
+#       - source
+#       - target
+#       - length of synblock
+#       - source_chrom
+#       - target_chrom
+#       - RBH_genes
+#       - source_genes
+#       - target_genes
+#       - source_positions
+#       - target_positions
+#    """
+#    input:
+#        RBH = "synteny_analysis/RBH/{}_reciprocal_best_hits.tsv".format(
+#            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+#    output:
+#        microsyn = "synteny_analysis/microsyn/{}_microsynteny.tsv".format(
+#            "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
+#    threads: 1
+#    run:
+#        colnames = "RBH     hormiphora      caps    rhopilema       nematostella    caps_scaf       caps_pos        hormiphora_scaf hormiphora_pos  nematostella_scaf       nematostella_pos        rhopilema_scaf  rhopilema_pos"
+#        RBHdf = pd.read_csv(input.RBH, sep = "\t", index_col = 0)
+#
+#        # figure out the species we're working with
+#        species_string = output.RBH.split("/")[-1].replace("_pairs_analysis.tsv", "")
+#        all_species = [x for x in species_string.split("_")]
+#
+#        observations = [] # keep dict of entries here
+#        # 4-level loop! easier to program tho and should be fast anyway
+#        #now iterate through all species
+#        for i in range(len(all_species)):
+#            source_species = all_species[i]
+#            sscaf = "{}_scaf".format(source_species)
+#            insynpiece = False
+#            for ii in range(i+1, len(all_species)):
+#                target_species = all_species[ii]
+#                tscaf = "{}_scaf".format(target_species)
+#                for source_chrom in RBHdf[sscaf].unique():
+#                    for target_chrom in RBHdf[tscaf].unique():
+#                        source_df = RBHdf.loc[
+#                            (RBHdf[sscaf] == source_chrom) & \
+#                            (RBHdf[tscaf] == target_chrom), ]
+#                        print(source_df)
