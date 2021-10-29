@@ -4,6 +4,8 @@ all of the other species in the config file.
 
 The output of this is an RBH .tsv file, with or without a group column,
  that has the RBHs and their orthologs.
+
+This is a small change to test push
 """
 
 import ast
@@ -67,15 +69,15 @@ RBH_entries = list(testdf["RBH"])
 
 rule all:
     input:
-        expand(config["tool"] + "/unwrapped_RBH/fasta/unaligned/{RBH}.fasta",
-               RBH = RBH_entries),
-        expand(config["tool"] + "/unwrapped_RBH/hmm/hmms/{RBH}.hmm",
-               RBH = RBH_entries),
-        expand(config["tool"] + "/unwrapped_RBH/hmm/searches/{other_species}/{RBH}_against_{other_species}.tsv",
-               other_species = other_species, RBH = RBH_entries),
-        expand(config["tool"] + "/unwrapped_RBH/hmm/searches_agg/{other_species}_hmm_results.sorted.tsv",
+        #expand(config["tool"] + "/fasta/unaligned/{RBH}.fasta",
+        #       RBH = RBH_entries),
+        #expand(config["tool"] + "/hmm/hmms/{RBH}.hmm",
+        #       RBH = RBH_entries),
+        #expand(config["tool"] + "/hmm/searches/{other_species}/{RBH}_against_{other_species}.tsv",
+        #       other_species = other_species, RBH = RBH_entries),
+        expand(config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.sorted.tsv",
                other_species = other_species, RBH = RBH_entries)
-        #expand("unwrapped_RBH/hmm/searches_agg_best/{species}_hmm_best.tsv",
+        #expand("hmm/searches_agg_best/{species}_hmm_best.tsv",
         #       species = config["yaxisspecies"]),
 
 rule generate_fasta_of_each_RBH:
@@ -84,7 +86,7 @@ rule generate_fasta_of_each_RBH:
         proteins = lambda wildcards: [config["species"][x]["proteins"]
                     for x in RBH_species]
     output:
-        MBH_fasta = expand(config["tool"] + "/unwrapped_RBH/fasta/unaligned/{RBH}.fasta",
+        MBH_fasta = expand(config["tool"] + "/fasta/unaligned/{RBH}.fasta",
                            RBH = RBH_entries)
     threads: 1
     run:
@@ -127,16 +129,16 @@ rule generate_fasta_of_each_RBH:
         # print out all of the records to fasta files
         print(" - Printing out the FASTA records.")
         for thisRBH in RBH_to_records:
-            outfile = config["tool"] + "/unwrapped_RBH/fasta/unaligned/{}.fasta".format(thisRBH)
+            outfile = config["tool"] + "/fasta/unaligned/{}.fasta".format(thisRBH)
             with open(outfile, "w") as output_handle:
                 for thisrec in RBH_to_records[thisRBH]:
                     SeqIO.write(thisrec, output_handle, "fasta")
 
 rule align_fasta_of_each_group:
     input:
-        MBH_fasta = config["tool"] + "/unwrapped_RBH/fasta/unaligned/{RBH}.fasta"
+        MBH_fasta = config["tool"] + "/fasta/unaligned/{RBH}.fasta"
     output:
-        aligned =   config["tool"] + "/unwrapped_RBH/fasta/aligned/{RBH}.aligned.fasta",
+        aligned =   config["tool"] + "/fasta/aligned/{RBH}.aligned.fasta",
     threads: 1
     shell:
         """
@@ -145,9 +147,9 @@ rule align_fasta_of_each_group:
 
 rule make_hmm:
     input:
-        aligned = config["tool"] + "/unwrapped_RBH/fasta/aligned/{RBH}.aligned.fasta"
+        aligned = config["tool"] + "/fasta/aligned/{RBH}.aligned.fasta"
     output:
-        hmm     = config["tool"] + "/unwrapped_RBH/hmm/hmms/{RBH}.hmm"
+        hmm     = config["tool"] + "/hmm/hmms/{RBH}.hmm"
     threads: 1
     shell:
         """
@@ -157,9 +159,9 @@ rule make_hmm:
 rule hmm_search_against_genome:
     input:
         proteins = lambda wildcards: config["species"][wildcards.other_species]["proteins"],
-        hmm = config["tool"] + "/unwrapped_RBH/hmm/hmms/{RBH}.hmm"
+        hmm = config["tool"] + "/hmm/hmms/{RBH}.hmm"
     output:
-        tsv = config["tool"] + "/unwrapped_RBH/hmm/searches/{other_species}/{RBH}_against_{other_species}.tsv"
+        tsv = config["tool"] + "/hmm/searches/{other_species}/{RBH}_against_{other_species}.tsv"
     threads: 2
     shell:
         """
@@ -180,10 +182,10 @@ rule aggregate_hmm_results_by_species:
       qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
     """
     input:
-        tsv = expand(config["tool"] + "/unwrapped_RBH/hmm/searches/{{other_species}}/{RBH}_against_{{other_species}}.tsv",
+        tsv = expand(config["tool"] + "/hmm/searches/{{other_species}}/{RBH}_against_{{other_species}}.tsv",
                      RBH = RBH_entries)
     output:
-        tsv =        config["tool"] + "/unwrapped_RBH/hmm/searches_agg/{other_species}_hmm_results.tsv"
+        tsv =        config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.tsv"
     params:
         this_species = lambda wildcards: wildcards.other_species
     threads: 1
@@ -213,9 +215,9 @@ rule aggregate_hmm_results_by_species:
 
 rule sort_the_collated_hmm_results:
     input:
-        tsv =        config["tool"] + "/unwrapped_RBH/hmm/searches_agg/{other_species}_hmm_results.tsv"
+        tsv =        config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.tsv"
     output:
-        tsv =        config["tool"] + "/unwrapped_RBH/hmm/searches_agg/{other_species}_hmm_results.sorted.tsv"
+        tsv =        config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.sorted.tsv"
     params:
         this_species = lambda wildcards: wildcards.other_species
     shell:
@@ -228,13 +230,13 @@ rule sort_the_collated_hmm_results:
 #    finds the best hmm for each gene
 #    """
 #    input:
-#        tsv = "unwrapped_RBH/hmm/searches_agg/{species}_hmm_results.tsv",
+#        tsv = "hmm/searches_agg/{species}_hmm_results.tsv",
 #        chrom = lambda wildcards: config["xaxisspecies"][wildcards.species]["prot_to_loc"],
-#        RBH = "unwrapped_RBH/RBH/reciprocal_best_hits.tsv"
+#        RBH = "RBH/reciprocal_best_hits.tsv"
 #    output:
-#        tsv = "unwrapped_RBH/hmm/searches_agg_best/{species}_hmm_best.tsv",
-#        RBHinfo = "unwrapped_RBH/hmm/RBH_plus_HMM_agg_best/{species}_hmm_chrom_info.tsv",
-#        groupby = "unwrapped_RBH/hmm/RBH_plus_HMM_agg_best/{species}_hmm_chrom_info.groupby.tsv"
+#        tsv = "hmm/searches_agg_best/{species}_hmm_best.tsv",
+#        RBHinfo = "hmm/RBH_plus_HMM_agg_best/{species}_hmm_chrom_info.tsv",
+#        groupby = "hmm/RBH_plus_HMM_agg_best/{species}_hmm_chrom_info.groupby.tsv"
 #    params:
 #        species = lambda wildcards: wildcards.species
 #    threads: 1
@@ -799,9 +801,9 @@ rule sort_the_collated_hmm_results:
 #    input:
 #        ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
 #        xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
-#        xprottoloc = "unwrapped_RBH/RBH/reciprocal_best_hits.chrom",
+#        xprottoloc = "RBH/reciprocal_best_hits.chrom",
 #        yprottoloc = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"],
-#        recip = "unwrapped_RBH/hmm/searches_agg_best/{ysample}_hmm_best.tsv"
+#        recip = "hmm/searches_agg_best/{ysample}_hmm_best.tsv"
 #    output:
 #        table = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
 #        plot_order = "synteny_analysis/plot_order/{xsample}_and_{ysample}_plotorder.tsv"
@@ -1140,9 +1142,9 @@ rule sort_the_collated_hmm_results:
 #        ybreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_auto.tsv",
 #        xbreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
 #        ybreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
-#        xprottoloc = "unwrapped_RBH/RBH/reciprocal_best_hits.chrom",
+#        xprottoloc = "RBH/reciprocal_best_hits.chrom",
 #        yprottoloc = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"],
-#        recip = "unwrapped_RBH/hmm/searches_agg_best/{ysample}_hmm_best.tsv"
+#        recip = "hmm/searches_agg_best/{ysample}_hmm_best.tsv"
 #    output:
 #        synplot_manual = "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_manualbreaks.pdf",
 #        synplot_noNone = "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_manualbreaks_noNone.pdf",
