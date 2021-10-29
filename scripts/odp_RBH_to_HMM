@@ -4,8 +4,6 @@ all of the other species in the config file.
 
 The output of this is an RBH .tsv file, with or without a group column,
  that has the RBHs and their orthologs.
-
-This is a small change to test push
 """
 
 import ast
@@ -76,12 +74,10 @@ rule all:
         #expand(config["tool"] + "/hmm/searches/{other_species}/{RBH}_against_{other_species}.tsv",
         #       other_species = other_species, RBH = RBH_entries),
         expand(config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.sorted.tsv",
-               other_species = other_species, RBH = RBH_entries)
+               other_species = other_species, RBH = RBH_entries),
         #expand("hmm/searches_agg_best/{species}_hmm_best.tsv",
         #       species = config["yaxisspecies"]),
-        expand(config["tool"] + "/output/{RBH}_RBHhmm_plus_other_species.RBH",
-        RBH = RBH_entries)
-
+        config["tool"] + "/output/" + species_string + "_RBHhmm_plus_other_species.RBH"
 
 rule generate_fasta_of_each_RBH:
     input:
@@ -236,8 +232,6 @@ rule best_gene_for_each_hmm:
         tsv = config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.sorted.tsv"
     output:
         tsv = config["tool"] + "/hmm/searches_agg_best/{other_species}_hmm_best.tsv"
-    params:
-        species = lambda wildcards: wildcards.species
     threads: 1
     run:
         df = pd.read_csv(input.tsv, header = None, sep = "\t")
@@ -256,13 +250,13 @@ rule collate_best_hits_into_best_hits_file:
     we need a {}_gene, {}_scaf, and {}_pos column for each new species we put in.
     """
     input:
-        RBH_file = config["RBH_file"]
+        RBH_file = config["RBH_file"],
         best_hits_files = expand(config["tool"] + "/hmm/searches_agg_best/{other_species}_hmm_best.tsv",
                                  other_species = other_species),
         chrom = lambda wildcards: [config["species"][x]["prot_to_loc"] for x in
                                    other_species]
     output:
-        RBH = config["tool"] + "/output/{RBH}_RBHhmm_plus_other_species.RBH"
+        RBH = config["tool"] + "/output/" + species_string + "_RBHhmm_plus_other_species.RBH"
     run:
         RBH = pd.read_csv(input.RBH_file, header = 0, index_col = 0, sep = "\t")
         for thisspecies in other_species:
@@ -293,6 +287,12 @@ rule collate_best_hits_into_best_hits_file:
             RBH["{}_pos".format( thisspecies)] = RBH[
                 "{}_gene".format(thisspecies)].map(species_gene_to_pos)
 
+        RBH_sorted = list(sorted([x for x in RBH.columns if x.split("_")[0] in RBH_species]))
+        other_sorted = list(sorted([x for x in RBH.columns if x.split("_")[0] in other_species]))
+        annot_col = list(sorted([x for x in RBH.columns if x not in ["RBH"] + RBH_sorted + other_sorted]))
+        sorted_cols = ["RBH"] + annot_col + RBH_sorted + other_sorted
+        RBH = RBH.reindex(sorted_cols, axis=1)
+        RBH = RBH.fillna(value = "None")
         RBH.to_csv(output.RBH,  sep="\t", header = True, index = False)
 
 
