@@ -1,0 +1,215 @@
+"""
+This plots the amount that the genes in each group are mixed.
+
+This version uses an unwrapped groupby dataframe.
+Needs coordinates from the genomes
+"""
+
+from Bio import SeqIO
+
+import matplotlib.pyplot as plt
+import matplotlib.patches as mplpatches
+import odp_functions as OdpF
+from matplotlib.backends.backend_pdf import PdfPages
+import numpy as np
+
+import pandas as pd
+import sys
+
+configfile: "config.yaml"
+
+config["tool"] = "odp_rbh_plot_mixing"
+
+OdpF.check_legality(config)
+
+# make sure we have the right info in the config.yaml
+if "rbh_file" not in config:
+    raise IOError("You must specify 'rbh_file' in config")
+if "merge_pairs" not in config:
+    raise IOError("You must specify 'merge_pairs' in config")
+if "separate" not in config:
+    raise IOError("You must specify 'separate' in config")
+
+# make sure that merge_pairs and separate are the right format
+for thispair in config["merge_pairs"]:
+    if len(thispair) != 2:
+        raise IOError("There should be two groups in this pair: {}".format(thispair))
+    if thispair[0] == thispair[1]:
+        raise IOError("The pairs should not be the same group: {}".format(thispair))
+for thisspecies in config["separate"]:
+    if thisspecies not in config["species"]:
+        raise IOError("{} in separate must be in 'species' in the config.".format(
+            thisspecies))
+
+# make sure none of the sample names have underscores
+for thissample in config["species"]:
+    if "_" in thissample:
+        raise IOError("Sample names can't have '_' char: {}".format(thissample))
+
+rule all:
+    input:
+        expand(config["tool"] + "/output/{species}_plots.pdf",
+               species = config["species"])
+
+def overlapping_plot(thisspecies, thischrom, chrom_size,
+                     left_pos,   right_pos,
+                     left_group, right_group,
+                     left_color, right_color, pdf):
+    """
+    This makes a square and shows the extent of mixing of groups
+    """
+
+    width = 3
+    height = 2
+    plt.figure(figsize=(width,2))
+
+    panel1=plt.axes([0.5/width,
+                     0.5/height,
+                     (width-1)/width,
+                     1/height])
+    panel1.set_xlim([0, chrom_size])
+    panel1.set_ylim([0, 1])
+    panel1.tick_params(axis='both',which='both',\
+                       bottom='off', labelbottom='off',\
+                       left='off', labelleft='off', \
+                       right='off', labelright='off',\
+                       top='off', labeltop='off')
+
+    rectangle1=mplpatches.Rectangle( (0,0), chrom_size,1,\
+                                     linewidth=0,\
+                                     linestyle='-',\
+                                     edgecolor='black',\
+                                     facecolor="#999999")
+    panel1.add_patch(rectangle1)
+
+
+    left_bottom  = 0.05
+    left_top     = 0.75
+    right_bottom = 0.25
+    right_top    = 0.95
+
+    if len(left_pos) > 1:
+        # plot the horizontal line for left
+        x_values = [min(left_pos), max(left_pos)]
+        y_mid = ((left_top - left_bottom)/2) + left_bottom
+        y_values = [y_mid, y_mid]
+        panel1.plot(x_values,y_values, color = left_color)
+    if len(right_pos) > 1:
+        # plot the horizontal line for right
+        x_values = [min(right_pos), max(right_pos)]
+        y_mid = ((right_top - right_bottom)/2) + right_bottom
+        y_values = [y_mid, y_mid]
+        panel1.plot(x_values,y_values, color = right_color)
+
+    # plot the vertical lines for left
+    if len(left_pos) > 0:
+        for pos in left_pos:
+            x_values = [pos, pos]
+            y_values = [left_bottom, left_top]
+            panel1.plot(x_values,y_values, color = left_color)
+
+    # plot the vertical lines for right
+    if len(right_pos) > 0:
+        for pos in right_pos:
+            x_values = [pos, pos]
+            y_values = [right_bottom, right_top]
+            panel1.plot(x_values,y_values, color = right_color)
+
+    thistitle = "{} {} (len {} bp) {} red {} yellow".format(
+        thisspecies, thischrom, chrom_size, left_group, right_group)
+    panel1.set_title(thistitle)
+    plt.axis('off')
+    pdf.savefig()
+    plt.close()
+
+rule read_in_genome_sizes:
+    """
+    This just reads in the genome sizes because it takes so long.
+    """
+    input:
+        genome = lambda wildcards: config["species"][wildcards.species]["genome"]
+    output:
+        size = config["tool"] + "/input/{species}_chrom_sizes.tsv"
+    threads: 1
+    params:
+        species = lambda wildcards: wildcards.species
+    run:
+        outhandle = open(output.size, "w")
+        with open(input.genome) as handle:
+            for record in SeqIO.parse(handle, "fasta"):
+                thischrom = record.id
+                print("{}\t{}\t{}".format(
+                    params.species,
+                    thischrom,
+                    len(record.seq)),
+                    file = outhandle)
+        outhandle.close()
+
+
+rule gen_mixing_plots:
+    input:
+        rbh = config["rbh_file"],
+        sizes = expand(config["tool"] + "/input/{species}_chrom_sizes.tsv",
+                       species = config["species"])
+    output:
+        plots = expand(config["tool"] + "/output/{species}_plots.pdf",
+                       species = config["species"])
+    threads: 1
+    params:
+        plot_stem = config["tool"] + "/output"
+    run:
+        merge_pairs = config["merge_pairs"]
+        separate    = config["separate"]
+        RBHfile     = config["rbh_file"]
+
+        df = pd.read_csv(RBHfile, sep = "\t", header = 0,
+                         na_values="None", index_col = None)
+        #for thiscol in df.columns:
+        #    if thiscol.endswith("_pos"):
+        #        df[thiscol] = df[thiscol].astype(float)
+        #        df[thiscol] = df[thiscol].astype(int)
+
+        species_list = [x.split("_")[0] for x in df.columns if x.endswith("gene")]
+
+        species_to_genome_size = {}
+        # we need the genome sizes for everything
+        for thisspecies in species_list:
+            thisfile = config["tool"] + "/input/{}_chrom_sizes.tsv".format(thisspecies)
+            species_to_genome_size[thisspecies] = {}
+            with open(thisfile, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        fields = line.split("\t")
+                        species_to_genome_size[thisspecies][fields[1]] = int(fields[2])
+
+        left_color  = "#c91b31"
+        if "left_color" in config:
+            left_color = config["left_color"]
+        right_color = "#f3b74a"
+        if "right_color" in config:
+            right_color = config["right_color"]
+
+        for thisspecies in species_list:
+            with PdfPages('{}/{}_plots.pdf'.format(params.plot_stem,
+                                                   thisspecies)) as pdf:
+                for thispair in merge_pairs:
+                    species_chroms = list(df["{}_scaf".format(thisspecies)].unique())
+                    for thischrom in species_chroms:
+                        left_group  = thispair[0]
+                        right_group = thispair[1]
+                        left_pos = list(df.loc[(df["gene_group"] == thispair[0]) &
+                                        (df["{}_scaf".format(thisspecies)] == thischrom), "{}_pos".format(thisspecies)])
+                        right_pos = list(df.loc[(df["gene_group"] == thispair[1]) &
+                                        (df["{}_scaf".format(thisspecies)] == thischrom), "{}_pos".format(thisspecies)])
+                        left_pos =  [x for x in left_pos  if x != "None"]
+                        right_pos = [x for x in right_pos if x != "None"]
+                        if (len(left_pos) > 0) or (len(right_pos) > 0):
+                            print(thisspecies, thischrom, thispair)
+                            print(left_pos)
+                            print(right_pos)
+                            chrom_size = int(species_to_genome_size[thisspecies][thischrom])
+                            overlapping_plot(thisspecies, thischrom, chrom_size,
+                                             left_pos,   right_pos,
+                                             left_group, right_group,
+                                             left_color, right_color, pdf)
