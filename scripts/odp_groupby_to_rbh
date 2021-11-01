@@ -9,7 +9,6 @@ the input file must be named:
 ... where sample1, sample2, sampleN is the sample name in the config.
 
 There can be as many samples as you'd like.
-
 """
 
 import ast
@@ -27,111 +26,94 @@ import statistics
 
 configfile: "config.yaml"
 
+config["tool"] = "odp_groupby_to_rbh"
+
 OdpF.check_legality(config)
 
-if not "groupby_with_group_column_file" in config:
-    raise IOError("You must specify 'groupby_with_group_column_file' in config")
+if "groupby_file" not in config:
+    raise IOError("You must specify 'groupby_file' in config")
 
 # make sure none of the sample names have underscores
-for thissample in config["xaxisspecies"]:
+for thissample in config["species"]:
     if "_" in thissample:
         raise IOError("Sample names can't have '_' char: {}".format(thissample))
 
+
 # come up with all of the analyses
-myfile = config["groupby_with_group_column_file"]
-species_string = myfile.split("/")[-1].replace("_reciprocal_best_hits.groupby.tsv", "")
+myfile = config["groupby_file"]
+species_string = myfile.split("/")[-1].replace("_reciprocal_best_hits.rbh.groupby", "").replace("_RBHhmm_plus_other_species.rbh.groupby", "")
+ending = ""
+if config["groupby_file"].endswith("_reciprocal_best_hits.rbh.groupby"):
+    ending = "_reciprocal_best_hits.rbh"
+elif config["groupby_file"].endswith("_RBHhmm_plus_other_species.rbh.groupby"):
+    ending = "_RBHhmm_plus_other_species.rbh"
+else:
+    raise IOError("The input groupby_file must end in _reciprocal_best_hits.rbh.groupby or _RBHhmm_plus_other_species.rbh.groupby. It currently is {}".format(config["groupby_file"].split("/")[-1]))
 all_species = list(sorted(species_string.split("_")))
-print("all_species")
+print("species_in_analysis")
 print(all_species)
 
 if len(all_species) < 3:
     raise IOError("There must be more than two species.")
 
 analyses_list = [all_species]
-print("Here is an example of the first few analyses: {}".format(analyses_list[0]))
-print("There are {} possible combinations.".format(len(analyses_list)))
-
-# make sure all of the species in the analyses are in the config
-for entry in analyses_list:
-    for thisspecies in entry:
-        if thisspecies not in config["xaxisspecies"]:
-            raise IOError ("You specified {} in the analyses, but it isn't defined in xaxisspecies".format(thisspecies))
-
-config["nways"] = len(all_species)
-
-# come up with number of RBHs
-testdf = pd.read_csv(config["groupby_with_group_column_file"], sep = "\t")
-maxval = 0
-RBH_analyses_list = []
-for index, row in testdf.iterrows():
-    print(row)
-    thislist = ast.literal_eval(row["RBH"])
-    for entry in thislist:
-        thisnumber = int(entry.split("_")[-1])
-        RBH_analyses_list.append(thisnumber)
-newstring = "RBH{}way_{}".format(len(all_species), "_".join(sorted(all_species)))
-config["RBH_groups"] = ["{}_{}".format(newstring, i) for i in RBH_analyses_list]
-
-# This is specifically for the trio odp
-config["yaxisspecies"] = config["xaxisspecies"]
-#config["xaxisspecies"]["RBH"] = {
-#              "prot_to_loc": "unwrapped_RBH/RBH/reciprocal_best_hits.chrom",
-#              "genome": "unwrapped_RBH/RBH/reciprocal_best_hits.fasta"}
-
-#make fake breaks for later analyses
-for this_axis in ["yaxisspecies"]:
-    if this_axis in config:
-        for this_one in config[this_axis]:
-            if "manual_breaks" not in config[this_axis][this_one]:
-                config[this_axis][this_one]["manual_breaks"] = []
-            if "minscafsize" not in config[this_axis][this_one]:
-                config[this_axis][this_one]["minscafsize"] = 5000
-
 
 rule all:
     input:
         # new pseudo genome
-        RBH_unwrapped = "unwrapped_RBH/RBH/reciprocal_best_hits.tsv"
+        config["tool"] + "/groupby_to_rbh/output/" + species_string + ending
 
 rule unwrap_RBH_file_with_group_column:
     input:
-        RBH_file = config["groupby_with_group_column_file"]
+        RBH_file = config["groupby_file"]
     output:
-        RBH_unwrapped = "unwrapped_RBH/RBH/reciprocal_best_hits.tsv"
+        RBH_unwrapped = config["tool"] + "/groupby_to_rbh/output/" + species_string + ending
     threads: 1
     run:
-        df = pd.read_csv(input.RBH_file, sep = "\t")
+        df = pd.read_csv(input.RBH_file, sep = "\t", index_col = None)
+
+        # get all the species in the dataframe
+        complete_species_list = [x.split("_")[0] for x in df.columns
+                                 if x.endswith("_scaf")]
 
         RBH_entries = []
         for index, row in df.iterrows():
             RBH_list = ast.literal_eval(row["RBH"])
             species_to_gene_list = {}
-            species_to_gene_pos = {}
+            species_to_gene_pos  = {}
+            species_to_gene_scaf = {}
             # make lookup tables
-            for thisspecies in all_species:
+            for thisspecies in complete_species_list:
                 # gene_col
                 colname = "{}_gene".format(thisspecies)
                 species_to_gene_list[thisspecies] = ast.literal_eval(row[colname])
                 # pos_col
                 colname = "{}_pos".format(thisspecies)
                 species_to_gene_pos[thisspecies] = ast.literal_eval(row[colname])
-
+                # handle scaf differently depending on what this is
+                colname = "{}_scaf".format(thisspecies)
+                if thisspecies in all_species:
+                    species_to_gene_scaf[thisspecies] = [colname] * len(species_to_gene_pos[thisspecies])
+                else:
+                    species_to_gene_scaf[thisspecies] = ast.literal_eval(row[colname])
             for i in range(len(RBH_list)):
-                thisgroup = row["group"]
-                thisentry = {"group": thisgroup,
-                             "RBH": RBH_list[i]}
-
-                for thisspecies in all_species:
+                thisgroup = row["gene_group"]
+                thisentry = {"RBH": RBH_list[i],
+                             "gene_group": thisgroup,
+                             "count":      row["count"],
+                             "alpha":      row["alpha"],
+                             "alpha_type": row["alpha_type"]}
+                for thisspecies in complete_species_list:
                     # get col names
                     scafcol = "{}_scaf".format(thisspecies)
                     genecol = "{}_gene".format(thisspecies)
                     poscol  = "{}_pos".format(thisspecies)
-                    thisentry[scafcol] = row[scafcol]
+                    thisentry[scafcol] = species_to_gene_scaf[thisspecies][i]
                     thisentry[genecol] = species_to_gene_list[thisspecies][i]
                     thisentry[poscol]  = species_to_gene_pos[thisspecies][i]
                 RBH_entries.append(thisentry)
 
         unwrapped = pd.DataFrame(RBH_entries)
         print(unwrapped)
-        print(unwrapped["group"].value_counts())
-        unwrapped.to_csv(output.RBH_unwrapped, sep="\t")
+        print(unwrapped["gene_group"].value_counts())
+        unwrapped.to_csv(output.RBH_unwrapped, sep="\t", index = False)
