@@ -61,13 +61,13 @@ analyses_list = [all_species]
 rule all:
     input:
         # new pseudo genome
-        config["tool"] + "/groupby_to_rbh/output/" + species_string + ending
+        config["tool"] + "/output/" + species_string + ending
 
 rule unwrap_RBH_file_with_group_column:
     input:
         RBH_file = config["groupby_file"]
     output:
-        RBH_unwrapped = config["tool"] + "/groupby_to_rbh/output/" + species_string + ending
+        RBH_unwrapped = config["tool"] + "/output/" + species_string + ending
     threads: 1
     run:
         df = pd.read_csv(input.RBH_file, sep = "\t", index_col = None)
