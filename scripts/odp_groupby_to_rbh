@@ -93,7 +93,7 @@ rule unwrap_RBH_file_with_group_column:
                 # handle scaf differently depending on what this is
                 colname = "{}_scaf".format(thisspecies)
                 if thisspecies in all_species:
-                    species_to_gene_scaf[thisspecies] = [colname] * len(species_to_gene_pos[thisspecies])
+                    species_to_gene_scaf[thisspecies] = [row[colname]] * len(species_to_gene_pos[thisspecies])
                 else:
                     species_to_gene_scaf[thisspecies] = ast.literal_eval(row[colname])
             for i in range(len(RBH_list)):

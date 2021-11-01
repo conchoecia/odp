@@ -41,7 +41,7 @@ for thissample in config["species"]:
 
 # come up with the species in the RBH
 myfile = config["RBH_file"]
-species_string = myfile.split("/")[-1].replace("_reciprocal_best_hits.tsv", "")
+species_string = myfile.split("/")[-1].replace("_reciprocal_best_hits.rbh", "")
 RBH_species = list(sorted(species_string.split("_")))
 print("RBH_species")
 print(RBH_species)
@@ -77,7 +77,7 @@ rule all:
                other_species = other_species, RBH = RBH_entries),
         #expand("hmm/searches_agg_best/{species}_hmm_best.tsv",
         #       species = config["yaxisspecies"]),
-        config["tool"] + "/output/" + species_string + "_RBHhmm_plus_other_species.RBH"
+        config["tool"] + "/output/" + species_string + "_RBHhmm_plus_other_species.rbh"
 
 rule generate_fasta_of_each_RBH:
     input:
@@ -256,7 +256,7 @@ rule collate_best_hits_into_best_hits_file:
         chrom = lambda wildcards: [config["species"][x]["prot_to_loc"] for x in
                                    other_species]
     output:
-        RBH = config["tool"] + "/output/" + species_string + "_RBHhmm_plus_other_species.RBH"
+        RBH = config["tool"] + "/output/" + species_string + "_RBHhmm_plus_other_species.rbh"
     run:
         RBH = pd.read_csv(input.RBH_file, header = 0, index_col = 0, sep = "\t")
         for thisspecies in other_species:
