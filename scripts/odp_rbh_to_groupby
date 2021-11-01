@@ -166,7 +166,7 @@ rule groupby_RBH_results:
                         done = True
                         grouped_multiple.loc[index, "alpha"] = new_alpha
                         grouped_multiple.loc[index, "alpha_type"] = "less_than"
-
+        grouped_multiple["gene_group"] = "nan"
         upfront   = ["RBH", "gene_group",
                      "count", "alpha", "alpha_type"]
         other_pt1 = [x for x in grouped_multiple.columns
