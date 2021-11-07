@@ -7,6 +7,46 @@ from itertools import combinations
 from itertools import product
 import sys
 
+def reciprocal_best_permissive_blastp_or_diamond_blastp(
+        x_to_y_blastp_results, y_to_x_blastp_results, outfile):
+    """
+    This function finds reciprocal best blastp hits between two samples.
+    The input is a blastp results file where x was blasted against y,
+      and a blastp results file where y was blasted against x.
+
+    The output format is just the rows of the blastp results from the x_to_y file.
+    Saves it as a df to outfile.
+
+    This algorithm does not have an absolute best, but leaves all possible
+      best hits based on e-value to be filtered out later by
+      analyzing a graph of the blast results
+    """
+    f_raw = pd.read_csv(x_to_y_blastp_results, sep="\t")
+    f_raw.columns = ["qseqid", "sseqid", "pident", "length",
+                   "mismatch", "gapopen", "qstart", "qend",
+                   "sstart", "send", "evalue", "bitscore"]
+    fdf = (f_raw.groupby("qseqid")
+             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
+             .reset_index(drop=True)
+          )
+
+    r_raw = pd.read_csv(y_to_x_blastp_results, sep="\t")
+    r_raw.columns = ["qseqid", "sseqid", "pident", "length",
+                   "mismatch", "gapopen", "qstart", "qend",
+                   "sstart", "send", "evalue", "bitscore"]
+    rdf = (r_raw.groupby("qseqid")
+             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
+             .reset_index(drop=True)
+          )
+    rdf.columns = ["sseqid", "qseqid", "pident", "length",
+                   "mismatch", "gapopen", "qstart", "qend",
+                   "sstart", "send", "evalue", "bitscore"]
+    rdf = rdf[["qseqid","sseqid"]]
+
+    #These are the singleton RBH
+    new_df = pd.merge(fdf, rdf,  how='inner', left_on=['qseqid','sseqid'], right_on = ['qseqid','sseqid'])
+    new_df.to_csv(outfile, sep="\t", index = False, header = False)
+
 def reciprocal_best_hits_blastp_or_diamond_blastp(
         x_to_y_blastp_results, y_to_x_blastp_results, outfile):
     """
@@ -95,6 +135,87 @@ def reciprocal_best_hits_blastp_or_diamond_blastp(
     if prelen != len(finaldf):
         raise IOError("something happened in parsing that shouldn't have. These filtering steps should not have done anything")
     finaldf.to_csv(outfile, sep="\t", index = False, header = False)
+
+def reciprocal_best_hits_jackhmmer(
+        x_to_y_blastp_results, y_to_x_blastp_results, outfile):
+    """
+    This function finds reciprocal best jackhmmer hits between two samples.
+    The input is a blastp results file where x was jackhmmer'd against y,
+      and a blastp results file where y was jackhmmer'd against x.
+
+    The output format is just the rows of the blastp results from the x_to_y file.
+    Saves it as a df to outfile.
+
+    This algorithm is permissive in that it finds the best hits between the two
+      species even if the e-values for the "best hit" are equivalent. This fixes
+      one of the problems with blastp results. The results are still reciprocal
+      best, though.
+    """
+    jackhmmercol = ["target_name", "accession",  "query_name",
+                    "accession",
+                    "evalue",  "score",          "bias",
+                    "dom_evalue2", "dom_score2", "bias2",
+                    "exp", "reg", "clu",
+                    "ov", "env", "dom", "rep", "inc",
+                    "description_of_target"]
+    f_raw = pd.read_csv(x_to_y_blastp_results,
+                        sep = "\s+", comment = "#",
+                        usecols=range(len(jackhmmercol)))
+    f_raw.columns = jackhmmercol
+    fdf = f_raw.sort_values(["query_name", "score", "evalue" ], ascending=[True, False, True]).drop_duplicates(subset="query_name")
+    #fdf = f_raw.sort_values(["query_name", "score", "evalue" ], ascending=[True, False, True]).groupby("query_name").head(2)
+
+
+    r_raw = pd.read_csv(y_to_x_blastp_results,
+                        sep="\s+", comment = "#",
+                        usecols=range(len(jackhmmercol)))
+    r_raw.columns = jackhmmercol
+    rdf = r_raw.sort_values(["query_name", "score", "evalue"], ascending=[True, False, True]).drop_duplicates(subset="query_name")
+    #rdf = r_raw.sort_values(["query_name", "score", "evalue"], ascending=[True, False, True]).groupby("query_name").head(2)
+
+    rdf.columns = ["query_name", "accession",  "target_name",
+                    "accession",
+                    "evalue",  "score",          "bias",
+                    "dom_evalue2", "dom_score2", "bias2",
+                    "exp", "reg", "clu",
+                    "ov", "env", "dom", "rep", "inc",
+                    "description_of_target"]
+
+    rdf = rdf[["target_name","query_name"]]
+
+    #These are the singleton RBH
+    new_df = pd.merge(fdf, rdf,  how='inner',
+                      left_on  = ['query_name','target_name'],
+                      right_on = ['query_name','target_name'])
+    #these rows are a little pedantic and we don't really need to do them
+    new_df = new_df.sort_values(["query_name","score"],
+                                ascending=[True, False]).drop_duplicates(
+                                    subset="query_name")
+    new_df = new_df.sort_values(["target_name","score"],
+                                ascending=[True, False]).drop_duplicates(
+                                    subset="query_name")
+
+    new_df.columns = ["sseqid", "accession",  "qseqid",
+                      "accession",
+                      "evalue",  "bitscore",          "bias",
+                      "dom_evalue2", "dom_score2", "bias2",
+                      "exp", "reg", "clu",
+                      "ov", "env", "dom", "rep", "inc",
+                      "description_of_target"]
+    new_df["pident"]   = 0
+    new_df["length"]   = 0
+    new_df["mismatch"] = 0
+    new_df["gapopen"]  = 0
+    new_df["qstart"]   = 0
+    new_df["qend"]     = 0
+    new_df["sstart"]   = 0
+    new_df["send"]     = 0
+    new_df = new_df[["qseqid", "sseqid", "pident", "length",
+                   "mismatch", "gapopen", "qstart", "qend",
+                   "sstart", "send", "evalue", "bitscore"]]
+    print(new_df)
+    new_df.to_csv(outfile, sep="\t", index = False, header = False)
+
 
 def check_legality(config):# check for legal config entries. Useful fr finding misspelled entries
     legal = ["proteins", "prot_to_loc", "genome", "genus",

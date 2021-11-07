@@ -7,6 +7,8 @@ from Bio import SeqIO
 from itertools import groupby
 from itertools import product
 import matplotlib
+from matplotlib.patches import Patch
+from matplotlib.lines import Line2D
 import math
 from operator import itemgetter
 import pandas as pd
@@ -130,10 +132,39 @@ if not ignore_Fisher:
     fisher_files.append(list(outfiles))
     fisher_files = OdpF.flatten(fisher_files)
 
+# check if prot_to_color in config
+if "prot_to_color" not in config:
+    config["prot_to_color"] = {}
+
+prot_color_files = []
+if len(config["prot_to_color"]) != 0:
+    for entry in config["prot_to_color"]:
+        if not os.path.exists(config["prot_to_color"][entry]["file"]):
+            raise IOError("{} does not exist.".format(config["prot_to_color"][entry]["file"]))
+        else:
+            # the file exists, we can add some colors
+            config["prot_to_color"][entry]["prot_to_color_dict"] = {}
+            config["prot_to_color"][entry]["group_to_color_dict"] = {}
+            with open(config["prot_to_color"][entry]["file"], "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        fields = line.split("\t")
+                        if fields[1].startswith("#"):
+                            config["prot_to_color"][entry]["prot_to_color_dict"][fields[0]] = fields[1]
+                            config["prot_to_color"][entry]["group_to_color_dict"][fields[2]] = fields[1]
+            # now we tell odp to make plots coloring with prot_to_color_dict
+            outfiles = OdpF.expand_avoid_matching(
+                "synteny_analysis/plots/synteny_colored_by_{colorscheme}/{xsample}_and_{ysample}_coloredby_{colorscheme}.pdf",
+                xsample = config["xaxisspecies"], ysample = config["yaxisspecies"], colorscheme = [entry])
+            prot_color_files.append(list(outfiles))
+    prot_color_files = OdpF.flatten(prot_color_files)
+
 rule all:
     input:
         autobreak_files,
         fisher_files,
+        prot_color_files,
         OdpF.expand_avoid_matching("synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_manualbreaks.pdf",
                 xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
         #expand_avoid_matching_x_and_y_kwargs("synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
@@ -238,7 +269,7 @@ rule make_diamond_and_blast_db_y:
         makeblastdb -in {input.pep} -dbtype prot
         """
 
-rule diamond_blast_x_to_y:
+rule diamond_or_blastp_x_to_y:
     input:
         xpep = "synteny_analysis/db/xaxis/{xsample}_prots.pep",
         ydmnd = "synteny_analysis/db/yaxis/dmnd/{ysample}_prots.dmnd",
@@ -1165,7 +1196,9 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
                  plot_x_lines = False,
                  plot_y_lines = False,
                  xprottoloc = False,
-                 yprottoloc = False):
+                 yprottoloc = False,
+                 prot_to_color_mode = False,
+                 group_to_color_dict = {}):
     """
     If the user provided a plot order, then we should not skip any scaffolds.
 
@@ -1200,7 +1233,6 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     ybreaks_df = pd.read_csv(ybreaks_file, delimiter="\t", index_col=0)
     ybreaks_df["xgene"] = ybreaks_df["xgene"].astype(str)
     ybreaks_df["ygene"] = ybreaks_df["ygene"].astype(str)
-
 
     # first make a lookup table of how to calculate the
     #  x and y coords. This lookup is just the amount of
@@ -1243,6 +1275,7 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     df["ygene"] = df["ygene"].astype(str)
 
     xgene = df["xgene"]
+    ygene = df["ygene"]
     x = df["xmiddle"]
     y = df["ymiddle"]
     bitscore = df["bitscore"]
@@ -1251,17 +1284,30 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     print("max bitscore: ", max(bitscore))
     bitscore_adjusted = [(x/max(bitscore))*60 for x in bitscore]
     colors = [(0, 0, 1.0, min( 1.0, (x/max(bitscore))*(max(bitscore)/np.mean(bitscore)))) for x in bitscore]
+    dotsize = [6 for x in bitscore]
     drops = set()
     if prot_to_color:
         for i in range(len(xgene)):
             alpha = colors[i][3]
-            try:
-                newcolor = list(matplotlib.colors.to_rgba(prot_to_color[xgene[i]]))
-            except:
+            if (xgene[i] in prot_to_color) or (ygene[i] in prot_to_color):
+                if xgene[i] in prot_to_color:
+                    newcolor = list(matplotlib.colors.to_rgba(prot_to_color[xgene[i]]))
+                elif ygene[i] in prot_to_color:
+                    newcolor = list(matplotlib.colors.to_rgba(prot_to_color[ygene[i]]))
+                if prot_to_color_mode:
+                    dotsize[i] = 15
+                    newcolor[3] = 1
+            else:
                 print("couldn't find a color for: {}".format(xgene[i]))
-                newcolor = [0,0,0,1]
+                if prot_to_color_mode:
+                    newcolor = [0.5, 0.5, 0.5, 0.2]
+                else:
+                    newcolor = [0, 0, 0, 1]
                 drops.add(i)
-            newcolor[3] = alpha
+            if prot_to_color_mode:
+                pass
+            else:
+                newcolor[3] = 1
             colors[i] = newcolor
 
     if dropmissing:
@@ -1298,6 +1344,11 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
                          bottomMargin/figHeight,    #bottom
                          dpanel_width/figWidth,   #width
                          panelHeight/figHeight])     #height
+    panellg = plt.axes([ 0/figWidth, #left
+                         0/figHeight,    #bottom
+                         0.1/figWidth,   #width
+                         figHeight/figHeight])     #height
+
     panel1.tick_params(axis='both',which='both',
                         bottom=False, labelbottom=True,
                         left=False, labelleft=True,
@@ -1313,6 +1364,25 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
                         left=False, labelleft=False,
                         right=False, labelright=False,
                         top=False, labeltop=False)
+    panellg.tick_params(axis='both',which='both',
+                        bottom=False, labelbottom=False,
+                        left=False, labelleft=False,
+                        right=False, labelright=False,
+                        top=False, labeltop=False)
+
+    # set a legend if it is prot_to_color_mode
+    if prot_to_color_mode:
+        legend_elements = [
+          Patch(facecolor=group_to_color_dict[key],
+                edgecolor='black', lw = 0,
+                label=key) for key in group_to_color_dict]
+        panellg.legend(handles=legend_elements,
+                       fontsize = 10, loc='center left')
+    [s.set_visible(False) for s in panellg.spines.values()]
+    [t.set_visible(False) for t in panellg.get_xticklines()]
+    [t.set_visible(False) for t in panellg.get_yticklines()]
+
+
     # set the panel linewidth thinner
     for this_panel in [panel1, panelxd, panelyd]:
         for axis in ['top','bottom','left','right']:
@@ -1322,8 +1392,21 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
         this_panel.spines['top'].set_visible(False)
         this_panel.spines['right'].set_visible(False)
 
+    print("size dotsize: {}".format(len(dotsize)))
+    print("size x: {}".format(len(x)))
+    print("size y: {}".format(len(y)))
+    print("prot_to_color change")
+    if prot_to_color_mode:
+        # there is a bug where prot-to_color_mode doesn't work if there are genes missing
+        dotsize = [6 for i in x]
+
+    print("BEFORE ERROR")
+    print("size dotsize: {}".format(len(dotsize)))
+    print("size x: {}".format(len(x)))
+    print("size y: {}".format(len(y)))
+    print("size colors: {}".format(len(colors)))
     panel1.scatter(x, y, color = colors,
-                   ec = None, s=6, linewidths = 0)
+                   ec = None, s=dotsize, linewidths = 0)
     print("xmax is")
     print(xmax)
     # set mins and max
@@ -2304,3 +2387,39 @@ rule plot_synteny_x_colored_by_x:
                      output.nodots_manual, prot_to_color,  True,
                      plot_x_lines = params.keep_x,
                      plot_y_lines = params.keep_y)
+
+# This plots the synteny and colors the dots based on the prot_to_color dict
+rule plot_synteny_color_by_group:
+    input:
+        dtable = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
+        plot_order = "synteny_analysis/plot_order/{xsample}_and_{ysample}_plotorder.tsv",
+        ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
+        xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
+        xbreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_auto.tsv",
+        ybreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_auto.tsv",
+        xbreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
+        ybreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
+        xprottoloc = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["prot_to_loc"],
+        yprottoloc = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"],
+        recip = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp"
+    output:
+        synplot_manual ="synteny_analysis/plots/synteny_colored_by_{colorscheme}/{xsample}_and_{ysample}_coloredby_{colorscheme}.pdf"
+    threads:
+        1
+    params:
+        xsample  = lambda wildcards: wildcards.xsample,
+        ysample  = lambda wildcards: wildcards.ysample,
+        keep_x   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["xaxisspecies"][wildcards.xsample]) or ("noxlines" in config["xaxisspecies"][wildcards.xsample])) else True,
+        keep_y   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample]) or ("noylines" in config["yaxisspecies"][wildcards.ysample])) else True,
+        prot_to_color_dict = lambda wildcards: config["prot_to_color"][wildcards.colorscheme]["prot_to_color_dict"],
+        group_to_color_dict = lambda wildcards: config["prot_to_color"][wildcards.colorscheme]["group_to_color_dict"]
+    run:
+        synteny_plot(input.dtable,   input.xcoords,  input.ycoords,
+                     params.xsample, params.ysample,
+                     input.xbreaks_manual, input.ybreaks_manual,
+                     output.synplot_manual, params.prot_to_color_dict,
+                     False,
+                     plot_x_lines = params.keep_x,
+                     plot_y_lines = params.keep_y,
+                     prot_to_color_mode = True,
+                     group_to_color_dict = params.group_to_color_dict)

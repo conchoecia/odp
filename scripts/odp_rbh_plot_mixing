@@ -115,9 +115,12 @@ def overlapping_plot(thisspecies, thischrom, chrom_size,
             y_values = [right_bottom, right_top]
             panel1.plot(x_values,y_values, color = right_color)
 
-    thistitle = "{} {} (len {} bp) {} red {} yellow".format(
-        thisspecies, thischrom, chrom_size, left_group, right_group)
-    panel1.set_title(thistitle)
+    thistitle = "{} {} (len {} bp)".format(
+        thisspecies, thischrom, chrom_size)
+    plt.figtext(0.5, 0.95, thistitle, fontsize=7, color = "black", ha ='center')
+    plt.figtext(0.49, 0.90, "{}".format(left_group), fontsize=7, color=left_color, ha ='right')
+    plt.figtext(0.51, 0.90, "{}".format(right_group), fontsize=7, color=right_color, ha ='left')
+
     plt.axis('off')
     pdf.savefig()
     plt.close()
