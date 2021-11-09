@@ -29,6 +29,13 @@ config["tool"] = "odp_rbh_to_groupby"
 
 OdpF.check_legality(config)
 
+# randomizations
+if not "num_permutations" in config:
+    raise IOError("you must specify num_permutations in the config to help calculate the false discovery rate")
+num_permutations_per_round=100000
+num_permutation_rounds = int(config["num_permutations"]/num_permutations_per_round)
+#print("number of randomization rounds is : {}".format(num_rand_rounds))
+
 # make sure we have the right info in the config.yaml
 if "rbh_file" not in config:
     raise IOError("You must specify 'rbh_file' in config")
@@ -70,13 +77,12 @@ config["nways"] = len(all_species)
 rule all:
     input:
         # the alpha file
-        config["tool"] + "/output/" + species_string + "_FDR.tsv",
-        # the groupby file
-        config["tool"] + "/output/" + species_string + ending + ".groupby"
+        config["tool"] + "/output/FDR/" + species_string + "_FDR.tsv",
+        ## the groupby file
+        #config["tool"] + "/output/" + species_string + ending + ".groupby"
 
-def permute_10k(df):
+def permute_n_times(df, num_permutations):
     observations = {x: 0 for x in range(1, 5000)}
-    num_permutations = 10000
     scafs = list(df.columns)
     for i in range(num_permutations):
         for thisscaf in df.columns:
@@ -88,31 +94,54 @@ def permute_10k(df):
                print("  - Finished {}/{} ({:.2f}%) analyses.  ".format(
                    i, num_permutations,
                    (i/num_permutations)*100), end = "\r")
+    observations = {key: observations[key] for key in observations
+                     if observations[key] != 0}
     return observations
 
-rule permutation_test_for_compariasons:
+rule single_permutation_test:
+    """
+    This performs one FDR test of 100000 rounds.
+
+    These results will be cat'd with the results from other threads.
+    """
     input:
         rbh = config["rbh_file"]
     output:
-        alpha = config["tool"] + "/output/" + species_string + "_FDR.tsv"
-    threads: workflow.cores - 1
+        alpha = config["tool"] + "/output/FDR/sim/" + species_string + "_sim_{simround}.tsv"
+    threads: 1
     params:
-        num_permutations = config["num_permutations"]
+        thisround = lambda wildcards: wildcards.simround,
+        num_permutations = num_permutations_per_round
     run:
         df = pd.read_csv(input.rbh, sep = "\t", index_col = 0)
         scafs = ["{}_scaf".format(x) for x in all_species]
         df = df[scafs]
 
-        num_analyses = int(params.num_permutations/10000)
-        values = (df.copy() for i in range(num_analyses))
-        #print(len(values))
+        observations = permute_n_times(df, params.num_permutations)
+        with open(output.alpha, "w") as f:
+            for key in observations:
+                print("{}\t{}".format(key, observations[key]),
+                      file = f)
 
+rule permutation_test_for_compariasons:
+    input:
+        fdr_results = expand(config["tool"] + "/output/FDR/sim/" + species_string + "_sim_{simround}.tsv",
+               simround = list(range(1,num_permutation_rounds+1)))
+    output:
+        alpha = config["tool"] + "/output/FDR/" + species_string + "_FDR.tsv"
+    threads: workflow.cores - 1
+    params:
+        num_permutations = config["num_permutations"]
+    run:
         observations = {x: 0 for x in range(1, 5000)}
-        with Pool(threads) as pool:
-            res = pool.map(permute_10k, values)
-            for thisdict in res:
-                for key in thisdict:
-                    observations[key] += thisdict[key]
+        for thisfile in input.fdr_results:
+            with open(thisfile, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        print(line)
+                        fields = [int(x) for x in line.split()]
+                        observations[fields[0]] += fields[1]
 
         resultsDF = pd.Series(observations).to_frame()
         resultsDF.reset_index(inplace = True)
