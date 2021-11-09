@@ -78,8 +78,8 @@ rule all:
     input:
         # the alpha file
         config["tool"] + "/output/FDR/" + species_string + "_FDR.tsv",
-        ## the groupby file
-        #config["tool"] + "/output/" + species_string + ending + ".groupby"
+        # the groupby file
+        config["tool"] + "/output/" + species_string + ending + ".groupby"
 
 def permute_n_times(df, num_permutations):
     observations = {x: 0 for x in range(1, 5000)}
@@ -154,7 +154,7 @@ rule permutation_test_for_compariasons:
 rule groupby_RBH_results:
     input:
         rbh   = config["rbh_file"],
-        alpha = config["tool"] + "/output/" + species_string + "_FDR.tsv"
+        alpha = config["tool"] + "/output/FDR/" + species_string + "_FDR.tsv"
     output:
         rbh  = config["tool"] + "/output/" + species_string + ending + ".groupby"
     threads: 1
