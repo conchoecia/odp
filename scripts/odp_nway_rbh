@@ -73,7 +73,7 @@ config["yaxisspecies"] = config["species"]
 rule all:
     input:
         # find the reciprocal best hits
-        [config["tool"] + "/RBH/{}_reciprocal_best_hits.tsv".format(
+        [config["tool"] + "/RBH/{}_reciprocal_best_hits.rbh".format(
             "_".join(thisanalysis)) for thisanalysis in analyses_list],
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
@@ -260,7 +260,7 @@ rule n_ways_reciprocal_best:
             "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])])),
         blast_network      = config["tool"] + "/blastp_results/reciprocal_best/{}_edges.txt".format(
             "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])])),
-        RBH                = config["tool"] + "/RBH/{}_reciprocal_best_hits.tsv".format(
+        RBH                = config["tool"] + "/RBH/{}_reciprocal_best_hits.rbh".format(
             "_".join(["{{sample{}}}".format(i) for i in range(config["nways"])]))
     threads: 1
     params:
