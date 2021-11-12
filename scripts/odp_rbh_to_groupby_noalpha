@@ -60,7 +60,7 @@ rule groupby_RBH_results:
 
         # sort
         grouped_multiple = grouped_multiple.sort_values(by="count", ascending=False)
-        grouped_multiple["gene_group"] = "nan"
+        grouped_multiple["gene_group"] = "None"
         upfront   = ["RBH", "gene_group", "count"]
         other_pt1 = [x for x in grouped_multiple.columns
                      if x.split("_")[0] not in species_list]
@@ -70,4 +70,4 @@ rule groupby_RBH_results:
                                     if x.split("_")[0] in species_list]))
         upfront_species_other = upfront + species_cols + other_pt2
         grouped_multiple = grouped_multiple[upfront_species_other]
-        grouped_multiple.to_csv(output.rbh, sep="\t", na_rep = "nan", index = False)
+        grouped_multiple.to_csv(output.rbh, sep="\t", na_rep = "None", index = False)
