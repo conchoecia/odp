@@ -4,7 +4,7 @@ This script takes the grouby RBH hits file, to which a group column has
   reciprocal best hit file.
 
 the input file must be named:
-  {sample1}_{sample2}_{sampleN}_reciprocal_best_hits.groupby.tsv
+  {sample1}_{sample2}_{sampleN}_reciprocal_best_hits.*.groupby
 
 ... where sample1, sample2, sampleN is the sample name in the config.
 
@@ -30,90 +30,86 @@ config["tool"] = "odp_groupby_to_rbh"
 
 OdpF.check_legality(config)
 
-if "groupby_file" not in config:
-    raise IOError("You must specify 'groupby_file' in config")
-
-# make sure none of the sample names have underscores
-for thissample in config["species"]:
-    if "_" in thissample:
-        raise IOError("Sample names can't have '_' char: {}".format(thissample))
-
+if "groupby_files" not in config:
+    raise IOError("You must specify 'groupby_files' in config")
 
 # come up with all of the analyses
-myfile = config["groupby_file"]
-species_string = myfile.split("/")[-1].replace("_reciprocal_best_hits.rbh.groupby", "").replace("_RBHhmm_plus_other_species.rbh.groupby", "")
-ending = ""
-if config["groupby_file"].endswith("_reciprocal_best_hits.rbh.groupby"):
-    ending = "_reciprocal_best_hits.rbh"
-elif config["groupby_file"].endswith("_RBHhmm_plus_other_species.rbh.groupby"):
-    ending = "_RBHhmm_plus_other_species.rbh"
-else:
-    raise IOError("The input groupby_file must end in _reciprocal_best_hits.rbh.groupby or _RBHhmm_plus_other_species.rbh.groupby. It currently is {}".format(config["groupby_file"].split("/")[-1]))
-all_species = list(sorted(species_string.split("_")))
-print("species_in_analysis")
-print(all_species)
-
-if len(all_species) < 3:
-    raise IOError("There must be more than two species.")
-
-analyses_list = [all_species]
+analyses = []
+for thisfile in config["groupby_files"]:
+    species_string = thisfile.split("/")[-1].split("_reciprocal_best_hits")[0]
+    print(species_string)
+    num_species = len(species_string.split("_"))
+    if num_species < 3:
+        raise IOError("There must be more than two species.")
+    analyses.append(species_string)
 
 rule all:
     input:
-        # new pseudo genome
-        config["tool"] + "/output/" + species_string + ending
+        # just the unwrapped data
+        expand(config["tool"] + "/output/{sp}.unwrapped.rbh",
+               sp = analyses)
 
 rule unwrap_RBH_file_with_group_column:
     input:
-        RBH_file = config["groupby_file"]
+        RBH_files = config["groupby_files"]
     output:
-        RBH_unwrapped = config["tool"] + "/output/" + species_string + ending
+        RBH_unwrapped = expand(config["tool"] + "/output/{sp}.unwrapped.rbh",
+                               sp = analyses)
+    params:
+        prefix = config["tool"] + "/output/"
     threads: 1
     run:
-        df = pd.read_csv(input.RBH_file, sep = "\t", index_col = None)
+        for thisfile in input.RBH_files:
+            species_string = thisfile.split("/")[-1].split("_reciprocal_best_hits")[0]
+            print(species_string)
+            df = pd.read_csv(thisfile, sep = "\t", index_col = None)
 
-        # get all the species in the dataframe
-        complete_species_list = [x.split("_")[0] for x in df.columns
-                                 if x.endswith("_scaf")]
+            # get all the species in the dataframe
+            complete_species_list = [x.split("_")[0] for x in df.columns
+                                     if x.endswith("_scaf")]
+            filename_species_list = species_string.split("_")
+            # check that species list matches the species_string
+            assert species_string == "_".join(complete_species_list)
 
-        RBH_entries = []
-        for index, row in df.iterrows():
-            RBH_list = ast.literal_eval(row["RBH"])
-            species_to_gene_list = {}
-            species_to_gene_pos  = {}
-            species_to_gene_scaf = {}
-            # make lookup tables
-            for thisspecies in complete_species_list:
-                # gene_col
-                colname = "{}_gene".format(thisspecies)
-                species_to_gene_list[thisspecies] = ast.literal_eval(row[colname])
-                # pos_col
-                colname = "{}_pos".format(thisspecies)
-                species_to_gene_pos[thisspecies] = ast.literal_eval(row[colname])
-                # handle scaf differently depending on what this is
-                colname = "{}_scaf".format(thisspecies)
-                if thisspecies in all_species:
-                    species_to_gene_scaf[thisspecies] = [row[colname]] * len(species_to_gene_pos[thisspecies])
-                else:
-                    species_to_gene_scaf[thisspecies] = ast.literal_eval(row[colname])
-            for i in range(len(RBH_list)):
-                thisgroup = row["gene_group"]
-                thisentry = {"RBH": RBH_list[i],
-                             "gene_group": thisgroup,
-                             "count":      row["count"],
-                             "alpha":      row["alpha"],
-                             "alpha_type": row["alpha_type"]}
+            RBH_entries = []
+            for index, row in df.iterrows():
+                RBH_list = ast.literal_eval(row["RBH"])
+                species_to_gene_list = {}
+                species_to_gene_pos  = {}
+                species_to_gene_scaf = {}
+                # make lookup tables
                 for thisspecies in complete_species_list:
-                    # get col names
-                    scafcol = "{}_scaf".format(thisspecies)
-                    genecol = "{}_gene".format(thisspecies)
-                    poscol  = "{}_pos".format(thisspecies)
-                    thisentry[scafcol] = species_to_gene_scaf[thisspecies][i]
-                    thisentry[genecol] = species_to_gene_list[thisspecies][i]
-                    thisentry[poscol]  = species_to_gene_pos[thisspecies][i]
-                RBH_entries.append(thisentry)
+                    # gene_col
+                    colname = "{}_gene".format(thisspecies)
+                    species_to_gene_list[thisspecies] = ast.literal_eval(row[colname])
+                    # pos_col
+                    colname = "{}_pos".format(thisspecies)
+                    species_to_gene_pos[thisspecies] = ast.literal_eval(row[colname])
+                    # handle scaf differently depending on what this is
+                    colname = "{}_scaf".format(thisspecies)
+                    if thisspecies in filename_species_list:
+                        species_to_gene_scaf[thisspecies] = [row[colname]] * len(species_to_gene_pos[thisspecies])
+                    else:
+                        species_to_gene_scaf[thisspecies] = ast.literal_eval(row[colname])
+                for i in range(len(RBH_list)):
+                    thisgroup = row["gene_group"]
+                    thisentry = {"RBH": RBH_list[i],
+                                 "gene_group": thisgroup,
+                                 "count":      row["count"],
+                                 "alpha":      row["alpha"],
+                                 "alpha_type": row["alpha_type"]}
+                    for thisspecies in complete_species_list:
+                        # get col names
+                        scafcol = "{}_scaf".format(thisspecies)
+                        genecol = "{}_gene".format(thisspecies)
+                        poscol  = "{}_pos".format(thisspecies)
+                        thisentry[scafcol] = species_to_gene_scaf[thisspecies][i]
+                        thisentry[genecol] = species_to_gene_list[thisspecies][i]
+                        thisentry[poscol]  = species_to_gene_pos[thisspecies][i]
+                    RBH_entries.append(thisentry)
 
-        unwrapped = pd.DataFrame(RBH_entries)
-        print(unwrapped)
-        print(unwrapped["gene_group"].value_counts())
-        unwrapped.to_csv(output.RBH_unwrapped, sep="\t", index = False)
+            unwrapped = pd.DataFrame(RBH_entries)
+            unwrapped = unwrapped[[x for x in unwrapped.columns
+                                   if x not in ["count", "alpha", "alpha_type"]]]
+            outfile = params.prefix + species_string + ".unwrapped.rbh"
+            unwrapped.to_csv(outfile, sep="\t", na_rep = "nan", index = False)
