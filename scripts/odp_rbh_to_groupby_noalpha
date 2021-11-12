@@ -1,0 +1,73 @@
+"""
+This converts an rbh file to a groupby file.
+
+Doesn't calculate alpha values.
+"""
+
+import numpy as np
+import odp_functions as OdpF
+import pandas as pd
+
+configfile: "config.yaml"
+
+config["tool"] = "odp_rbh_to_groupby_noalpha"
+
+OdpF.check_legality(config)
+
+
+# make sure we have the right info in the config.yaml
+if "rbh_file" not in config:
+    raise IOError("You must specify 'rbh_file' in config")
+
+# get the species name from the pandas
+tempdf = pd.read_csv(config["rbh_file"], sep = "\t", index_col = 0)
+species_list = [x.replace("_scaf", "") for x in tempdf.columns
+                if "_scaf" in x]
+species_string = "_".join(species_list)
+print(species_list)
+
+if len(species_list) < 3:
+    raise IOError("There must be more than two species.")
+
+rule all:
+    input:
+        # the groupby file
+        config["tool"] + "/output/" + species_string + ".groupby"
+
+rule groupby_RBH_results:
+    input:
+        rbh   = config["rbh_file"],
+    output:
+        rbh  = config["tool"] + "/output/" + species_string + ".groupby"
+    threads: 1
+    run:
+        df = pd.read_csv(input.rbh, sep = "\t")
+        #df = df.fillna(-1)
+        species_list = [x.replace("_scaf", "") for x in df.columns
+                        if "_scaf" in x]
+        species_string = "_".join(species_list)
+
+        groupbycols = ["{}_scaf".format(x) for x in species_list]
+
+        # calculate the alpha score for each level
+        df = df.reset_index(drop = True)
+        print(df)
+        print(df.columns)
+        grouped_multiple = df.groupby(groupbycols, dropna = False).agg(list).reset_index()
+
+        # get the size
+        grouped_multiple["count"] = grouped_multiple.RBH.str.len()
+
+        # sort
+        grouped_multiple = grouped_multiple.sort_values(by="count", ascending=False)
+        grouped_multiple["gene_group"] = "nan"
+        upfront   = ["RBH", "gene_group", "count"]
+        other_pt1 = [x for x in grouped_multiple.columns
+                     if x.split("_")[0] not in species_list]
+        other_pt2 = list(sorted([x for x in other_pt1
+                                 if x not in upfront]))
+        species_cols = list(sorted([x for x in grouped_multiple.columns
+                                    if x.split("_")[0] in species_list]))
+        upfront_species_other = upfront + species_cols + other_pt2
+        grouped_multiple = grouped_multiple[upfront_species_other]
+        grouped_multiple.to_csv(output.rbh, sep="\t", na_rep = "nan", index = False)
