@@ -36,12 +36,30 @@ if "groupby_files" not in config:
 # come up with all of the analyses
 analyses = []
 for thisfile in config["groupby_files"]:
-    species_string = thisfile.split("/")[-1].split("_reciprocal_best_hits")[0]
+    df = pd.read_csv(thisfile, sep = "\t", index_col = None)
+    all_species = [x.replace("_scaf","") for x in df.columns
+                   if x.endswith("_scaf")]
+    species_string = "_".join(sorted(all_species))
+
     print(species_string)
-    num_species = len(species_string.split("_"))
+    num_species = len(all_species)
     if num_species < 3:
         raise IOError("There must be more than two species.")
     analyses.append(species_string)
+
+def parse_pd_list_or_string(pd_list, rowcount):
+    templist = []
+    if type(pd_list) == str:
+        for entry in ["nan", "NaN"]:
+            pd_list = pd_list.replace(entry, "None")
+        if '[' in pd_list:
+            # the thing is a list, parse it as a list
+            return ast.literal_eval(pd_list)
+        else:
+            # if it isn't a list, just
+            return [pd_list] * rowcount
+    elif (type(pd_list) == float) and (np.isnan(pd_list)):
+        return [None] * rowcount
 
 rule all:
     input:
@@ -60,16 +78,12 @@ rule unwrap_RBH_file_with_group_column:
     threads: 1
     run:
         for thisfile in input.RBH_files:
-            species_string = thisfile.split("/")[-1].split("_reciprocal_best_hits")[0]
-            print(species_string)
             df = pd.read_csv(thisfile, sep = "\t", index_col = None)
-
             # get all the species in the dataframe
             complete_species_list = [x.split("_")[0] for x in df.columns
                                      if x.endswith("_scaf")]
-            filename_species_list = species_string.split("_")
-            # check that species list matches the species_string
-            assert species_string == "_".join(complete_species_list)
+            species_string = "_".join(sorted(complete_species_list))
+            print(species_string)
 
             RBH_entries = []
             for index, row in df.iterrows():
@@ -79,25 +93,26 @@ rule unwrap_RBH_file_with_group_column:
                 species_to_gene_scaf = {}
                 # make lookup tables
                 for thisspecies in complete_species_list:
-                    # gene_col
-                    colname = "{}_gene".format(thisspecies)
-                    species_to_gene_list[thisspecies] = ast.literal_eval(row[colname])
-                    # pos_col
-                    colname = "{}_pos".format(thisspecies)
-                    species_to_gene_pos[thisspecies] = ast.literal_eval(row[colname])
-                    # handle scaf differently depending on what this is
-                    colname = "{}_scaf".format(thisspecies)
-                    if thisspecies in filename_species_list:
-                        species_to_gene_scaf[thisspecies] = [row[colname]] * len(species_to_gene_pos[thisspecies])
-                    else:
-                        species_to_gene_scaf[thisspecies] = ast.literal_eval(row[colname])
+                    rowcount = row["count"]
+                    parse_pairs = [("gene", species_to_gene_list),
+                                   ("pos",  species_to_gene_pos),
+                                   ("scaf", species_to_gene_scaf) ]
+                    for thiscol, thislist in parse_pairs:
+                        # gene_col
+                        colname = "{}_{}".format(thisspecies, thiscol)
+                        #species_to_gene_list[thisspecies] = ast.literal_eval(row[colname])
+                        thislist[thisspecies] = parse_pd_list_or_string(
+                                                             row[colname], rowcount)
+
                 for i in range(len(RBH_list)):
                     thisgroup = row["gene_group"]
                     thisentry = {"RBH": RBH_list[i],
                                  "gene_group": thisgroup,
-                                 "count":      row["count"],
-                                 "alpha":      row["alpha"],
-                                 "alpha_type": row["alpha_type"]}
+                                 "count":      row["count"]}
+                    if "alpha" in row:
+                        thisentry["alpha"] = row["alpha"]
+                    if "alpha_type" in row:
+                        thisentry["alpha_type"] = row["alpha_type"]
                     for thisspecies in complete_species_list:
                         # get col names
                         scafcol = "{}_scaf".format(thisspecies)
@@ -112,4 +127,5 @@ rule unwrap_RBH_file_with_group_column:
             unwrapped = unwrapped[[x for x in unwrapped.columns
                                    if x not in ["count", "alpha", "alpha_type"]]]
             outfile = params.prefix + species_string + ".unwrapped.rbh"
-            unwrapped.to_csv(outfile, sep="\t", na_rep = "nan", index = False)
+            print(outfile)
+            unwrapped.to_csv(outfile, sep="\t", na_rep = "None", index = False)
