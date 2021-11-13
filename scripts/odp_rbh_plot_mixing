@@ -148,7 +148,6 @@ rule read_in_genome_sizes:
                     file = outhandle)
         outhandle.close()
 
-
 rule gen_mixing_plots:
     input:
         rbh = config["rbh_file"],
@@ -163,16 +162,28 @@ rule gen_mixing_plots:
     run:
         merge_pairs = config["merge_pairs"]
         separate    = config["separate"]
-        RBHfile     = config["rbh_file"]
+        rbhfile     = config["rbh_file"]
 
-        df = pd.read_csv(RBHfile, sep = "\t", header = 0,
+        df = pd.read_csv(rbhfile, sep = "\t", header = 0,
                          na_values="None", index_col = None)
         #for thiscol in df.columns:
         #    if thiscol.endswith("_pos"):
         #        df[thiscol] = df[thiscol].astype(float)
         #        df[thiscol] = df[thiscol].astype(int)
 
-        species_list = [x.split("_")[0] for x in df.columns if x.endswith("gene")]
+        species_list = [x.split("_")[0] for x in df.columns if x.endswith("_gene")]
+
+        # tell us if there are missing species in either the config.yaml
+        #  or in the species list
+        config_missing_in_rbh_file = [x for x in species_list
+                                      if x not in config["species"]]
+        rbh_missing_in_config_file = [x for x in config["species"]
+                                      if x not in species_list]
+        if len(config_missing_in_rbh_file):
+            raise IOError("There are some species in the config file that are missing in the rbh file: {}".format(config_missing_in_rbh_file))
+        if len(rbh_missing_in_config_file):
+            raise IOError("There are some species in the rbh file that are missing in the config: {}".format(rbh_missing_in_config_file))
+
 
         species_to_genome_size = {}
         # we need the genome sizes for everything
@@ -198,6 +209,8 @@ rule gen_mixing_plots:
                                                    thisspecies)) as pdf:
                 for thispair in merge_pairs:
                     species_chroms = list(df["{}_scaf".format(thisspecies)].unique())
+                    species_chroms = [x for x in species_chroms
+                                      if x not in [None, np.nan, "nan", "NaN"] ]
                     for thischrom in species_chroms:
                         left_group  = thispair[0]
                         right_group = thispair[1]

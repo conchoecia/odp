@@ -245,7 +245,7 @@ rule best_gene_for_each_hmm:
 rule collate_best_hits_into_best_hits_file:
     """
     put the HMM best hits info into a single file for all species.
-    we need a {}_gene, {}_scaf, and {}_pos column for each new species we put in.
+     we need a {}_gene, {}_scaf, and {}_pos column for each new species we put in.
     """
     input:
         rbh_file = config["rbh_file"],
@@ -256,7 +256,7 @@ rule collate_best_hits_into_best_hits_file:
     output:
         rbh = config["tool"] + "/output/" + species_string + "_rbhhmm_plus_other_species.rbh"
     run:
-        rbh = pd.read_csv(input.rbh_file, header = 0, index_col = 0, sep = "\t")
+        rbh = pd.read_csv(input.rbh_file, header = 0, index_col = None, sep = "\t")
         for thisspecies in other_species:
             thischrom = config["species"][thisspecies]["prot_to_loc"]
             species_gene_to_chrom = {}
