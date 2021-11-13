@@ -26,6 +26,9 @@ config["tool"] = "odp_rbh_to_HMM"
 
 OdpF.check_legality(config)
 
+if "missing_ok" not in config:
+    config["missing_ok"] == False
+
 if not "rbh_file" in config:
     raise IOError("You must specify 'rbh_file' in config.")
 
@@ -33,7 +36,7 @@ if not "species" in config:
     raise IOError("You must specify all of the species that will be involved in this analysis in the config.yaml file.")
 
 # come up with the species in the rbh
-testdf = pd.read_csv(config["rbh_file"], sep = "\t", index_col = 0)
+testdf = pd.read_csv(config["rbh_file"], sep = "\t", index_col = None)
 rbh_species = [x.replace("_scaf", "") for x in testdf.columns
                if x.endswith("_scaf")]
 species_string = "_".join(sorted(rbh_species))
@@ -54,8 +57,7 @@ config["nways"] = len(rbh_species)
 
 # come up with number of rbhs
 newstring = "rbh{}way_{}".format(len(rbh_species), "_".join(sorted(rbh_species)))
-testdf = pd.read_csv(config["rbh_file"], sep = "\t", index_col = 0)
-rbh_entries = rbh_species
+rbh_entries = list(testdf["rbh"])
 
 rule all:
     input:
@@ -112,11 +114,14 @@ rule generate_fasta_of_each_rbh:
                     rbh_to_records[thisrbh].append(record)
 
         # make sure that all entries have as many sequences as species
-        print(" - Verifying that the records are all complete.")
-        for thisrbh in rbh_to_records:
-            if len(rbh_to_records[thisrbh]) != len(rbh_species):
-                raise IOError("{} only has {} genes".format(
-                    thisrbh, len(rbh_to_records[thisrbh])))
+        if config["missing_ok"]:
+            print(" - Missing records are OK. This is good for rbh_merge.")
+        else:
+            print(" - Verifying that the records are all complete.")
+            for thisrbh in rbh_to_records:
+                if len(rbh_to_records[thisrbh]) != len(rbh_species):
+                    raise IOError("{} only has {} genes".format(
+                        thisrbh, len(rbh_to_records[thisrbh])))
 
         # print out all of the records to fasta files
         print(" - Printing out the FASTA records.")
