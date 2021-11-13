@@ -48,14 +48,14 @@ for thissample in config["species"]:
 
 # come up with all of the analyses
 myfile = config["rbh_file"]
-species_string = myfile.split("/")[-1].replace("_reciprocal_best_hits.rbh", "").replace("_RBHhmm_plus_other_species.rbh", "")
+species_string = myfile.split("/")[-1].replace("_reciprocal_best_hits.rbh", "").replace("_rbhhmm_plus_other_species.rbh", "")
 ending = ""
 if config["rbh_file"].endswith("_reciprocal_best_hits.rbh"):
     ending = "_reciprocal_best_hits.rbh"
-elif config["rbh_file"].endswith("_RBHhmm_plus_other_species.rbh"):
-    ending = "_RBHhmm_plus_other_species.rbh"
+elif config["rbh_file"].endswith("_rbhhmm_plus_other_species.rbh"):
+    ending = "_rbhhmm_plus_other_species.rbh"
 else:
-    raise IOError("The input rbh_file must end in _reciprocal_best_hits.rbh or _RBHhmm_plus_other_species.rbh. It currently is {}".format(config["rbh_file"].split("/")[-1]))
+    raise IOError("The input rbh_file must end in _reciprocal_best_hits.rbh or _rbhhmm_plus_other_species.rbh. It currently is {}".format(config["rbh_file"].split("/")[-1]))
 all_species = list(sorted(species_string.split("_")))
 print("species_in_analysis")
 print(all_species)
@@ -150,7 +150,7 @@ rule permutation_test_for_compariasons:
         print(resultsDF)
         resultsDF.to_csv(output.alpha, sep="\t", index = False)
 
-rule groupby_RBH_results:
+rule groupby_rbh_results:
     input:
         rbh   = config["rbh_file"],
         alpha = config["tool"] + "/output/FDR/" + species_string + "_FDR.tsv"
@@ -158,7 +158,7 @@ rule groupby_RBH_results:
         rbh  = config["tool"] + "/output/" + species_string + ending + ".groupby"
     threads: 1
     run:
-        species_string = myfile.split("/")[-1].replace("_reciprocal_best_hits.rbh", "").replace("_RBHhmm_plus_other_species.rbh", "")
+        species_string = myfile.split("/")[-1].replace("_reciprocal_best_hits.rbh", "").replace("_rbhhmm_plus_other_species.rbh", "")
         all_species = [x for x in species_string.split("_")]
         match_string = "_".join(all_species)
 
@@ -173,7 +173,7 @@ rule groupby_RBH_results:
         grouped_multiple = df.groupby(groupbycols).agg(list).reset_index()
 
         # get the size
-        grouped_multiple["count"] = grouped_multiple.RBH.str.len()
+        grouped_multiple["count"] = grouped_multiple.rbh.str.len()
         grouped_mutiple = grouped_multiple.loc[grouped_multiple["count"] > 1, ]
 
         # sort
@@ -195,7 +195,7 @@ rule groupby_RBH_results:
                         grouped_multiple.loc[index, "alpha"] = new_alpha
                         grouped_multiple.loc[index, "alpha_type"] = "less_than"
         grouped_multiple["gene_group"] = "None"
-        upfront   = ["RBH", "gene_group",
+        upfront   = ["rbh", "gene_group",
                      "count", "alpha", "alpha_type"]
         other_pt1 = [x for x in grouped_multiple.columns
                      if x.split("_")[0] not in all_species]

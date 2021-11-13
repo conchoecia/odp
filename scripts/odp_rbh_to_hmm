@@ -1,9 +1,10 @@
 """
-This script takes a RBH file from odp_trio, and performs an HMM search against
+This script takes a rbh file from odp_trio, and performs an HMM search against
 all of the other species in the config file.
 
-The output of this is an RBH .tsv file, with or without a group column,
- that has the RBHs and their orthologs.
+The output of this is an rbh .tsv file, with or without a group column,
+ that has the rbhs and their orthologs. It is allowed for there to be missing
+ reads.
 """
 
 import ast
@@ -21,123 +22,115 @@ import statistics
 
 configfile: "config.yaml"
 
-config["tool"] = "odp_RBH_to_HMM"
+config["tool"] = "odp_rbh_to_HMM"
 
 OdpF.check_legality(config)
 
-if not "RBH_file" in config:
-    raise IOError("You must specify 'RBH_file' in config, and it must be named just like the output of odp_trio: {species1}_{species_N}_reciprocal_best_hits.tsv")
-
-if not "_reciprocal_best_hits.tsv" in config["RBH_file"]:
-    raise IOError("The 'RBH_file' in config must be named just like the output of odp_trio: {species1}_{species_N}_reciprocal_best_hits.tsv")
+if not "rbh_file" in config:
+    raise IOError("You must specify 'rbh_file' in config.")
 
 if not "species" in config:
     raise IOError("You must specify all of the species that will be involved in this analysis in the config.yaml file.")
 
-# make sure none of the sample names have underscores
-for thissample in config["species"]:
-    if "_" in thissample:
-        raise IOError("Sample names can't have '_' char: {}".format(thissample))
+# come up with the species in the rbh
+testdf = pd.read_csv(config["rbh_file"], sep = "\t", index_col = 0)
+rbh_species = [x.replace("_scaf", "") for x in testdf.columns
+               if x.endswith("_scaf")]
+species_string = "_".join(sorted(rbh_species))
 
-# come up with the species in the RBH
-myfile = config["RBH_file"]
-species_string = myfile.split("/")[-1].replace("_reciprocal_best_hits.rbh", "")
-RBH_species = list(sorted(species_string.split("_")))
-print("RBH_species")
-print(RBH_species)
-
-if len(RBH_species) < 3:
-    raise IOError("There must be at least two species in the RBH file.")
+if len(rbh_species) < 3:
+    raise IOError("There must be at least two species in the rbh file.")
 
 # come up with other species to perform the HMM search against
-other_species = [x for x in config["species"] if x not in RBH_species]
+other_species = [x for x in config["species"] if x not in rbh_species]
 print()
 print("other_species")
 print(other_species)
 
-if len(RBH_species) < 1:
+if len(rbh_species) < 1:
     raise IOError("There must be at least one species to search against.")
 
-config["nways"] = len(RBH_species)
+config["nways"] = len(rbh_species)
 
-# come up with number of RBHs
-newstring = "RBH{}way_{}".format(len(RBH_species), "_".join(sorted(RBH_species)))
-testdf = pd.read_csv(config["RBH_file"], sep = "\t", index_col = 0)
-RBH_entries = list(testdf["RBH"])
+# come up with number of rbhs
+newstring = "rbh{}way_{}".format(len(rbh_species), "_".join(sorted(rbh_species)))
+testdf = pd.read_csv(config["rbh_file"], sep = "\t", index_col = 0)
+rbh_entries = rbh_species
 
 rule all:
     input:
-        #expand(config["tool"] + "/fasta/unaligned/{RBH}.fasta",
-        #       RBH = RBH_entries),
-        #expand(config["tool"] + "/hmm/hmms/{RBH}.hmm",
-        #       RBH = RBH_entries),
-        #expand(config["tool"] + "/hmm/searches/{other_species}/{RBH}_against_{other_species}.tsv",
-        #       other_species = other_species, RBH = RBH_entries),
+        #expand(config["tool"] + "/fasta/unaligned/{rbh}.fasta",
+        #       rbh = rbh_entries),
+        #expand(config["tool"] + "/hmm/hmms/{rbh}.hmm",
+        #       rbh = rbh_entries),
+        #expand(config["tool"] + "/hmm/searches/{other_species}/{rbh}_against_{other_species}.tsv",
+        #       other_species = other_species, rbh = rbh_entries),
         expand(config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.sorted.tsv",
-               other_species = other_species, RBH = RBH_entries),
+               other_species = other_species, rbh = rbh_entries),
         #expand("hmm/searches_agg_best/{species}_hmm_best.tsv",
         #       species = config["yaxisspecies"]),
-        config["tool"] + "/output/" + species_string + "_RBHhmm_plus_other_species.rbh"
+        config["tool"] + "/output/" + species_string + "_rbhhmm_plus_other_species.rbh"
 
-rule generate_fasta_of_each_RBH:
+rule generate_fasta_of_each_rbh:
     input:
-        RBH = config["RBH_file"],
+        rbh = config["rbh_file"],
         proteins = lambda wildcards: [config["species"][x]["proteins"]
-                    for x in RBH_species]
+                    for x in rbh_species]
     output:
-        MBH_fasta = expand(config["tool"] + "/fasta/unaligned/{RBH}.fasta",
-                           RBH = RBH_entries)
+        MBH_fasta = expand(config["tool"] + "/fasta/unaligned/{rbh}.fasta",
+                           rbh = rbh_entries)
     threads: 1
     run:
-        print(" - Reading the dataframe of RBHs.")
-        df = pd.read_csv(input.RBH, index_col = 0, sep = "\t")
+        print(" - Reading the dataframe of rbhs.")
+        df = pd.read_csv(input.rbh, index_col = None, sep = "\t")
+        print(df)
 
-        # make a dict of gene_to_RBH
-        print(" - Making a dict of gene_to_RBH")
-        species_to_gene_to_RBH = {}
+        # make a dict of gene_to_rbh
+        print(" - Making a dict of gene_to_rbh")
+        species_to_gene_to_rbh = {}
         for index, row in df.iterrows():
-            thisRBH = row["RBH"]
-            for this_species in RBH_species:
-                if this_species not in species_to_gene_to_RBH:
-                    species_to_gene_to_RBH[this_species] = {}
+            thisrbh = row["rbh"]
+            for this_species in rbh_species:
+                if this_species not in species_to_gene_to_rbh:
+                    species_to_gene_to_rbh[this_species] = {}
                 genecol = "{}_gene".format(this_species)
-                species_to_gene_to_RBH[this_species][row[genecol]] = thisRBH
+                species_to_gene_to_rbh[this_species][row[genecol]] = thisrbh
 
-        # now make a dict of RBH_to_fasta_records
-        print(" - Making a dict of RBH_to_fasta_records.")
-        RBH_to_records = {}
-        for this_species in RBH_species:
+        # now make a dict of rbh_to_fasta_records
+        print(" - Making a dict of rbh_to_fasta_records.")
+        rbh_to_records = {}
+        for this_species in rbh_species:
             inhandle = open(config["species"][this_species]["proteins"], "r")
             for record in SeqIO.parse(inhandle, "fasta"):
-                if record.id in species_to_gene_to_RBH[this_species]:
-                    thisRBH = species_to_gene_to_RBH[this_species][record.id]
+                if record.id in species_to_gene_to_rbh[this_species]:
+                    thisrbh = species_to_gene_to_rbh[this_species][record.id]
                     record.name = record.id
-                    newid = "{}_{}".format(thisRBH, this_species)
+                    newid = "{}_{}".format(thisrbh, this_species)
                     record.id = newid
-                    if thisRBH not in RBH_to_records:
-                        RBH_to_records[thisRBH] = []
-                    RBH_to_records[thisRBH].append(record)
+                    if thisrbh not in rbh_to_records:
+                        rbh_to_records[thisrbh] = []
+                    rbh_to_records[thisrbh].append(record)
 
         # make sure that all entries have as many sequences as species
         print(" - Verifying that the records are all complete.")
-        for thisRBH in RBH_to_records:
-            if len(RBH_to_records[thisRBH]) != len(RBH_species):
+        for thisrbh in rbh_to_records:
+            if len(rbh_to_records[thisrbh]) != len(rbh_species):
                 raise IOError("{} only has {} genes".format(
-                    thisRBH, len(RBH_to_records[thisRBH])))
+                    thisrbh, len(rbh_to_records[thisrbh])))
 
         # print out all of the records to fasta files
         print(" - Printing out the FASTA records.")
-        for thisRBH in RBH_to_records:
-            outfile = config["tool"] + "/fasta/unaligned/{}.fasta".format(thisRBH)
+        for thisrbh in rbh_to_records:
+            outfile = config["tool"] + "/fasta/unaligned/{}.fasta".format(thisrbh)
             with open(outfile, "w") as output_handle:
-                for thisrec in RBH_to_records[thisRBH]:
+                for thisrec in rbh_to_records[thisrbh]:
                     SeqIO.write(thisrec, output_handle, "fasta")
 
 rule align_fasta_of_each_group:
     input:
-        MBH_fasta = config["tool"] + "/fasta/unaligned/{RBH}.fasta"
+        MBH_fasta = config["tool"] + "/fasta/unaligned/{rbh}.fasta"
     output:
-        aligned =   config["tool"] + "/fasta/aligned/{RBH}.aligned.fasta",
+        aligned =   config["tool"] + "/fasta/aligned/{rbh}.aligned.fasta",
     threads: 1
     shell:
         """
@@ -146,9 +139,9 @@ rule align_fasta_of_each_group:
 
 rule make_hmm:
     input:
-        aligned = config["tool"] + "/fasta/aligned/{RBH}.aligned.fasta"
+        aligned = config["tool"] + "/fasta/aligned/{rbh}.aligned.fasta"
     output:
-        hmm     = config["tool"] + "/hmm/hmms/{RBH}.hmm"
+        hmm     = config["tool"] + "/hmm/hmms/{rbh}.hmm"
     threads: 1
     shell:
         """
@@ -158,9 +151,9 @@ rule make_hmm:
 rule hmm_search_against_genome:
     input:
         proteins = lambda wildcards: config["species"][wildcards.other_species]["proteins"],
-        hmm = config["tool"] + "/hmm/hmms/{RBH}.hmm"
+        hmm = config["tool"] + "/hmm/hmms/{rbh}.hmm"
     output:
-        tsv = config["tool"] + "/hmm/searches/{other_species}/{RBH}_against_{other_species}.tsv"
+        tsv = config["tool"] + "/hmm/searches/{other_species}/{rbh}_against_{other_species}.tsv"
     threads: 2
     shell:
         """
@@ -181,8 +174,8 @@ rule aggregate_hmm_results_by_species:
       qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
     """
     input:
-        tsv = expand(config["tool"] + "/hmm/searches/{{other_species}}/{RBH}_against_{{other_species}}.tsv",
-                     RBH = RBH_entries)
+        tsv = expand(config["tool"] + "/hmm/searches/{{other_species}}/{rbh}_against_{{other_species}}.tsv",
+                     rbh = rbh_entries)
     output:
         tsv =        config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.tsv"
     params:
@@ -250,15 +243,15 @@ rule collate_best_hits_into_best_hits_file:
     we need a {}_gene, {}_scaf, and {}_pos column for each new species we put in.
     """
     input:
-        RBH_file = config["RBH_file"],
+        rbh_file = config["rbh_file"],
         best_hits_files = expand(config["tool"] + "/hmm/searches_agg_best/{other_species}_hmm_best.tsv",
                                  other_species = other_species),
         chrom = lambda wildcards: [config["species"][x]["prot_to_loc"] for x in
                                    other_species]
     output:
-        RBH = config["tool"] + "/output/" + species_string + "_RBHhmm_plus_other_species.rbh"
+        rbh = config["tool"] + "/output/" + species_string + "_rbhhmm_plus_other_species.rbh"
     run:
-        RBH = pd.read_csv(input.RBH_file, header = 0, index_col = 0, sep = "\t")
+        rbh = pd.read_csv(input.rbh_file, header = 0, index_col = 0, sep = "\t")
         for thisspecies in other_species:
             thischrom = config["species"][thisspecies]["prot_to_loc"]
             species_gene_to_chrom = {}
@@ -271,29 +264,29 @@ rule collate_best_hits_into_best_hits_file:
                         species_gene_to_chrom[fields[0]] = fields[1]
                         species_gene_to_pos[fields[0]] = int(fields[3])
             readthis = config["tool"] + "/hmm/searches_agg_best/{}_hmm_best.tsv".format(thisspecies)
-            species_RBH = pd.read_csv(readthis, header = None, sep = "\t")
-            species_RBH.columns = ["qseqid", "sseqid", "pident", "length", "mismatch",
+            species_rbh = pd.read_csv(readthis, header = None, sep = "\t")
+            species_rbh.columns = ["qseqid", "sseqid", "pident", "length", "mismatch",
                                    "gapopen", "qstart", "qend", "sstart", "send",
                                    "evalue", "bitscore"]
 
 
-            RBH["{}_gene".format(thisspecies)] = RBH["RBH"].map(
-                        dict(zip(species_RBH["qseqid"],
-                                 species_RBH["sseqid"])) )
+            rbh["{}_gene".format(thisspecies)] = rbh["rbh"].map(
+                        dict(zip(species_rbh["qseqid"],
+                                 species_rbh["sseqid"])) )
 
-            RBH["{}_scaf".format(thisspecies)] = RBH[
+            rbh["{}_scaf".format(thisspecies)] = rbh[
                 "{}_gene".format(thisspecies)].map(species_gene_to_chrom)
 
-            RBH["{}_pos".format( thisspecies)] = RBH[
+            rbh["{}_pos".format( thisspecies)] = rbh[
                 "{}_gene".format(thisspecies)].map(species_gene_to_pos)
 
-        RBH_sorted = list(sorted([x for x in RBH.columns if x.split("_")[0] in RBH_species]))
-        other_sorted = list(sorted([x for x in RBH.columns if x.split("_")[0] in other_species]))
-        annot_col = list(sorted([x for x in RBH.columns if x not in ["RBH"] + RBH_sorted + other_sorted]))
-        sorted_cols = ["RBH"] + annot_col + RBH_sorted + other_sorted
-        RBH = RBH.reindex(sorted_cols, axis=1)
-        RBH = RBH.fillna(value = "None")
-        RBH.to_csv(output.RBH,  sep="\t", header = True, index = False)
+        rbh_sorted = list(sorted([x for x in rbh.columns if x.split("_")[0] in rbh_species]))
+        other_sorted = list(sorted([x for x in rbh.columns if x.split("_")[0] in other_species]))
+        annot_col = list(sorted([x for x in rbh.columns if x not in ["rbh"] + rbh_sorted + other_sorted]))
+        sorted_cols = ["rbh"] + annot_col + rbh_sorted + other_sorted
+        rbh = rbh.reindex(sorted_cols, axis=1)
+        rbh = rbh.fillna(value = "None")
+        rbh.to_csv(output.rbh,  sep="\t", header = True, index = False)
 
 
 #rule best_gene_for_each_hmm_LEGACY:
@@ -303,11 +296,11 @@ rule collate_best_hits_into_best_hits_file:
 #    input:
 #        tsv = config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.sorted.tsv"
 #        chrom = lambda wildcards: config["xaxisspecies"][wildcards.species]["prot_to_loc"],
-#        RBH = "RBH/reciprocal_best_hits.tsv"
+#        rbh = "rbh/reciprocal_best_hits.tsv"
 #    output:
 #        tsv = "hmm/searches_agg_best/{species}_hmm_best.tsv",
-#        RBHinfo = "hmm/RBH_plus_HMM_agg_best/{species}_hmm_chrom_info.tsv",
-#        groupby = "hmm/RBH_plus_HMM_agg_best/{species}_hmm_chrom_info.groupby.tsv"
+#        rbhinfo = "hmm/rbh_plus_HMM_agg_best/{species}_hmm_chrom_info.tsv",
+#        groupby = "hmm/rbh_plus_HMM_agg_best/{species}_hmm_chrom_info.groupby.tsv"
 #    params:
 #        species = lambda wildcards: wildcards.species
 #    threads: 1
@@ -329,21 +322,21 @@ rule collate_best_hits_into_best_hits_file:
 #        df = df.reset_index(drop=True)
 #        df.to_csv(output.tsv, header = False, index = False, sep="\t")
 #        df = df.iloc[:, 0:2]
-#        df.columns = ["RBH", params.species]
-#        RBH = pd.read_csv(input.RBH, index_col = 0, sep = "\t")
-#        RBH["{}_gene".format(params.species)] = RBH["RBH"].map(
-#                    dict(zip(df["RBH"],
+#        df.columns = ["rbh", params.species]
+#        rbh = pd.read_csv(input.rbh, index_col = 0, sep = "\t")
+#        rbh["{}_gene".format(params.species)] = rbh["rbh"].map(
+#                    dict(zip(df["rbh"],
 #                             df[params.species])) )
-#        RBH["{}_scaf".format(params.species)] = RBH[
+#        rbh["{}_scaf".format(params.species)] = rbh[
 #            "{}_gene".format(params.species)].map(
 #            species_gene_to_chrom)
-#        RBH["{}_pos".format(params.species)] = RBH[
+#        rbh["{}_pos".format(params.species)] = rbh[
 #            "{}_gene".format(params.species)].map(
 #            species_gene_to_pos)
-#        RBH.to_csv(output.RBHinfo,  sep="\t")
+#        rbh.to_csv(output.rbhinfo,  sep="\t")
 #
-#        groupbycols = [x for x in RBH.columns if "_scaf" in x]
-#        grouped_multiple = RBH.groupby(groupbycols).agg(list).reset_index()
+#        groupbycols = [x for x in rbh.columns if "_scaf" in x]
+#        grouped_multiple = rbh.groupby(groupbycols).agg(list).reset_index()
 #        # get the size
-#        grouped_multiple["count"] = grouped_multiple.RBH.str.len()
+#        grouped_multiple["count"] = grouped_multiple.rbh.str.len()
 #        grouped_multiple.to_csv(output.groupby,  sep="\t")

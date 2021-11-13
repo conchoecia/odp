@@ -1,5 +1,5 @@
 """
-This script takes the grouby RBH hits file, to which a group column has
+This script takes the grouby rbh hits file, to which a group column has
   been added. This script unwraps that file into a row-by-row
   reciprocal best hit file.
 
@@ -67,17 +67,17 @@ rule all:
         expand(config["tool"] + "/output/{sp}.unwrapped.rbh",
                sp = analyses)
 
-rule unwrap_RBH_file_with_group_column:
+rule unwrap_rbh_file_with_group_column:
     input:
-        RBH_files = config["groupby_files"]
+        rbh_files = config["groupby_files"]
     output:
-        RBH_unwrapped = expand(config["tool"] + "/output/{sp}.unwrapped.rbh",
+        rbh_unwrapped = expand(config["tool"] + "/output/{sp}.unwrapped.rbh",
                                sp = analyses)
     params:
         prefix = config["tool"] + "/output/"
     threads: 1
     run:
-        for thisfile in input.RBH_files:
+        for thisfile in input.rbh_files:
             df = pd.read_csv(thisfile, sep = "\t", index_col = None)
             # get all the species in the dataframe
             complete_species_list = [x.split("_")[0] for x in df.columns
@@ -85,9 +85,9 @@ rule unwrap_RBH_file_with_group_column:
             species_string = "_".join(sorted(complete_species_list))
             print(species_string)
 
-            RBH_entries = []
+            rbh_entries = []
             for index, row in df.iterrows():
-                RBH_list = ast.literal_eval(row["RBH"])
+                rbh_list = ast.literal_eval(row["rbh"])
                 species_to_gene_list = {}
                 species_to_gene_pos  = {}
                 species_to_gene_scaf = {}
@@ -104,9 +104,9 @@ rule unwrap_RBH_file_with_group_column:
                         thislist[thisspecies] = parse_pd_list_or_string(
                                                              row[colname], rowcount)
 
-                for i in range(len(RBH_list)):
+                for i in range(len(rbh_list)):
                     thisgroup = row["gene_group"]
-                    thisentry = {"RBH": RBH_list[i],
+                    thisentry = {"rbh": rbh_list[i],
                                  "gene_group": thisgroup,
                                  "count":      row["count"]}
                     if "alpha" in row:
@@ -121,9 +121,9 @@ rule unwrap_RBH_file_with_group_column:
                         thisentry[scafcol] = species_to_gene_scaf[thisspecies][i]
                         thisentry[genecol] = species_to_gene_list[thisspecies][i]
                         thisentry[poscol]  = species_to_gene_pos[thisspecies][i]
-                    RBH_entries.append(thisentry)
+                    rbh_entries.append(thisentry)
 
-            unwrapped = pd.DataFrame(RBH_entries)
+            unwrapped = pd.DataFrame(rbh_entries)
             unwrapped = unwrapped[[x for x in unwrapped.columns
                                    if x not in ["count", "alpha", "alpha_type"]]]
             outfile = params.prefix + species_string + ".unwrapped.rbh"

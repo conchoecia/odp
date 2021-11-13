@@ -34,7 +34,7 @@ rule all:
         # the groupby file
         config["tool"] + "/output/" + species_string + ".groupby"
 
-rule groupby_RBH_results:
+rule groupby_rbh_results:
     input:
         rbh   = config["rbh_file"],
     output:
@@ -56,12 +56,12 @@ rule groupby_RBH_results:
         grouped_multiple = df.groupby(groupbycols, dropna = False).agg(list).reset_index()
 
         # get the size
-        grouped_multiple["count"] = grouped_multiple.RBH.str.len()
+        grouped_multiple["count"] = grouped_multiple.rbh.str.len()
 
         # sort
         grouped_multiple = grouped_multiple.sort_values(by="count", ascending=False)
         grouped_multiple["gene_group"] = "None"
-        upfront   = ["RBH", "gene_group", "count"]
+        upfront   = ["rbh", "gene_group", "count"]
         other_pt1 = [x for x in grouped_multiple.columns
                      if x.split("_")[0] not in species_list]
         other_pt2 = list(sorted([x for x in other_pt1

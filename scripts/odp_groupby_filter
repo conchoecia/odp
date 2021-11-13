@@ -25,17 +25,17 @@ analyses_list = []
 for thisfile in config["groupby_files"]:
     if not thisfile.endswith("_reciprocal_best_hits.rbh.groupby"):
         raise IOError("Your groupby files must end with _reciprocal_best_hits.rbh.groupby")
-    species_string = thisfile.split("/")[-1].replace("_reciprocal_best_hits.rbh.groupby", "").replace("_RBHhmm_plus_other_species.rbh.groupby", "")
+    species_string = thisfile.split("/")[-1].replace("_reciprocal_best_hits.rbh.groupby", "").replace("_rbhhmm_plus_other_species.rbh.groupby", "")
     analyses_list.append(species_string)
     ending = ""
     if thisfile.endswith("_reciprocal_best_hits.rbh.groupby"):
         pass
         #ending = "_reciprocal_best_hits.rbh"
-    elif thisfile.endswith("_RBHhmm_plus_other_species.rbh.groupby"):
+    elif thisfile.endswith("_rbhhmm_plus_other_species.rbh.groupby"):
         pass
-        #ending = "_RBHhmm_plus_other_species.rbh"
+        #ending = "_rbhhmm_plus_other_species.rbh"
     else:
-        raise IOError("The input groupby_file must end in _reciprocal_best_hits.rbh.groupby or _RBHhmm_plus_other_species.rbh.groupby. It currently is {}".format(config["groupby_file"].split("/")[-1]))
+        raise IOError("The input groupby_file must end in _reciprocal_best_hits.rbh.groupby or _rbhhmm_plus_other_species.rbh.groupby. It currently is {}".format(config["groupby_file"].split("/")[-1]))
 
 if len(analyses_list[0].split("_")) < 3:
     raise IOError("There must be more than two species.")
@@ -46,11 +46,11 @@ rule all:
         expand(config["tool"]+"/output/{sp}_reciprocal_best_hits.rbh.filt.groupby",
                sp = analyses_list)
 
-rule filter_RBH_files:
+rule filter_rbh_files:
     input:
-        RBH_files = config["groupby_files"]
+        rbh_files = config["groupby_files"]
     output:
-        RBH_filt = expand(config["tool"]+"/output/{sp}_reciprocal_best_hits.rbh.filt.groupby",
+        rbh_filt = expand(config["tool"]+"/output/{sp}_reciprocal_best_hits.rbh.filt.groupby",
                           sp = analyses_list)
     params:
         prefix = config["tool"]+"/output/",
@@ -58,16 +58,16 @@ rule filter_RBH_files:
         alpha = sys_alpha
     threads: 1
     run:
-        for thisfile in input.RBH_files:
-            species_string = thisfile.split("/")[-1].replace("_reciprocal_best_hits.rbh.groupby", "").replace("_RBHhmm_plus_other_species.rbh.groupby", "")
+        for thisfile in input.rbh_files:
+            species_string = thisfile.split("/")[-1].replace("_reciprocal_best_hits.rbh.groupby", "").replace("_rbhhmm_plus_other_species.rbh.groupby", "")
             analyses_list.append(species_string)
             ending = ""
             if thisfile.endswith("_reciprocal_best_hits.rbh.groupby"):
                 ending = "_reciprocal_best_hits.rbh"
-            elif thisfile.endswith("_RBHhmm_plus_other_species.rbh.groupby"):
-                ending = "_RBHhmm_plus_other_species.rbh"
+            elif thisfile.endswith("_rbhhmm_plus_other_species.rbh.groupby"):
+                ending = "_rbhhmm_plus_other_species.rbh"
             else:
-                raise IOError("The input groupby_file must end in _reciprocal_best_hits.rbh.groupby or _RBHhmm_plus_other_species.rbh.groupby. It currently is {}".format(config["groupby_file"].split("/")[-1]))
+                raise IOError("The input groupby_file must end in _reciprocal_best_hits.rbh.groupby or _rbhhmm_plus_other_species.rbh.groupby. It currently is {}".format(config["groupby_file"].split("/")[-1]))
 
             df = pd.read_csv(thisfile, sep = "\t", index_col = None)
             df = df.loc[df["alpha"] <= params.alpha, ]
