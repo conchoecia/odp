@@ -1,0 +1,683 @@
+"""
+This script takes the rbh hits file, and mutates one group to match the number
+  of chromosomes of another group.
+
+the input file must be named:
+  {sample1}_{sample2}_{sample3}_reciprocal_best_hits.tsv
+
+... where sample1, sample2, sampleN is the sample name in the config.
+
+"""
+# data stuff
+import pandas as pd
+import numpy as np
+# sequence stuff
+from Bio import SeqIO
+from Bio import SeqRecord
+from Bio import Seq
+# simulation stuff
+import time
+import random
+from random import randrange
+import sys
+# plotting stuff
+import ast
+import itertools
+import matplotlib.pyplot as plt
+import matplotlib.patches as mplpatches
+from matplotlib.collections import LineCollection
+from matplotlib.colors import ListedColormap, LinearSegmentedColormap
+from matplotlib.backends.backend_pdf import PdfPages
+import matplotlib.pylab as pl
+import operator
+
+configfile: "config.yaml"
+
+config["tool"] = "odp_genome_mutation_analysis"
+
+#OdpF.check_legality(config)
+
+# make sure the appropriate fields are present
+check_these = ["rbh_file",
+               "mutate",
+               "inner1",
+               "inner2",
+               "outer",
+               "num_simulations",
+               "species"]
+for check_this in check_these:
+    if not check_this in config:
+        raise IOError("You must specify '{}' in config".format(check_this))
+
+# make sure that the group fields are present
+check_these = ["mutate",
+               "inner1",
+               "inner2",
+               "outer"]
+for check_this in check_these:
+    if config[check_this] not in config["species"]:
+        raise IOError("The sample {} is not in the species".format(config[check_this]))
+
+# randomizations
+num_randomizations_per_round=100000
+num_rand_rounds = int(config["num_randomizations"]/num_randomizations_per_round)
+print("number of randomization rounds is : {}".format(num_rand_rounds))
+
+# make sure none of the sample names have underscores
+for thissample in config["species"]:
+    if "_" in thissample:
+        raise IOError("Sample names can't have '_' char: {}".format(thissample))
+
+four_species = [config["outer"], config["mutate"],
+                config["inner1"], config["inner2"]]
+
+rule all:
+    input:
+        # just check the data
+        config["tool"] + "/sim_randomization/initialization/random_sim_init.txt",
+        expand(config["tool"] + "/sim_randomization/{species}/random_sim_{species}_{randcore}.txt",
+               randcore = list(range(1, num_rand_rounds+1) ),
+               species  = four_species),
+        expand("odp_genome_mutation_analysis/figures/randomization_marginals_mutating_{species}.pdf",
+               species = four_species),
+        expand("odp_genome_mutation_analysis/figures/randomization_stats_mutating_{species}.txt",
+               species = four_species),
+
+def _get_counts_supporting_hypothesis(informative,
+                                      outer, mutate,
+                                      inner1, inner2):
+    """
+    Takes a df of potentially informative relationships and looks for
+     phylogenetic support of this tree:
+
+              ,========= outer
+            =={
+              {  ,====== mutate
+              '=={
+                 {  ,=== inner1
+                 '=={
+                    '=== inner2
+
+    Just returns a list of lists of the sizes of groupings that support this
+     hypothesis
+
+     This data structure: [[5,14], [7,10,5], [8,12]]
+       - shows that there are three pairings of FLGs that support this hypothesis
+       - the pairings have 5 and 14 genes, 7 and 10 and 5, 8 and 12 genes...
+    """
+    # test hypothesis1
+    hyp1df = informative.groupby(["{}_scaf".format(inner1),
+                                  "{}_scaf".format(inner2)])
+
+    keeps = []
+    for group_name, df_group in hyp1df:
+        # Remove the entries where the outer has two of the same scaf.
+        # These are derived splits in mutate.
+        subgroup = df_group.groupby(["{}_scaf".format(outer),
+                                     "{}_scaf".format(inner1),
+                                     "{}_scaf".format(inner2)
+                                       ]).filter(lambda x: len(x) < 2)
+
+        # This gets rid of cases where mutate has two of the same scaf.
+        # These are cases where we're not sure whether the outer split
+        #  is derived in the outer group or a merge in the ancestor of
+        #  mutate, inner1, and inner2.
+        subgroup = subgroup.groupby(["{}_scaf".format(mutate),
+                                     "{}_scaf".format(inner1),
+                                     "{}_scaf".format(inner2)
+                                     ]).filter(lambda x: len(x) < 2)
+
+        if len(subgroup) > 1:
+            keeps.append(subgroup)
+
+    if len(keeps) > 0:
+        hyp1df = pd.concat(keeps)
+        hyp1df = hyp1df.groupby(["{}_scaf".format(inner1),
+                                 "{}_scaf".format(inner2),
+                                 ]).agg(list).reset_index()
+
+    else:
+        hyp1df = pd.DataFrame(columns = informative.columns)
+    return list(hyp1df["count"])
+
+def stats_on_df(df,
+                outer, mutate,
+                inner1, inner2):
+    """
+    This calculates some statistics about the dataframe.
+    All it records is the number of genes in the FLG pairs:
+
+     This data structure: [[5,14], [7,10,5], [8,12]]
+       - shows that there are three pairings of FLGs that support this hypothesis
+       - the pairings have 5 and 14 genes, 7 and 10 and 5, 8 and 12 genes...
+
+    The output is two columns:
+    - column1: hyp1 data structure
+    - column2: hyp2 data structure
+    """
+    gene_cols = ["{}_gene".format(x)
+                 for x in [outer, mutate, inner1, inner2] ]
+    scaf_cols = ["{}_scaf".format(x)
+                 for x in [outer, mutate, inner1, inner2] ]
+    grouped_multiple = df.groupby(scaf_cols).agg(list).reset_index()
+    # get the size
+    grouped_multiple["count"] = grouped_multiple.rbh.str.len()
+    grouped_multiple = grouped_multiple.loc[grouped_multiple["count"] > 4, ]
+
+    ## sort
+    grouped_multiple = grouped_multiple[scaf_cols + ["rbh", "count"]]
+
+    # only get things that are informative excluding the outgroup
+    informative = grouped_multiple.groupby(["{}_scaf".format(inner1), "{}_scaf".format(inner2)]).filter(lambda x: len(x) >= 2)
+    ## don't need the next line, it's just for QC
+    #informative = informative.sort_values(["{}_scaf".format(inner2),
+    #                                       "{}_scaf".format(inner1),
+    #                                       "{}_scaf".format(mutate),
+    #                                       "{}_scaf".format(outer)]).reset_index(drop=True)
+
+
+    r1 = _get_counts_supporting_hypothesis(informative, outer, mutate, inner1, inner2)
+    r2 = _get_counts_supporting_hypothesis(informative, outer, inner1, mutate, inner2)
+    return [r1, r2]
+
+# randomization simulation
+rule randomization_simulation:
+    """
+    This rule performs the randomization simulation.
+    It prints out the stats from each round onto a line.
+    """
+    input:
+        rbh_file = config["rbh_file"],
+    output:
+        random_sim = config["tool"] + "/sim_randomization/{species}/random_sim_{species}_{randcore}.txt"
+    threads: 1
+    params:
+        outer   = config["outer"],
+        mutate  = config["mutate"],
+        inner1  = config["inner1"],
+        inner2  = config["inner2"],
+        species = lambda wildcards: wildcards.species,
+        num_rounds = num_randomizations_per_round
+    run:
+        # now we load up the rbh table
+        outhandle = open(output.random_sim, "w")
+        df = pd.read_csv(input.rbh_file, index_col = None, sep = "\t")
+        scaf_cols = [x for x in df.columns if "_scaf" in x]
+        df = df[['rbh'] + scaf_cols]
+
+        # mutate col
+        mutate_col = "{}_scaf".format(params.species)
+
+        # go until we say to stop
+        # how many days for simulation
+        start_time = time.time()
+        counter = 1
+        while True:
+            # randomize the mutate column
+            df[mutate_col] = np.random.permutation(df[mutate_col].values)
+            #print(list(df[mutate_col][0:10]))
+            ssdone = False
+            stats = stats_on_df(
+                    df,
+                    params.outer,
+                    params.mutate,
+                    params.inner1,
+                    params.inner2)
+            print("{}\t{}".format(stats[0], stats[1]), file = outhandle)
+
+            # cleanup
+            if counter % 10 == 0:
+                elapsed = time.time() - start_time
+                days,  rem       = divmod(elapsed, 86400)
+                hours, rem       = divmod(rem, 3600)
+                minutes, seconds = divmod(rem, 60)
+                days = int(days)
+                hours = int(hours)
+                minutes = int(minutes)
+                seconds = int(seconds)
+                print("  Done with {} iterations. Time elapsed: {}d {}h {}m {}s. \r".format(
+                    counter, days, hours, minutes, seconds ), end = "\r")
+            if counter == params.num_rounds:
+                break
+            counter = counter + 1
+
+        outhandle.close()
+
+# randomization simulation
+rule randomization_initialization:
+    """
+    This measures the initial state of the genome.
+    """
+    input:
+        rbh_file = config["rbh_file"],
+    output:
+        random_sim = config["tool"] + "/sim_randomization/initialization/random_sim_init.txt"
+    threads: 1
+    params:
+        outer  = config["outer"],
+        mutate = config["mutate"],
+        inner1 = config["inner1"],
+        inner2 = config["inner2"],
+        num_rounds = num_rand_rounds
+    run:
+        # now we load up the rbh table
+        outhandle = open(output.random_sim, "w")
+        df = pd.read_csv(input.rbh_file, index_col = None, sep = "\t")
+        scaf_cols = [x for x in df.columns if "_scaf" in x]
+        df = df[['rbh'] + scaf_cols]
+
+        stats = stats_on_df(
+            df,
+            params.outer,
+            params.mutate,
+            params.inner1,
+            params.inner2)
+        print("{}\t{}".format(stats[0], stats[1]),
+              file = outhandle)
+        outhandle.close()
+
+rule make_randomization_summary:
+    """
+    This reads in all of the randomization data and turns it into a plottable,
+    machine-readable file.
+
+    The goal is to only execute this once per randomization trial.
+
+    Get these fields for each hypothesis:
+      - max_number_of_genes_in_grouping
+      - total_number_of_genes_in_FLGs
+      - total_number_of_groupings
+      - mean_number_of_genes_in_each_FLG
+    """
+    input:
+        random_sim = config["tool"] + "/sim_randomization/{species}/random_sim_{species}_{randcore}.txt"
+    output:
+        sim_plot = "odp_genome_mutation_analysis/sim_randomization/plottable/{species}/random_sim_{species}_{randcore}_plottable.txt"
+    run:
+        outhandle = open(output.sim_plot, "w")
+        with open(input.random_sim, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    fields = line.split("\t")
+                    hyp1_data  = ast.literal_eval(fields[0])
+                    hyp2_data  = ast.literal_eval(fields[1])
+                    hyp1_unwrapped = [item for sublist in hyp1_data
+                                      for item in sublist]
+                    hyp2_unwrapped = [item for sublist in hyp2_data
+                                      for item in sublist]
+
+                    hyp1_max_number_of_genes_in_single_FLG = 0
+                    hyp1_max_number_of_genes_in_grouping   = 0
+                    hyp1_total_number_of_genes_in_FLGs     = 0
+                    hyp1_total_number_of_groupings         = 0
+                    hyp1_mean_number_of_genes_in_FLGs      = 0
+                    hyp2_max_number_of_genes_in_single_FLG = 0
+                    hyp2_max_number_of_genes_in_grouping   = 0
+                    hyp2_total_number_of_genes_in_FLGs     = 0
+                    hyp2_total_number_of_groupings         = 0
+                    hyp2_mean_number_of_genes_in_FLGs      = 0
+
+                    try:
+                        hyp1_max_number_of_genes_in_single_FLG = max(hyp1_unwrapped)
+                    except:
+                        pass
+                    try:
+                        hyp1_max_number_of_genes_in_grouping   = max(sum(x) for x in hyp1_data)
+                    except:
+                        pass
+                    hyp1_total_number_of_genes_in_FLGs     = sum(hyp1_unwrapped)
+                    hyp1_total_number_of_groupings         = len(hyp1_data)
+                    try:
+                        hyp1_mean_number_of_genes_in_FLGs      = sum(hyp1_unwrapped)/len(hyp1_unwrapped)
+                    except:
+                        pass
+
+                    try:
+                        hyp2_max_number_of_genes_in_single_FLG = max(hyp2_unwrapped)
+                    except:
+                        pass
+                    try:
+                        hyp2_max_number_of_genes_in_grouping   = max(sum(x) for x in hyp2_data)
+                    except:
+                        pass
+                    hyp2_total_number_of_genes_in_FLGs     = sum(hyp2_unwrapped)
+                    hyp2_total_number_of_groupings         = len(hyp2_data)
+                    try:
+                        hyp2_mean_number_of_genes_in_FLGs      = sum(hyp2_unwrapped)/len(hyp2_unwrapped)
+                    except:
+                        pass
+                    print("\t".join([str(x) for x in [
+                           hyp1_max_number_of_genes_in_single_FLG,
+                           hyp1_max_number_of_genes_in_grouping,
+                           hyp1_total_number_of_genes_in_FLGs,
+                           hyp1_total_number_of_groupings,
+                           hyp1_mean_number_of_genes_in_FLGs,
+                           hyp2_max_number_of_genes_in_single_FLG,
+                           hyp2_max_number_of_genes_in_grouping,
+                           hyp2_total_number_of_genes_in_FLGs,
+                           hyp2_total_number_of_groupings,
+                           hyp2_mean_number_of_genes_in_FLGs]]),
+                                     file = outhandle)
+        outhandle.close()
+
+rule cat_together_randomization_plottables:
+    """
+    This just cats together all the plottables into a single file
+    so we can easily load it into seaborn later
+    """
+    input:
+        sim_plot = expand("odp_genome_mutation_analysis/sim_randomization/plottable/{{species}}/random_sim_{{species}}_{randcore}_plottable.txt",
+               randcore = list(range(1, num_rand_rounds+1) ),
+               species = four_species)
+    output:
+        outfile = "odp_genome_mutation_analysis/sim_randomization/plottable_final/random_sim_final_plottable_{species}.txt"
+    shell:
+        """
+        echo "" | awk '{{printf("hyp1_max_number_of_genes_in_single_FLG\\thyp1_max_number_of_genes_in_grouping\\thyp1_total_number_of_genes_in_FLGs\\thyp1_total_number_of_groupings\\thyp1_mean_number_of_genes_in_FLGs\\thyp2_max_number_of_genes_in_single_FLG\\thyp2_max_number_of_genes_in_grouping\\thyp2_total_number_of_genes_in_FLGs\\thyp2_total_number_of_groupings\\thyp2_mean_number_of_genes_in_FLGs\\n")}}' > {output.outfile}
+        cat {input.sim_plot} >> {output.outfile}
+        """
+
+rule plottable_init_file:
+    """
+    just make the initial measurement of the data plottable
+    """
+    input:
+        init = "odp_genome_mutation_analysis/sim_randomization/initialization/random_sim_init.txt"
+    output:
+        init = "odp_genome_mutation_analysis/sim_randomization/initialization/random_sim_init_plottable.txt"
+    run:
+        # get the info for the init data
+        hyp1_max_number_of_genes_in_single_FLG = 0
+        hyp1_max_number_of_genes_in_grouping   = 0
+        hyp1_total_number_of_genes_in_FLGs     = 0
+        hyp1_total_number_of_groupings         = 0
+        hyp1_mean_number_of_genes_in_FLGs      = 0
+        hyp2_max_number_of_genes_in_single_FLG = 0
+        hyp2_max_number_of_genes_in_grouping   = 0
+        hyp2_total_number_of_genes_in_FLGs     = 0
+        hyp2_total_number_of_groupings         = 0
+        hyp2_mean_number_of_genes_in_FLGs      = 0
+
+        with open(input.init, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    fields = line.split("\t")
+                    hyp1_data  = ast.literal_eval(fields[0])
+                    hyp2_data  = ast.literal_eval(fields[1])
+                    hyp1_unwrapped = [item for sublist in hyp1_data
+                                      for item in sublist]
+                    hyp2_unwrapped = [item for sublist in hyp2_data
+                                      for item in sublist]
+
+                    try:
+                        hyp1_max_number_of_genes_in_single_FLG = max(hyp1_unwrapped)
+                    except:
+                        pass
+                    try:
+                        hyp1_max_number_of_genes_in_grouping   = max(sum(x) for x in hyp1_data)
+                    except:
+                        pass
+                    hyp1_total_number_of_genes_in_FLGs     = sum(hyp1_unwrapped)
+                    hyp1_total_number_of_groupings         = len(hyp1_data)
+                    try:
+                        hyp1_mean_number_of_genes_in_FLGs      = sum(hyp1_unwrapped)/len(hyp1_unwrapped)
+                    except:
+                        pass
+
+                    try:
+                        hyp2_max_number_of_genes_in_single_FLG = max(hyp2_unwrapped)
+                    except:
+                        pass
+                    try:
+                        hyp2_max_number_of_genes_in_grouping   = max(sum(x) for x in hyp2_data)
+                    except:
+                        pass
+                    hyp2_total_number_of_genes_in_FLGs     = sum(hyp2_unwrapped)
+                    hyp2_total_number_of_groupings         = len(hyp2_data)
+                    try:
+                        hyp2_mean_number_of_genes_in_FLGs      = sum(hyp2_unwrapped)/len(hyp2_unwrapped)
+                    except:
+                        pass
+
+        outhandle = open(output.init, "w")
+        print("\t".join(["hyp1_max_number_of_genes_in_single_FLG",
+                         "hyp1_max_number_of_genes_in_grouping",
+                         "hyp1_total_number_of_genes_in_FLGs",
+                         "hyp1_total_number_of_groupings",
+                         "hyp1_mean_number_of_genes_in_FLGs",
+                         "hyp2_max_number_of_genes_in_single_FLG",
+                         "hyp2_max_number_of_genes_in_grouping",
+                         "hyp2_total_number_of_genes_in_FLGs",
+                         "hyp2_total_number_of_groupings",
+                         "hyp2_mean_number_of_genes_in_FLGs"]),
+              file = outhandle)
+        print("\t".join([str(x) for x in [
+                         hyp1_max_number_of_genes_in_single_FLG,
+                         hyp1_max_number_of_genes_in_grouping,
+                         hyp1_total_number_of_genes_in_FLGs,
+                         hyp1_total_number_of_groupings,
+                         hyp1_mean_number_of_genes_in_FLGs,
+                         hyp2_max_number_of_genes_in_single_FLG,
+                         hyp2_max_number_of_genes_in_grouping,
+                         hyp2_total_number_of_genes_in_FLGs,
+                         hyp2_total_number_of_groupings,
+                         hyp2_mean_number_of_genes_in_FLGs]]),
+              file = outhandle)
+        outhandle.close()
+
+rule plot_joint_clouds:
+    """
+    Makes density maps with marginal distribution plots.
+    """
+    input:
+        data = "odp_genome_mutation_analysis/sim_randomization/plottable_final/random_sim_final_plottable_{species}.txt",
+        init = "odp_genome_mutation_analysis/sim_randomization/initialization/random_sim_init_plottable.txt"
+    output:
+        pdf = "odp_genome_mutation_analysis/figures/randomization_marginals_mutating_{species}.pdf",
+        stats = "odp_genome_mutation_analysis/figures/randomization_stats_mutating_{species}.txt"
+    run:
+        import matplotlib.cm as cm
+        outhandle = open(output.stats, "w")
+        initdf = pd.read_csv(input.init, index_col = None, sep = "\t")
+        print("# INIT STATS", file = outhandle)
+        print(initdf.iloc[0], file=outhandle)
+        print("", file = outhandle)
+
+        df = pd.read_csv(input.data, index_col = None, sep = "\t")
+
+        # just collect some basic stats
+        print("# SIMULATION STATS", file = outhandle)
+        print("total number of simulations: {}".format(len(df)), file = outhandle)
+        print("minimum alpha: {}".format(1/len(df)), file = outhandle)
+        print("", file = outhandle)
+
+        # collect stats about each individual field
+        print("# SINGLE VARIABLE STATS", file = outhandle)
+        for thisfield in df.columns:
+            initval = initdf.iloc[0][thisfield]
+            tempdf = df.loc[df[thisfield] >= initval,]
+            tempdf = tempdf.loc[tempdf[thisfield] != 0, ]
+            print("Variable: {}".format(thisfield), file =outhandle)
+            print("  - Num of simulations >= init's value of {}: {}".format(
+                initval, len(tempdf)),
+                  file = outhandle)
+            if len(tempdf) == 0:
+                print("  - alpha: too_low_to_measure",
+                      file = outhandle)
+            else:
+                print("  - alpha: {}".format(len(tempdf)/len(df)),
+                      file = outhandle)
+        print("", file = outhandle)
+
+        # print joint probabilities
+        print("# TWO-VAR JOINT PROB", file = outhandle)
+        for thishyp in ["hyp1", "hyp2"]:
+            these = [x for x in df.columns if thishyp in x]
+            combos = list(itertools.combinations(these, 2))
+            for thiscombo in combos:
+                field0 = thiscombo[0]
+                field1 = thiscombo[1]
+                initval0 = initdf.iloc[0][field0]
+                initval1 = initdf.iloc[0][field1]
+                tempdf = df.loc[df[field0] >= initval0, ]
+                tempdf = tempdf.loc[tempdf[field0] != 0, ]
+                tempdf = tempdf.loc[tempdf[field1] >= initval1, ]
+                tempdf = tempdf.loc[tempdf[field1] != 0, ]
+                print("Variables: {} and {}".format(field0, field1), file =outhandle)
+                print("  - Num of simulations >= init's values of {} and {}: {}".format(
+                    initval0, initval1, len(tempdf)),
+                      file = outhandle)
+                if len(tempdf) == 0:
+                    print("  - alpha: too_low_to_measure",
+                          file = outhandle)
+                else:
+                    print("  - alpha: {}".format(len(tempdf)/len(df)),
+                          file = outhandle)
+            print("", file = outhandle)
+        print("", file = outhandle)
+
+        import seaborn as sns
+        sns.set_theme(style="ticks")
+
+
+        # define custom colormap with fixed colour and alpha gradient
+        # use simple linear interpolation in the entire scale
+        cm.register_cmap(name='alpha_gradient',
+                 data={'red':   [(0.,0.,0),
+                                 (0.,0.,0)],
+
+                       'green': [(0.,0.,0.),
+                                 (0.,0.,0.)],
+
+                       'blue':  [(0.,0.,0.),
+                                 (0.,0.,0.)],
+
+                       'alpha': [(1.,1,1),
+                                 (0.,0,0)]})
+
+        N = 256
+        vals = np.ones((N, 4))
+        vals[:, 0] = np.linspace(0, 0, N)
+        vals[:, 1] = np.linspace(0, 0, N)
+        vals[:, 2] = np.linspace(0, 0, N)
+        vals[:, 3] = np.linspace(0, 1, N)
+        newcmp = ListedColormap(vals)
+
+
+        with PdfPages(output.pdf) as pdf_pages:
+            possible_vars = list(set(["_".join(x.split("_")[1::]) for x in df.columns]))
+            combos = list(itertools.combinations(possible_vars, 2))
+            for thiscombo in combos:
+                for orientation in [[thiscombo[0], thiscombo[1]],
+                                    [thiscombo[1], thiscombo[0]]]:
+
+                    initval0 = initdf.iloc[0]["hyp1_{}".format(orientation[0])]
+                    initval1 = initdf.iloc[0]["hyp1_{}".format(orientation[1])]
+
+                    # PLOTTING hyp1
+                    field0 = "hyp1_{}".format(orientation[0])
+                    field1 = "hyp1_{}".format(orientation[1])
+                    tempdf = df[[field0, field1]]
+                    tempdf = tempdf.drop_duplicates(
+                        subset = [field0, field1]).reset_index(drop = True)
+
+                    xmax = max(initval0, max(df[field0])) * 1.2
+                    ymax = max(initval1, max(df[field1])) * 1.2
+                    print("plotting {} and {}".format(field0, field1))
+                    g = sns.JointGrid(data=df,
+                                      x=field0,
+                                      y=field1,
+                                      xlim = [0,xmax],
+                                      ylim = [0,ymax],
+                                      marginal_ticks=True)
+                    # plot the outliers
+                    g.ax_joint.scatter(
+                        data=tempdf,
+                        x=field0,
+                        y=field1,
+                        linewidth = 0,
+                        c='#808080', marker='o',
+                        s=2)
+                    # plot the init data
+                    g.ax_joint.scatter(
+                        data=initdf,
+                        x=field0,
+                        y=field1,
+                        c='r', marker='o',
+                        zorder=10)
+                    cax = g.figure.add_axes([.15, .55, .02, .2])
+
+                    g.plot_joint(sns.histplot, discrete=(True, True),
+                        #cmap="light:#03012d", cbar=True, cbar_ax=cax)
+                        #pthresh = 0.0001,
+                        #cmap="gist_yarg", cbar=True, cbar_ax=cax)
+                        cmap=newcmp, cbar=True, cbar_ax=cax)
+
+                    maxfield0 = max(df[field0])
+                    maxfield1 = max(df[field1])
+
+                    xbins=np.arange(0, maxfield0, 1)
+                    _ = g.ax_marg_x.hist(df[field0], color="#000000", alpha=.6,
+                                          bins=xbins, align="left")
+                    ybins=np.arange(0, maxfield1, 1)
+                    _ = g.ax_marg_y.hist(df[field1], color="#000000", alpha=.6,
+                                          bins=ybins,
+                                          orientation="horizontal", align="left")
+
+                    fig = g.fig
+                    pdf_pages.savefig(fig)
+                    plt.close(g.fig)
+
+                    #now plot the same thing for hypothesis 2
+                    # PLOTTING hyp1
+                    field0 = "hyp2_{}".format(orientation[0])
+                    field1 = "hyp2_{}".format(orientation[1])
+                    tempdf = df[[field0, field1]]
+                    tempdf = tempdf.drop_duplicates(
+                        subset = [field0, field1]).reset_index(drop = True)
+
+
+                    print("plotting {} and {}".format(field0, field1))
+                    g = sns.JointGrid(data=df,
+                                      x=field0,
+                                      y=field1,
+                                      xlim = [0,xmax],
+                                      ylim = [0,ymax],
+                                      marginal_ticks=True)
+                    # plot the outliers
+                    g.ax_joint.scatter(
+                        data=tempdf,
+                        x=field0,
+                        y=field1,
+                        linewidth = 0,
+                        c='#808080', marker='o',
+                        s=2)
+                    # plot init
+                    g.ax_joint.scatter(
+                        data=initdf,
+                        x=field0,
+                        y=field1,
+                        c='r', marker='o',
+                        zorder=10)
+                    cax = g.figure.add_axes([.15, .55, .02, .2])
+
+                    g.plot_joint(sns.histplot, discrete=(True, True),
+                        #cmap="light:#03012d", cbar=True, cbar_ax=cax)
+                        #pthresh = 0.0001,
+                        #cmap="gist_yarg", cbar=True, cbar_ax=cax)
+                        cmap=newcmp, cbar=True, cbar_ax=cax)
+
+                    maxfield0 = max(df[field0])
+                    maxfield1 = max(df[field1])
+
+                    _ = g.ax_marg_x.hist(df[field0], color="#000000", alpha=.6,
+                                          bins=xbins, align="left")
+                    _ = g.ax_marg_y.hist(df[field1], color="#000000", alpha=.6,
+                                          bins=ybins, align="left",
+                                          orientation="horizontal")
+
+                    fig = g.fig
+                    pdf_pages.savefig(fig)
+                    plt.close(g.fig)
