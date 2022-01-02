@@ -1,0 +1,11 @@
+groupby_files:
+  - CFR_COW_EMU_HCA_RES_SRO.annotated.groupby
+
+species:
+  # for each species above, fill out this section below
+  BFL: 
+    genus:       "Branchiostoma"
+    species:     "floridae"
+    genome:      "/path/to/BFL.fasta"
+    prot_to_loc: "/path/to/BFL.chrom"
+    proteins:    "/path/to/BFL.pep"
