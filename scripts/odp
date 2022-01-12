@@ -85,18 +85,18 @@ if make_autobreaks:
         ysample = config["yaxisspecies"])
     autobreak_files.append(list(outfiles))
     # coloredby autobreaks - needs to be rewritten
-    outfiles = OdpF.expand_avoid_matching(
-        "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{third}_synteny_autobreaks.pdf",
-        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-        third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-        )
+    #outfiles = OdpF.expand_avoid_matching(
+    #    "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{third}_synteny_autobreaks.pdf",
+    #    xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
+    #    third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+    #    )
     autobreak_files.append(list(outfiles))
     # coloredby autobreaks - no missing - needs to be rewritten
-    outfiles = OdpF.expand_avoid_matching(
-        "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{third}_synteny_autobreaks.pdf",
-        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-        third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-        )
+    #outfiles = OdpF.expand_avoid_matching(
+    #    "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{third}_synteny_autobreaks.pdf",
+    #    xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
+    #    third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+    #    )
     autobreak_files.append(list(outfiles))
     # significance plots
     outfiles = OdpF.expand_avoid_matching(
@@ -177,16 +177,16 @@ rule all:
         # now make a config file for other odp plotting functions
         "synteny_analysis/odp_plotting_configs/odp_plotting_configs.yaml",
         # These need to be rewritten such that x and y do not match
-        OdpF.expand_avoid_matching_all_third(
-            "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
-            xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-            third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-            ),
-        OdpF.expand_avoid_matching_all_third(
-            "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
-            xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-            third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-            ),
+        #OdpF.expand_avoid_matching_all_third(
+        #    "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
+        #    xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
+        #    third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+        #    ),
+        #OdpF.expand_avoid_matching_all_third(
+        #    "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
+        #    xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
+        #    third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+        #    ),
         # make protein similarity plots
         OdpF.expand_avoid_matching(
             "synteny_analysis/plots/sample_similarity/{xsample}_and_{ysample}_peridentity_length.pdf",
