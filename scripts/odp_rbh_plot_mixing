@@ -4,7 +4,6 @@ This plots the amount that the genes in each group are mixed.
 This version uses an unwrapped groupby dataframe.
 Needs coordinates from the genomes
 """
-
 from Bio import SeqIO
 
 import matplotlib.pyplot as plt
@@ -13,8 +12,140 @@ import odp_functions as OdpF
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 
+import operator
 import pandas as pd
+import random
 import sys
+
+class MixedString:
+    def __init__(self, genestring, num_iterations = 1000000):
+        self.genestring = genestring
+        # first ensure there are only 2 chars
+        self.charcount = set()
+        for i in range(len(self.genestring)):
+            self.charcount.add(self.genestring[i])
+            if len(self.charcount) > 2:
+                raise IOError("The string must only have two characters. It was {}.".format(instr))
+        self.charcount_list = list(self.charcount)
+        self.charA      = self.charcount_list[0]
+        self.charB      = self.charcount_list[1]
+        self.charAcount = self.genestring.count(self.charcount_list[0])
+        self.charBcount = self.genestring.count(self.charcount_list[1])
+        self.num_iterations = num_iterations
+        # calculate the actual mixing value
+        self.mixing_value = self.quantify_mixing(genestring)
+        # calculate the distribution of possible values given this string
+        self.dist_dict = self.distribution_of_mixing(genestring,
+                                                     self.num_iterations)
+        self.mode = self.mode_of_dist(self.dist_dict)
+        self.mean = self.mean_of_dist(self.dist_dict, self.num_iterations)
+        # calculate other measures
+        self.number_of_sims_leq_mode = sum([self.dist_dict[x] for x
+                                            in self.dist_dict if x <= self.mode])
+        self.numsims_between_0_and_mixingvalue = sum([self.dist_dict[x] for x
+                                            in self.dist_dict
+                                            if x <= self.mixing_value])
+        # I don't think this measure is appropriate given
+        #  that the Gaussian distribution naturally tightens around
+        #  0.5 as the number of genes in A and B group increase
+        #self.prob_completely_random = min(self.numsims_between_0_and_mixingvalue/self.number_of_sims_leq_mode, 1)
+
+    def quantify_mixing(self, instr):
+        """
+        quantifies how well mixed a string is.
+        This doesn't measure entropy, but returns a float between
+               0 (unmixed, just completely sequential)
+           and 1 (ABABABABABA - completely alternating)
+        We return m= (AB + BA - 1)/(len(instr)-2)
+        """
+        # first ensure there are only 2 chars
+        charcount = set()
+        for i in range(len(instr)):
+            charcount.add(instr[i])
+            if len(charcount) > 2:
+                raise IOError("The string must only have two characters. It was {}.".format(instr))
+        # Now count
+        chars = [x for x in charcount]
+        Ac = chars[0]
+        Bc = chars[1]
+        transitions = ["{}{}".format(Ac, Bc), "{}{}".format(Bc, Ac)]
+        Tcount = 0
+        for i in range(len(instr)-1):
+            pair = instr[i:i+2]
+            if pair in transitions:
+                Tcount += 1
+        return (Tcount-1)/(len(instr) - 2)
+
+    def distribution_of_mixing(self, instr, num_of_iterations = 1000000):
+        """
+        This estimates the distribution of mixing values for a given
+         input string. It outputs a data structure that contains the
+         distribution
+        """
+        thisstring = instr
+        thisvalue = -1
+        dist_counter = {0: 0, 1: 0}
+        for i in range(num_of_iterations):
+            thisstring = ''.join(random.sample(thisstring,len(thisstring)))
+            thisvalue = self.quantify_mixing(thisstring)
+            if thisvalue not in dist_counter:
+                dist_counter[thisvalue] = 0
+            dist_counter[thisvalue] += 1
+            if i % 100 == 0:
+                print("             {}/{} ({:.1f} %) done: {} {:.4f}".format(
+                    i+1, num_of_iterations, ((i+1)/num_of_iterations)*100,
+                    thisstring[:40], thisvalue), end = "\r", file = sys.stderr)
+        print("             {}/{} ({:.1f} %) done: {} {:.4f}".format(
+            i+1, num_of_iterations, ((i+1)/num_of_iterations)*100,
+            thisstring[:40], thisvalue), end = "\r", file = sys.stderr)
+
+        print(file = sys.stderr)
+        return dist_counter
+
+    def mode_of_dist(self, dist_dict):
+        """
+        Finds the mode of the distribution. It is simply the largest bin.
+        """
+        largest_key = max(dist_dict.items(), key=operator.itemgetter(1))[0]
+        largest_value = dist_dict[largest_key]
+        return largest_key
+
+    def mean_of_dist(self, dist_dict, num_iterations):
+        """
+        Finds the mode of the distribution. It is simply the largest bin.
+        """
+        tot_val = sum([x * dist_dict[x] for x in dist_dict])/num_iterations
+        return tot_val
+
+    def __str__(self):
+        printstring = "Gene mixing analysis\n"
+        printstring += " Gene  string: {}\n".format(self.genestring)
+        printstring += " Char {} count: {}\n".format(self.charA, self.charAcount)
+        printstring += " Char {} count: {}\n".format(self.charB, self.charBcount)
+        printstring += " mixing  value: {}\n".format(self.mixing_value)
+        printstring += "\n"
+        printstring += "m\tcount\thist\n"
+        sorted_values = list(sorted([x for x in self.dist_dict]))
+        num_chars_histo = 40
+        max_count = self.dist_dict[self.mode]
+        for key in sorted_values:
+            colsize = int((self.dist_dict[key]/max_count)*num_chars_histo)
+            hist_string = "".join(["*"] * colsize)
+
+            tempstr = "{:.4f}\t{}\t{}".format(
+                key, self.dist_dict[key], hist_string)
+            printstring = printstring + tempstr + "\n"
+        printstring += "\nDistribution analysis\n"
+        printstring += " Mode: {}".format(self.mode) + "\n"
+        printstring += " Mean: {:.4f}\n".format(self.mean)
+        printstring += " input mixing value: {}\n".format(self.mixing_value)
+        printstring += " The observed string's mixing value, m, is {},\n".format(self.mixing_value)
+        printstring += "  which is {:.2f}% of the way to an ideal randomly\n".format(min(1,(self.mixing_value/self.mode)) * 100)
+        printstring += "  mixed state, the mode of {:.4f}.\n".format(self.mode)
+        printstring += " The observed string's mixing value, m, is >= to {:.4f}% of all\n".format((self.numsims_between_0_and_mixingvalue/self.number_of_sims_leq_mode) * 100)
+        printstring += "  simulations <= the mode (the minimal ideal mixed state)\n"
+
+        return printstring
 
 configfile: "config.yaml"
 
@@ -49,7 +180,146 @@ for thissample in config["species"]:
 rule all:
     input:
         expand(config["tool"] + "/output/{species}_plots.pdf",
-               species = config["species"])
+               species = config["species"]),
+        # now the mixing measures
+        expand(config["tool"] + "/output_mixing/{species}_mixing.tsv",
+               species = config["species"]),
+        expand(config["tool"] + "/output_mixing/{species}_mixing_simulation.txt",
+               species = config["species"]),
+        # final mixing measure
+        config["tool"] + "/output_mixing_merged/all_species_mixing.tsv"
+
+def mixing_analysis(rbh_file, species,
+                    grouping_list_of_lists,
+                    genome_size_tsv,
+                    mixfile, simfile):
+    """
+    Figures out the degree of how much the pairs are mixed.
+    Gets the rows in which sample A and sample B have the same chromosome
+
+    outputs a table of the measures of how mixed something is.
+
+    This works on a per-species basis. One file per species, and
+     the file will have all of the chromosomes in that species with at
+     least 5 genes per group on that chromosome.
+    """
+
+    # read in the genome_sizes
+    chr_size = {}
+    with open(genome_size_tsv, "r") as f:
+        for line in f:
+            line = line.strip()
+            fields = line.split("\t")
+            chr_size[fields[1]] = int(fields[2])
+
+    # open the outfiles
+    outsim = open(simfile, "w")
+
+    df = pd.read_csv(rbh_file, sep = "\t", index_col = 0)
+    spscaf = "{}_scaf".format(species)
+    sppos  = "{}_pos".format(species)
+    df = df[["gene_group", spscaf, sppos]]
+    df = df.dropna()
+    df = df.mask(df.eq('None')).dropna()
+    #print(df)
+    df[sppos] = pd.to_numeric(df[sppos])
+    list_of_results = []
+    for thisgrouping in grouping_list_of_lists:
+        groupA = thisgrouping[0]
+        groupB = thisgrouping[1]
+        remap_dict = {groupA: "A", groupB: "B"}
+        ABdf  = df.loc[df["gene_group"].isin(thisgrouping), ]
+        for thisscaf in ABdf[spscaf].unique():
+            Adf  = ABdf.loc[ABdf["gene_group"].str.strip() == groupA, ]
+            Adf  = Adf.loc[ Adf[spscaf].str.strip() == thisscaf, ]
+            Adf  = Adf.sort_values(sppos)
+            Bdf  = ABdf.loc[ABdf["gene_group"].str.strip() == groupB, ]
+            Bdf  = Bdf.loc[ Bdf[spscaf].str.strip() == thisscaf, ]
+            Bdf  = Bdf.sort_values(sppos)
+            if len(Adf) >= 5 and len(Bdf) >= 5:
+                #print(Adf)
+                #print(Bdf)
+                bases_covered = 0
+                A_range = [min(Adf[sppos]), max(Adf[sppos])]
+                B_range = [min(Bdf[sppos]), max(Bdf[sppos])]
+                group1 = []
+                group2 = []
+                if A_range[0] <= B_range[0]:
+                    group1 = A_range
+                    group2 = B_range
+                elif B_range[0] <= A_range[0]:
+                    group1 = B_range
+                    group2 = A_range
+                else:
+                    raise IOError("This didn't work and not sure why")
+
+                if group1[1] < group2[1]:
+                    if group1[1] >= group2[0]:
+                        # scenario1
+                        #   group1: AAAAAAAAAAAAAAAAAAAAAA
+                        #   group2:      BBBBBBBBBBBBBBBBBBBBBBBB
+                        print("scenario1")
+                        bases_covered = group1[1] - group2[0]
+                    elif group1[1] < group2[0]:
+                        # scenario3
+                        #   group1: AAAAAAAAAAAAAAAA
+                        #   group2:                        BBBBBBBBBBBBBBB
+                        print("scenario3")
+                    else:
+                        raise IOError("some erors")
+                elif group1[1] >= group2[1]:
+                    # scenario2
+                    #   group1: AAAAAAAAAAAAAAAAAAAAAA
+                    #   group2:      BBBBBBBBB
+                    print("scenario2")
+                    bases_covered = group2[1] - group2[0]
+                else:
+                    raise IOError("We shouldn't have gotten here")
+
+                if bases_covered == 0:
+                    percent_genome_covered_mixed = 0
+                else:
+                    percent_genome_covered_mixed = (bases_covered/chr_size[thisscaf])*100
+                if percent_genome_covered_mixed > 100:
+                    raise IOError ("Percent was greater than 100")
+                elif percent_genome_covered_mixed < 0:
+                    raise IOError ("Percent was less than 0")
+
+                bases_covered = int(bases_covered)
+                merged = pd.concat([Adf, Bdf])
+                merged = merged.sort_values(sppos)
+                mixstring = "".join(list(merged["gene_group"].map(remap_dict)))
+                analysis = MixedString(mixstring, num_iterations = 100000)
+                print("# Species   : {}".format(species), file = outsim)
+                print("# Grouping A: {}".format(groupA), file = outsim)
+                print("# Grouping B: {}".format(groupB), file = outsim)
+                print("# Scaffold  : {}".format(thisscaf), file = outsim)
+                print(analysis, file = outsim)
+                print("# ################", file = outsim)
+
+                # now add something to the table
+                list_of_results.append({
+                    "species": species,
+                    "scaffold": thisscaf,
+                    "mixed_groups": "{}+{}".format(groupA, groupB),
+                    "genestring": analysis.genestring,
+                    "charAcount": analysis.charAcount,
+                    "charBcount": analysis.charBcount,
+                    "m": analysis.mixing_value,
+                    "mode": analysis.mode,
+                    "mean": analysis.mean,
+                    "bases_covered_mixing": bases_covered,
+                    "scaffold_total_bases": chr_size[thisscaf],
+                    "percent_scaffold_mixing": percent_genome_covered_mixed,
+                    "m_percent_of_way_to_mode": min(1,(analysis.mixing_value/analysis.mode)) * 100,
+                    "probability_completely_random": analysis.prob_completely_random,
+                    "num_iterations": analysis.num_iterations,
+                })
+
+
+    outsim.close()
+    results = pd.DataFrame(list_of_results)
+    results.to_csv(mixfile, sep = "\t", index = False)
 
 def overlapping_plot(thisspecies, thischrom, chrom_size,
                      left_pos,   right_pos,
@@ -229,3 +499,38 @@ rule gen_mixing_plots:
                                              left_pos,   right_pos,
                                              left_group, right_group,
                                              left_color, right_color, pdf)
+
+rule text_mixing_measures:
+    input:
+        rbh = config["rbh_file"],
+        csize = config["tool"] + "/input/{species}_chrom_sizes.tsv"
+    output:
+        mf = config["tool"] + "/output_mixing/{species}_mixing.tsv",
+        sf = config["tool"] + "/output_mixing/{species}_mixing_simulation.txt",
+    params:
+        species = lambda wildcards: wildcards.species
+    threads: 1
+    run:
+        mixing_analysis(input.rbh, params.species,
+                        config["merge_pairs"], input.csize,
+                        output.mf, output.sf)
+
+
+rule merge_all_measures:
+    input:
+        mf = expand(config["tool"] + "/output_mixing/{species}_mixing.tsv",
+               species = config["species"])
+    output:
+        outtable = config["tool"] + "/output_mixing_merged/all_species_mixing.tsv"
+    threads: 1
+    run:
+        dataframes = []
+        for filename in input.mf:
+            try:
+                df = pd.read_csv(filename, sep = "\t", index_col = None)
+                dataframes.append(df)
+            except:
+                pass
+        final = pd.concat(dataframes)
+        final = final.sort_values("mixed_groups")
+        final.to_csv(output.outtable, sep = "\t", index = False)
