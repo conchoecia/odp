@@ -48,7 +48,7 @@ class MixedString:
         # I don't think this measure is appropriate given
         #  that the Gaussian distribution naturally tightens around
         #  0.5 as the number of genes in A and B group increase
-        #self.prob_completely_random = min(self.numsims_between_0_and_mixingvalue/self.number_of_sims_leq_mode, 1)
+        self.prob_completely_random = 1.0 - min(self.numsims_between_0_and_mixingvalue/self.num_iterations, 1)
 
     def quantify_mixing(self, instr):
         """
@@ -258,13 +258,14 @@ def mixing_analysis(rbh_file, species,
                         # scenario1
                         #   group1: AAAAAAAAAAAAAAAAAAAAAA
                         #   group2:      BBBBBBBBBBBBBBBBBBBBBBBB
-                        print("scenario1")
+                        #print("scenario1")
                         bases_covered = group1[1] - group2[0]
                     elif group1[1] < group2[0]:
                         # scenario3
                         #   group1: AAAAAAAAAAAAAAAA
                         #   group2:                        BBBBBBBBBBBBBBB
-                        print("scenario3")
+                        #print("scenario3")
+                        bases_covered = 0
                     else:
                         raise IOError("some erors")
                 elif group1[1] >= group2[1]:
