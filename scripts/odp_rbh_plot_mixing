@@ -236,7 +236,7 @@ def mixing_analysis(rbh_file, species,
             Bdf  = ABdf.loc[ABdf["gene_group"].str.strip() == groupB, ]
             Bdf  = Bdf.loc[ Bdf[spscaf].str.strip() == thisscaf, ]
             Bdf  = Bdf.sort_values(sppos)
-            if len(Adf) >= 5 and len(Bdf) >= 5:
+            if len(Adf) >= 3 and len(Bdf) >= 3:
                 #print(Adf)
                 #print(Bdf)
                 bases_covered = 0
