@@ -167,7 +167,7 @@ rule hmm_search_against_genome:
           --noali \
           --notextw \
           {input.hmm} \
-          {input.proteins}
+          {input.proteins} > /dev/null
         """
 
 rule aggregate_hmm_results_by_species:
