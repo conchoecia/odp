@@ -177,16 +177,16 @@ rule all:
         # now make a config file for other odp plotting functions
         "synteny_analysis/odp_plotting_configs/odp_plotting_configs.yaml",
         # These need to be rewritten such that x and y do not match
-        #OdpF.expand_avoid_matching_all_third(
-        #    "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
-        #    xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-        #    third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-        #    ),
-        #OdpF.expand_avoid_matching_all_third(
-        #    "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
-        #    xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-        #    third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-        #    ),
+        OdpF.expand_avoid_matching_all_third(
+            "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
+            xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
+            third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+            ),
+        OdpF.expand_avoid_matching_all_third(
+            "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
+            xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
+            third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
+            ),
         # make protein similarity plots
         OdpF.expand_avoid_matching(
             "synteny_analysis/plots/sample_similarity/{xsample}_and_{ysample}_peridentity_length.pdf",
@@ -1320,6 +1320,7 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
         bitscore = vararray[3]
         bitscore_adjusted = vararray[4]
         colors = vararray[5]
+        dotsize = [6 for i in x]
 
     # now make a scatter plot
     figWidth = 8
@@ -1398,13 +1399,11 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     print("prot_to_color change")
     if prot_to_color_mode:
         # there is a bug where prot-to_color_mode doesn't work if there are genes missing
+        print("We're in prot_to_color mode")
         dotsize = [6 for i in x]
+    else:
+        print("we're not in prot to color mode")
 
-    print("BEFORE ERROR")
-    print("size dotsize: {}".format(len(dotsize)))
-    print("size x: {}".format(len(x)))
-    print("size y: {}".format(len(y)))
-    print("size colors: {}".format(len(colors)))
     panel1.scatter(x, y, color = colors,
                    ec = None, s=dotsize, linewidths = 0)
     print("xmax is")
@@ -1876,7 +1875,7 @@ def correlation_plot(plotting_df, fishertsv,
     bbblue = "#bbe3f2"
     yellow = "#f3e056"
     orange = "#f98e08"
-    red    = "#7d1d6c"
+    purple    = "#7d1d6c"
     from scipy import stats
     import pandas as pd
     import seaborn as sns; sns.set()
@@ -1933,7 +1932,7 @@ def correlation_plot(plotting_df, fishertsv,
     p_value_to_color = {0.1:        bbblue,
                         0.05:       yellow,
                         0.00005:    orange,
-                        0.00000005: red}
+                        0.00000005: purple}
     fisherdf["color"] = gray
     # now add colors to each entry in the dataframe
     for index, row in fisherdf.iterrows():
@@ -2087,9 +2086,9 @@ def correlation_plot(plotting_df, fishertsv,
         legscale, legsize = sizes_and_scale_minp(smallest_p)
         legscale.append(0.15)
         legsize.append("1")
-        index_to_color = [gray, bbblue, yellow, orange, red]
+        index_to_color = [gray, bbblue, yellow, orange, purple]
         index_to_text  = ["> 0.1", "< 0.10", "< 0.05", "< 5e-4", "< 5e-7"]
-        for i in range(4):
+        for i in range(len(index_to_color)):
             x = x_median_size/2
             y = y_median_size/2
             circ = matplotlib.patches.Ellipse(
