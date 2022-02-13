@@ -138,11 +138,22 @@ if "prot_to_color" not in config:
 
 prot_color_files = []
 if len(config["prot_to_color"]) != 0:
+    """
+    fields in the prot_to_color file are:
+    <1> species
+    <2> chrom
+    <3> position
+    <4> gene
+    <5> color
+    <6> gene_group
+    <7> rbh
+    """
     for entry in config["prot_to_color"]:
-        if not os.path.exists(config["prot_to_color"][entry]["file"]):
-            raise IOError("{} does not exist.".format(config["prot_to_color"][entry]["file"]))
+        if not os.path.exists(config["prot_to_color"][entry]):
+            raise IOError("{} does not exist.".format(config["prot_to_color"][entry]))
         else:
             # the file exists, we can add some colors
+            config["prot_to_color"][entry] = {"file": config["prot_to_color"][entry] }
             config["prot_to_color"][entry]["prot_to_color_dict"] = {}
             config["prot_to_color"][entry]["group_to_color_dict"] = {}
             with open(config["prot_to_color"][entry]["file"], "r") as f:
@@ -150,9 +161,15 @@ if len(config["prot_to_color"]) != 0:
                     line = line.strip()
                     if line:
                         fields = line.split("\t")
-                        if fields[1].startswith("#"):
-                            config["prot_to_color"][entry]["prot_to_color_dict"][fields[0]] = fields[1]
-                            config["prot_to_color"][entry]["group_to_color_dict"][fields[2]] = fields[1]
+                        species    = fields[0]
+                        chrom      = fields[1]
+                        position   = int(fields[2])
+                        gene       = fields[3]
+                        color      = fields[4]
+                        gene_group = fields[5]
+                        rbh        = fields[6]
+                        config["prot_to_color"][entry]["prot_to_color_dict"][gene] = color
+                        config["prot_to_color"][entry]["group_to_color_dict"][gene_group] = color
             # now we tell odp to make plots coloring with prot_to_color_dict
             outfiles = OdpF.expand_avoid_matching(
                 "synteny_analysis/plots/synteny_colored_by_{colorscheme}/{xsample}_and_{ysample}_coloredby_{colorscheme}.pdf",
