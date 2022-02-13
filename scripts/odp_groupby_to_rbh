@@ -57,6 +57,7 @@ def parse_pd_list_or_string(pd_list, rowcount):
             return ast.literal_eval(pd_list)
         else:
             # if it isn't a list, just
+            print(pd_list, rowcount)
             return [pd_list] * rowcount
     elif (type(pd_list) == float) and (np.isnan(pd_list)):
         return [None] * rowcount
@@ -79,6 +80,13 @@ rule unwrap_rbh_file_with_group_column:
     run:
         for thisfile in input.rbh_files:
             df = pd.read_csv(thisfile, sep = "\t", index_col = None)
+            if len([x for x in df.columns if x.startswith("Unnamed")]) > 0:
+                print("There is a column that is unnamed, and probably doesn't have data in that column. Check your input.", file = sys.stderr)
+            df = df[[x for x in df.columns if not x.startswith("Unnamed")]]
+            print(df)
+            if True in [np.isnan(x) for x in df["count"].unique()]:
+                raise IOError("There are some rows in this dataset where count is nan. That should not occur in a rbh or rbh.groupby file. Check that your input has no rows that are erroneously empty.")
+
             # get all the species in the dataframe
             complete_species_list = [x.split("_")[0] for x in df.columns
                                      if x.endswith("_scaf")]
@@ -109,10 +117,9 @@ rule unwrap_rbh_file_with_group_column:
                     thisentry = {"rbh": rbh_list[i],
                                  "gene_group": thisgroup,
                                  "count":      row["count"]}
-                    if "alpha" in row:
-                        thisentry["alpha"] = row["alpha"]
-                    if "alpha_type" in row:
-                        thisentry["alpha_type"] = row["alpha_type"]
+                    for keep_this in ["ALG", "color", "alpha", "alpha_type"]:
+                        if keep_this in row:
+                            thisentry[keep_this] = row[keep_this]
                     for thisspecies in complete_species_list:
                         # get col names
                         scafcol = "{}_scaf".format(thisspecies)
