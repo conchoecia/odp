@@ -66,6 +66,8 @@ rule all:
     input:
         # just the unwrapped data
         expand(config["tool"] + "/output/{sp}.unwrapped.rbh",
+               sp = analyses),
+        expand(config["tool"] + "/output/{sp}.colors.tsv",
                sp = analyses)
 
 rule unwrap_rbh_file_with_group_column:
@@ -73,6 +75,8 @@ rule unwrap_rbh_file_with_group_column:
         rbh_files = config["groupby_files"]
     output:
         rbh_unwrapped = expand(config["tool"] + "/output/{sp}.unwrapped.rbh",
+                               sp = analyses),
+        colors        = expand(config["tool"] + "/output/{sp}.colors.tsv",
                                sp = analyses)
     params:
         prefix = config["tool"] + "/output/"
@@ -136,3 +140,27 @@ rule unwrap_rbh_file_with_group_column:
             outfile = params.prefix + species_string + ".unwrapped.rbh"
             print(outfile)
             unwrapped.to_csv(outfile, sep="\t", na_rep = "None", index = False)
+
+            # now we go through the dataframe and check print out the colors
+            outfile = params.prefix + species_string + ".colors.tsv"
+            outhandle = open(outfile, "w")
+
+            if "color" not in unwrapped:
+                print("There is no color column, so the color outfile will be empty.",
+                      file = sys.stderr)
+                print("There is no color column, so the color outfile will be empty.", file = outhandle)
+            else:
+                print(unwrapped)
+                gene_cols = [x for x in unwrapped.columns if "_gene" in x]
+                for index, row in unwrapped.iterrows():
+                    for thiscol in gene_cols:
+                        if row[thiscol] != None:
+                            sp = thiscol.replace("_gene", "")
+                            scaf = row["{}_scaf".format(sp)]
+                            pos  = int(row["{}_pos".format(sp)])
+                            print("{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
+                                sp, scaf, pos,
+                                row[thiscol], row["color"], row["gene_group"],
+                                row["rbh"]),
+                                  file = outhandle)
+            outhandle.close()
