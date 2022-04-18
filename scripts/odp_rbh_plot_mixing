@@ -17,9 +17,28 @@ import pandas as pd
 import random
 import sys
 
+def compress_homopolymer_string(input_string):
+    """
+    removes stretches of homopolymers from the string
+    """
+    newstring =""
+    prev = ""
+    for thischar in input_string:
+        if thischar != prev:
+            newstring += thischar
+        prev = thischar
+    return newstring
+
 class MixedString:
-    def __init__(self, genestring, num_iterations = 1000000):
-        self.genestring = genestring
+    def __init__(self, genestring, num_iterations = 1000000, compress_homopolymer = True):
+        self.compress_homopolymer = compress_homopolymer
+        self.origstring = genestring
+        # calculate compressed string
+        self.compressed_string = compress_homopolymer_string(self.origstring)
+        if compress_homopolymer:
+            self.genestring = self.compressed_string
+        else:
+            self.genestring = self.origstring
         # first ensure there are only 2 chars
         self.charcount = set()
         for i in range(len(self.genestring)):
@@ -33,10 +52,12 @@ class MixedString:
         self.charBcount = self.genestring.count(self.charcount_list[1])
         self.num_iterations = num_iterations
         # calculate the actual mixing value
-        self.mixing_value = self.quantify_mixing(genestring)
+        #print("# orig string")
+        #print(self.origstring)
+        self.mixing_value = self.quantify_mixing(self.genestring)
         # calculate the distribution of possible values given this string
-        self.dist_dict = self.distribution_of_mixing(genestring,
-                                                     self.num_iterations)
+        self.dist_dict = self.distribution_of_mixing(
+                      self.genestring, self.compress_homopolymer, self.num_iterations)
         self.mode = self.mode_of_dist(self.dist_dict)
         self.mean = self.mean_of_dist(self.dist_dict, self.num_iterations)
         # calculate other measures
@@ -48,7 +69,7 @@ class MixedString:
         # I don't think this measure is appropriate given
         #  that the Gaussian distribution naturally tightens around
         #  0.5 as the number of genes in A and B group increase
-        self.prob_completely_random = 1.0 - min(self.numsims_between_0_and_mixingvalue/self.num_iterations, 1)
+        self.p_value_unmixed = self.numsims_between_0_and_mixingvalue/self.num_iterations
 
     def quantify_mixing(self, instr):
         """
@@ -56,7 +77,13 @@ class MixedString:
         This doesn't measure entropy, but returns a float between
                0 (unmixed, just completely sequential)
            and 1 (ABABABABABA - completely alternating)
-        We return m= (AB + BA - 1)/(len(instr)-2)
+        We return
+          # first measure
+          m= (AB + BA - 1)/(len(instr)-2)
+          # second measure
+          m= (AB + BA - 1)/(min(|A|, |B|) - 2)
+          # third measure
+          m= (AB + BA - 1)/(A*(B/(|A| + |B|)) + B*(A/(|A| + |B|)))
         """
         # first ensure there are only 2 chars
         charcount = set()
@@ -67,26 +94,47 @@ class MixedString:
         # Now count
         chars = [x for x in charcount]
         Ac = chars[0]
+        NA = instr.count(Ac)
         Bc = chars[1]
+        NB = instr.count(Bc)
+
         transitions = ["{}{}".format(Ac, Bc), "{}{}".format(Bc, Ac)]
         Tcount = 0
         for i in range(len(instr)-1):
             pair = instr[i:i+2]
             if pair in transitions:
                 Tcount += 1
-        return (Tcount-1)/(len(instr) - 2)
 
-    def distribution_of_mixing(self, instr, num_of_iterations = 1000000):
+        #print("instr", instr)
+        #print("   Tcount - 1: ", Tcount-1)
+        #print("len(instr) -2: ", len(instr) -2)
+        #print()
+        # figure out how many possible transitions there are
+        #minlen = min(instr.count(Ac), instr.count(Bc))
+        #double_minlen = minlen * 2
+        #if double_minlen == 2:
+        #    return(0)
+        #else:
+        #    return (Tcount-1)/(double_minlen - 1)
+        numerator = Tcount - 1
+        denominator = (NA*(NB/(len(instr)))) + (NB*(NA/(len(instr)))) - 1
+        return numerator/denominator
+
+    def distribution_of_mixing(self, instr, compress_homopolymer, num_of_iterations = 1000000):
         """
         This estimates the distribution of mixing values for a given
          input string. It outputs a data structure that contains the
          distribution
         """
+        #print("We're in distribution now. instring: {}, compress = {}".format(instr, compress_homopolymer))
         thisstring = instr
         thisvalue = -1
         dist_counter = {0: 0, 1: 0}
         for i in range(num_of_iterations):
-            thisstring = ''.join(random.sample(thisstring,len(thisstring)))
+            thisstring = ''.join(random.sample(instr,len(instr)))
+            prev = thisstring
+            if compress_homopolymer:
+                thisstring = compress_homopolymer_string(thisstring)
             thisvalue = self.quantify_mixing(thisstring)
             if thisvalue not in dist_counter:
                 dist_counter[thisvalue] = 0
@@ -119,7 +167,9 @@ class MixedString:
 
     def __str__(self):
         printstring = "Gene mixing analysis\n"
-        printstring += " Gene  string: {}\n".format(self.genestring)
+        printstring += " Original Gene string: {}\n".format(self.genestring)
+        printstring += " Compressed    string: {}\n".format(self.genestring)
+        printstring += " Used    compressed? : {}\n".format(self.compress_homopolymer)
         printstring += " Char {} count: {}\n".format(self.charA, self.charAcount)
         printstring += " Char {} count: {}\n".format(self.charB, self.charBcount)
         printstring += " mixing  value: {}\n".format(self.mixing_value)
@@ -192,7 +242,7 @@ rule all:
 def mixing_analysis(rbh_file, species,
                     grouping_list_of_lists,
                     genome_size_tsv,
-                    mixfile, simfile):
+                    mixfile, simfile, compress_homopolymer = True):
     """
     Figures out the degree of how much the pairs are mixed.
     Gets the rows in which sample A and sample B have the same chromosome
@@ -272,7 +322,7 @@ def mixing_analysis(rbh_file, species,
                     # scenario2
                     #   group1: AAAAAAAAAAAAAAAAAAAAAA
                     #   group2:      BBBBBBBBB
-                    print("scenario2")
+                    #print("scenario2")
                     bases_covered = group2[1] - group2[0]
                 else:
                     raise IOError("We shouldn't have gotten here")
@@ -290,7 +340,7 @@ def mixing_analysis(rbh_file, species,
                 merged = pd.concat([Adf, Bdf])
                 merged = merged.sort_values(sppos)
                 mixstring = "".join(list(merged["gene_group"].map(remap_dict)))
-                analysis = MixedString(mixstring, num_iterations = 100000)
+                analysis = MixedString(mixstring, num_iterations = 100000, compress_homopolymer = compress_homopolymer)
                 print("# Species   : {}".format(species), file = outsim)
                 print("# Grouping A: {}".format(groupA), file = outsim)
                 print("# Grouping B: {}".format(groupB), file = outsim)
@@ -313,7 +363,7 @@ def mixing_analysis(rbh_file, species,
                     "scaffold_total_bases": chr_size[thisscaf],
                     "percent_scaffold_mixing": percent_genome_covered_mixed,
                     "m_percent_of_way_to_mode": min(1,(analysis.mixing_value/analysis.mode)) * 100,
-                    "probability_completely_random": analysis.prob_completely_random,
+                    "p_value_unmixed": analysis.p_value_unmixed,
                     "num_iterations": analysis.num_iterations,
                 })
 
@@ -514,7 +564,7 @@ rule text_mixing_measures:
     run:
         mixing_analysis(input.rbh, params.species,
                         config["merge_pairs"], input.csize,
-                        output.mf, output.sf)
+                        output.mf, output.sf, False)
 
 
 rule merge_all_measures:

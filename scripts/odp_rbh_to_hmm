@@ -139,7 +139,7 @@ rule align_fasta_of_each_group:
     threads: 1
     shell:
         """
-        mafft --localpair --maxiterate 1000 {input.MBH_fasta} > {output.aligned}
+        mafft --localpair --anysymbol --maxiterate 1000 {input.MBH_fasta} > {output.aligned}
         """
 
 rule make_hmm:
