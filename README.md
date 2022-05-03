@@ -31,8 +31,8 @@ This software package is useful to (1) plot synteny relationships between two ge
 
 This software was visually modelled on the dotplots found in [Simakov, Oleg, et al. "Deeply conserved synteny resolves early events in vertebrate evolution." Nature ecology & evolution 4.6 (2020): 820-830.](https://www.nature.com/articles/s41559-020-1156-z), and was further expanded to determine the phylogenetic tree toplogy of animals in [Schultz, D.T., et al. (2022)](https://www.biorxiv.org/).
 
-This software works by:
-1. Finding reciprocal-best protein matches using diamond blastp. This analysis can be between as few as two species, up to n species. Compute time scales quadratically with increasing species (n
+For the aims above, this software works by:
+1. For comparisons between two species, this program finds reciprocal-best protein matches using diamond blastp. The pipeline performs comparions between all *n* species in the config file. Compute time scales quadratically with increasing species *O(n*<sup>2</sup>*)*. The [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) of each pairwise comparison is calculated to determine synteny block cutoffs in the cases of complex rearrangements. The signifiance of interactions between pairwise
 2. Calculating [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) for each genome.
 3. Plotting the genome assembly, reciprocal best protein hits, and Da/Db using matplotlib
 
