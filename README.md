@@ -2,12 +2,41 @@
 
 # odp - Oxford Dot Plots
 
-This software creates dotplots of protein synteny in genome assemblies. This software was visually modelled on the dotplots found in [Simakov, Oleg, et al. "Deeply conserved synteny resolves early events in vertebrate evolution." Nature ecology & evolution 4.6 (2020): 820-830.](https://www.nature.com/articles/s41559-020-1156-z)
+## <a name="started"></a>Getting Started
+```sh
+git clone https://github.com/conchoecia/odp.git
+# make a config.yaml file for your odp analysis
+cp odp/example_configs/CONFIG_odp.yaml ./
+# modify the config file to include your own data
+vim CONFIG_odp.yaml
+# rename the config so snakemake can find it
+mv CONFIG_odp.yaml config.yaml
+# run the pipeline
+snakemake -r -p --snakefile odp/scripts/odp
+# currently there is no man page, see https://github.com/conchoecia/odp/ for instructions
+```
+
+## Table of Contents
+
+- [Getting Started](#started)
+- [Description](#description)
+- [Users' Guide](#uguide)
+  - [Installation](#install)
+  - [General usage](#general)
+  - [Use cases](#cases)
+
+## <a name="description"></a>Description
+
+This software package is useful to (1) plot synteny relationships between two genome assemblies, (2) to infer evolutionary relationships using chromosome synteny information, and (3) to determine groups of ancestrally linked genes given a set of species' chromosome-scale genomes.
+
+This software was visually modelled on the dotplots found in [Simakov, Oleg, et al. "Deeply conserved synteny resolves early events in vertebrate evolution." Nature ecology & evolution 4.6 (2020): 820-830.](https://www.nature.com/articles/s41559-020-1156-z), and was further expanded to determine the phylogenetic tree toplogy of animals in [Schultz, D.T., et al. (2022)](https://www.biorxiv.org/).
 
 This software works by:
-1. Finding reciprocal-best protein matches using diamond blastp.
+1. Finding reciprocal-best protein matches using diamond blastp. This analysis can be between as few as two species, up to n species. Compute time scales quadratically with increasing species (n
 2. Calculating [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) for each genome.
 3. Plotting the genome assembly, reciprocal best protein hits, and Da/Db using matplotlib
+
+
 
 ## Example
 
