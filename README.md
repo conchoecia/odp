@@ -139,3 +139,42 @@ XP_024307730.1  NC_000001.11    -       358153  399041
 NP_001005221.2  NC_000001.11    -       450740  450740
 XP_011540840.1  NC_000001.11    -       586839  611112
 ```
+
+## <a name="cases"></a>Use cases
+
+### <a name="plot"></a>Make macrosynteny plots between two or more genomes
+
+Program: `odp/scripts/odp`
+Input: `config.yaml` file with the species you wish to compare.
+Output:
+  - Tables of reciprocal best blastp hits between species.
+  - PDF figures of Oxford dot plots comparing genome macrosynteny.
+  - PDF figures of plots showing the degree of homology between chromosomes.
+  - Oxford dot plots colored by predefined gene IDs, or by orthologs in other species
+
+`config.yaml` format:
+
+```
+# this file is called config.yaml
+xaxisspecies:
+  Celegans:
+    proteins: /path/to/proteins_in_Cel_genome.fasta # required field
+    prot_to_loc: /path/to/Cel_annot.chrom           # required field
+    genome: /path/to/Cel_genome_assembly.fasta      # required field
+    genus: "Caenorhabditis" # This is an optional field
+    species: "elegans" # This is an optional field
+    minscafsize: 1000000 # optional field. Sets minimum scaffold size to plot
+    manual_breaks:    # optional field, tells the software to treat breaks
+      - "I:50000"     #  as separate units for calculating the homology p-values
+      - "IV:9000000"  #  with Fisher's exact test. Useful for plotting centromeres.
+      - "II:99009"    #  Here, we tell the software that Cel chroms I, IV, II have breaks.
+    chrom_to_color:                     # This is also an optional field, it tells odp
+      "I:all": "#e11f26"                #  to plot different chromosomes' proteins with
+      "II:0-50000": "#8d4b68"           #  different colors. This plots chromosome II
+      "II:50000-9999999": "#3a7eb5"     #  with two colors and chromosome I with one.
+    
+  Homosapiens:
+    proteins: /path/to/Human_prots.fasta
+    prot_to_loc: /path/to/Human_annotation.chrom
+    genome: /path/to/Human_genome_assembly.fasta
+```
