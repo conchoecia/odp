@@ -27,7 +27,6 @@ snakemake -r -p --snakefile odp/scripts/odp
     - [Input File Requirements](#inputspec)
     - [`.chrom` file specifications](#chromspec)
     - [Help generating `.chrom` files](#chromhelp)
-
   - [Use cases](#cases)
 
 ## <a name="uguide"></a>Users' Guide
@@ -104,7 +103,7 @@ snakemake --snakefile odp/scripts/odp
 The file formats that are needed for the three files per genome are:
 1. A genome assembly in [`.fasta` format](https://en.wikipedia.org/wiki/FASTA_format).
 2. Protein sequences in [`.fasta` format](https://en.wikipedia.org/wiki/FASTA_format).
-3. A `.chrom` file which details where the proteins are located in the genome.
+3. A file which details where the proteins are located in the genome, in [`.chrom` format](#chromspec)
 
 ### <a name="chromspec"></a>`.chrom` file specifications
 
