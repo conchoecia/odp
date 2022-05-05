@@ -187,3 +187,26 @@ xaxisspecies:
     prot_to_loc: /path/to/Human_annotation.chrom
     genome: /path/to/Human_genome_assembly.fasta
 ```
+
+Run the pipeline with the command `snakemake -r -p --snakefile odp/scripts/odp`. The output files will be located in the folder `synteny_analysis/`. In this folder there are these folders:
+  - `blastp_results/`
+    - Files pertaining to the blastp searches between all the genomes. Also has files with the reciprocal best hits.
+  - `db/`
+    - Blast databases for searches.
+  - `dvalue_table/`
+    - Tables with the best reciprocal hits between species, genome coordinates.
+  - `dvalue_table_breaks/`
+    - The same files as in `dvalue_table/`, except that it contains *Da* and *Db* values for each pair.
+  - `genome_coords/`
+    - The genome coordinates (only used for plotting).
+  - `odp_plotting_configs/`
+    - Temporarily defunct, but generates `config.yaml` files that can be used for later steps in `odp`.
+  - `plot_order/`
+    - For each comparison, has the order in which scaffolds will be plotted.
+  - `plots/`
+    - `sample_similarity/`
+    - `significance/`
+    - `synteny_colored_by*/`
+    - `synteny_colored_by_no_missing/`
+    - `
+  - `prot_to_color/`
