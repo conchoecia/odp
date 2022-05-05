@@ -152,26 +152,35 @@ Output:
   - PDF figures of plots showing the degree of homology between chromosomes.
   - Oxford dot plots colored by predefined gene IDs, or by orthologs in other species
 
-`config.yaml` format:
+`config.yaml` format for running `odp/scripts/odp`:
 
-```
+```yaml
 # this file is called config.yaml
 xaxisspecies:
   Celegans:
     proteins: /path/to/proteins_in_Cel_genome.fasta # required field
     prot_to_loc: /path/to/Cel_annot.chrom           # required field
     genome: /path/to/Cel_genome_assembly.fasta      # required field
+    
     genus: "Caenorhabditis" # This is an optional field
     species: "elegans" # This is an optional field
+    
     minscafsize: 1000000 # optional field. Sets minimum scaffold size to plot
+    
     manual_breaks:    # optional field, tells the software to treat breaks
       - "I:50000"     #  as separate units for calculating the homology p-values
       - "IV:9000000"  #  with Fisher's exact test. Useful for plotting centromeres.
       - "II:99009"    #  Here, we tell the software that Cel chroms I, IV, II have breaks.
+      
     chrom_to_color:                     # This is also an optional field, it tells odp
       "I:all": "#e11f26"                #  to plot different chromosomes' proteins with
       "II:0-50000": "#8d4b68"           #  different colors. This plots chromosome II
       "II:50000-9999999": "#3a7eb5"     #  with two colors and chromosome I with one.
+      
+    plotorder:    # This optional field tells the software to only plot the scaffolds
+      - "I"       #  listed here, and to do it in this order. This is useful for plotting
+      - "II"      #  comparisons between two species where you want a specific order for
+      - "III"     #  both species.
     
   Homosapiens:
     proteins: /path/to/Human_prots.fasta
