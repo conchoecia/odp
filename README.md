@@ -205,8 +205,14 @@ Run the pipeline with the command `snakemake -r -p --snakefile odp/scripts/odp`.
     - For each comparison, has the order in which scaffolds will be plotted.
   - `plots/`
     - `sample_similarity/`
+      - Plots of distributions of ortholog length vs protein percent identity.
     - `significance/`
+      - Plots containing several visual styles showing the significance of interactions between chromosomes, or sub-chromosomal regions defined by the user.
     - `synteny_colored_by*/`
+      - Oxford dot plots of two species, color by the specified color from a list of protein ids and colors.
     - `synteny_colored_by_no_missing/`
-    - `
+      - Oxford dot plots of two species colored by the orthology and color identity of another species.
+    - `synteny_uncolored`
+      - Oxford dot plots. Every orthologous protein is colored blue.
   - `prot_to_color/`
+    - A list of protein ids and how to color them.
