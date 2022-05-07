@@ -28,6 +28,8 @@ snakemake -r -p --snakefile odp/scripts/odp
     - [`.chrom` file specifications](#chromspec)
     - [Help generating `.chrom` files](#chromhelp)
   - [Use cases](#cases)
+    - [Make macrosynteny plots between two or more genomes](#macrosynuse)
+
 
 ## <a name="uguide"></a>Users' Guide
 
@@ -142,7 +144,7 @@ XP_011540840.1  NC_000001.11    -       586839  611112
 
 ## <a name="cases"></a>Use cases
 
-### <a name="plot"></a>Make macrosynteny plots between two or more genomes
+### <a name="macrosynuse"></a>Make macrosynteny plots between two or more genomes
 
 Program: `odp/scripts/odp`
 Input: `config.yaml` file with the species you wish to compare.
@@ -156,6 +158,14 @@ Output:
 
 ```yaml
 # this file is called config.yaml
+
+ignore_autobreaks: True  # Can be True or False. True results in faster jobs
+diamond_or_blastp: blastp # pick your protein search program. blastp is more sensitive.
+
+prot_to_color:    # This is an optional parameter. odp_groupby_to_rbh generates a file 
+  MyColorGroups1: /path/to/file_of_color_groups1.tsv        # that can be used here to
+  ColorGroups2:   /path/to/another_color_group_file.tsv     # color proteins by groups
+  
 xaxisspecies:
   Celegans:
     proteins: /path/to/proteins_in_Cel_genome.fasta # required field
@@ -216,3 +226,4 @@ Run the pipeline with the command `snakemake -r -p --snakefile odp/scripts/odp`.
       - Oxford dot plots. Every orthologous protein is colored blue.
   - `prot_to_color/`
     - A list of protein ids and how to color them.
+
