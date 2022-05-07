@@ -29,6 +29,9 @@ snakemake -r -p --snakefile odp/scripts/odp
     - [Help generating `.chrom` files](#chromhelp)
   - [Use cases](#cases)
     - [Make macrosynteny plots between two or more genomes](#macrosynuse)
+    - [Find and characterize ancestral linkage groups](#ALGanalysis)
+      - [ALGs part 1 - Ortholog finding in 3+ species](#nwayreciprocalbest)
+
 
 
 ## <a name="uguide"></a>Users' Guide
@@ -227,3 +230,11 @@ Run the pipeline with the command `snakemake -r -p --snakefile odp/scripts/odp`.
   - `prot_to_color/`
     - A list of protein ids and how to color them.
 
+### <a name="ALGanalysis"></a>Find and characterize ancestral linkage groups
+Finding ancestral linkage groups of proteins for a group of species is a useful way to characterize what the genome at the ancestral node of that clade may have looked like, and to analyze how the genomes have evolved since that node.  See [Simakov et al. (2022)](https://www.science.org/doi/full/10.1126/sciadv.abi5884) for an example on how this concept was used to determine the ancestral number of chromosomal linkage groups in the common ancestor of sponges, cnidarians, and bilaterians.
+
+The current implementation of this pipeline uses multiple steps to perform these analyses and determine the ALGs. For future versions of odp, we plan to implement this analysis into a single step.
+
+#### <a name="nwayreciprocalbest"></a>ALGs part 1 - Ortholog finding in 3+ species
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
