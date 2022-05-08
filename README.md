@@ -31,6 +31,8 @@ snakemake -r -p --snakefile odp/scripts/odp
     - [Make macrosynteny plots between two or more genomes](#macrosynuse)
     - [Find and characterize ancestral linkage groups](#ALGanalysis)
       - [ALGs part 1 - Ortholog finding in 3+ species](#nwayreciprocalbest)
+      - [ALGs part 2 - Find significantly numerous groups of orthologs](#groupby)
+
 
 
 
@@ -288,3 +290,7 @@ The results of these analyses are found in `odp_nway_rbh/rbh/`. The reciprocal b
 * The scaffold coordinates on which that chromosome resides in that species
 
 Currently, the naming convention for these files is `[Sp.1]_[Sp.2]...[Sp.N]_reciprocal_best_hits.rbh`. This format is used in downstream steps to parse the headers found in the file.
+
+#### <a name="groupby"></a>ALGs part 2 - Find significantly numerous groups of orthologs
+
+Lorem Ipsum
