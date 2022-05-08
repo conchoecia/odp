@@ -237,4 +237,54 @@ The current implementation of this pipeline uses multiple steps to perform these
 
 #### <a name="nwayreciprocalbest"></a>ALGs part 1 - Ortholog finding in 3+ species
 
-Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+For this analysis, `blastp` or `diamond` analyses are performed against _n_ species that you specify. Orthologs are kept only when proteins in the _n_ speices are reciprocal best hits of each other. These are found by loading the `blast` results into a graph structure and finding [bidirectional complete graphs](https://en.wikipedia.org/wiki/Complete_graph) of `blastp` hits. This process is highly conservative, therefore as the number of genomes _n_ increases, the number of highly conserved orthologs decreases.
+
+Program: `odp/scripts/odp_nway_rbh`
+Input: `config.yaml`, same as for `odp/scripts/odp`, but with some modifications.
+Output:
+  - a file that contains the reciprocal best hits for the species included. This is called a `.rbh` file
+
+`config.yaml` format for running `odp/scripts/odp`:
+
+```yaml
+# this file is called config.yaml
+
+# the number of species you want to be included in each analysis
+nways: 3
+# How you want to identify the orthologs [diamond|blastp]
+search_method: diamond
+# What analyses you want to produce. Saves on some compute.
+#  Must match headers of `xaxisspecies`. Order doesn't matter.
+analyses:
+  - ["Celegans", "Homosapiens", "Dmel"]
+  - ["Celegans", "Homosapiens", "Mmus"]
+  - ["Celegans", "Dmel", "Mmus"]
+  # - ["Homosapiens", "Dmel", "Mmus"]   # You can comment out lines if you would like
+  
+xaxisspecies:
+  Celegans:
+    proteins: /path/to/proteins_in_Cel_genome.fasta
+    prot_to_loc: /path/to/Cel_genome_annotation.chrom
+    genome: /path/to/Cel_genome_assembly.fasta
+  Homosapiens:
+    proteins: /path/to/Human_prots.fasta
+    prot_to_loc: /path/to/Human_annotation.chrom
+    genome: /path/to/Human_genome_assembly.fasta
+  Dmel:
+    proteins: /path/to/drosophila_prots.fasta
+    prot_to_loc: /path/to/drosophila_annotation.chrom
+    genome: /path/to/drosophila_genome_assembly.fasta
+  Mmus:
+    proteins: /path/to/mouse_prots.fasta
+    prot_to_loc: /path/to/mouse_annotation.chrom
+    genome: /path/to/mouse_genome_assembly.fasta
+```
+
+The results of these analyses are found in `odp_nway_rbh/rbh/`. The reciprocal best hits file contains an unspecified number of columns, but always contains the columns:
+
+* A unique identifier for each ortholog
+* The protein ID for each species in that ortholog
+* The scaffold ID on which that chromosome resides in that species
+* The scaffold coordinates on which that chromosome resides in that species
+
+Currently, the naming convention for these files is `[Sp.1]_[Sp.2]...[Sp.N]_reciprocal_best_hits.rbh`. This format is used in downstream steps to parse the headers found in the file.
