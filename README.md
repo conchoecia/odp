@@ -233,6 +233,7 @@ Run the pipeline with the command `snakemake -r -p --snakefile odp/scripts/odp`.
     - A list of protein ids and how to color them.
 
 ### <a name="ALGanalysis"></a>Find and characterize ancestral linkage groups
+
 Finding ancestral linkage groups of proteins for a group of species is a useful way to characterize what the genome at the ancestral node of that clade may have looked like, and to analyze how the genomes have evolved since that node.  See [Simakov et al. (2022)](https://www.science.org/doi/full/10.1126/sciadv.abi5884) for an example on how this concept was used to determine the ancestral number of chromosomal linkage groups in the common ancestor of sponges, cnidarians, and bilaterians.
 
 The current implementation of this pipeline uses multiple steps to perform these analyses and determine the ALGs. For future versions of odp, we plan to implement this analysis into a single step.
@@ -293,4 +294,18 @@ Currently, the naming convention for these files is `[Sp.1]_[Sp.2]...[Sp.N]_reci
 
 #### <a name="groupby"></a>ALGs part 2 - Find significantly numerous groups of orthologs
 
-Lorem Ipsum
+The output of the previous program, the `.rbh` file, has one ortholog per line. In this step, we will group the orthologs together based on whether they exist on the same set of scaffolds in each species. For example, all of the orthologs that exist on:
+  * _C. elegans_ chromosome I
+  * _D. melanogaster_ chromosome 3
+  * and human *chromosome 17*
+
+will be one group. All of the orthologs that exist on a slightly different set of chromosomes will be another group, for example:  
+  * _C. elegans_ chromosome I
+  * _D. melanogaster_ chromosome 3
+  * and *human chromosome 16*
+
+The groups are saved in a tab-delimited file called a `.groupby` file. Each line is one group, and gene ids, scaffolds on which they reside, and genome coordinates are saved in python-type lists in single columns.
+
+The number of groups found in this analysis, and the number of genes found in each group, depend on the degree of shared macrosynteny between the species used in the analysis. Distantly related species, or species with fast-evolving genomes, will have many groups, each with few genes. Closely related species or species with slowly-evolving genomes will have fewer groups, with more genes per group. Regardless of the relationships between the species, there will be a log decay of group sizes given the phenomenon of single genes translocating to other chromosomes.
+
+For each group of orthologs *G*, we can estimate the false discovery rate *α* of finding a group of that size *|G|* given the specific genomes *s* in the analysis. We estimate this by taking the genomes *s*, and producing randomized versions of those genomes *s<sub>r</sub>* by shuffling the gene IDs in the `.chrom` file. This is performed millions of times, and we count the frequency of finding groups of size *|G|*. In other words, *α = 
