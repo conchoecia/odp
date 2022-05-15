@@ -32,9 +32,12 @@ snakemake -r -p --snakefile odp/scripts/odp
     - [Find and characterize ancestral linkage groups](#ALGanalysis)
       - [ALGs part 1 - Ortholog finding in 3+ species](#nwayreciprocalbest)
       - [ALGs part 2 - Find significantly numerous groups of orthologs](#groupby)
-
-
-
+      - [ALGs part 3 - Filter groups of orthologs](#groupbyfilter)  
+      - [ALGs part 4 - Annotate groups of orthologs](#groupbyannotate)
+      - [ALGs part 5 - Merge groupby files](#groupbymerge) 
+      - [ALGs part 6 - Find orthologs in more species](#groupbytohmm)
+      - [ALGs part 7 - Plot mixing of select linkage groups](#plotmixing)
+    - [Determine which clade is sister](#4speciesphylogeny)
 
 ## <a name="uguide"></a>Users' Guide
 
@@ -308,4 +311,83 @@ The groups are saved in a tab-delimited file called a `.groupby` file. Each line
 
 The number of groups found in this analysis, and the number of genes found in each group, depend on the degree of shared macrosynteny between the species used in the analysis. Distantly related species, or species with fast-evolving genomes, will have many groups, each with few genes. Closely related species or species with slowly-evolving genomes will have fewer groups, with more genes per group. Regardless of the relationships between the species, there will be a log decay of group sizes given the phenomenon of single genes translocating to other chromosomes.
 
-For each group of orthologs *G*, we can estimate the false discovery rate *α* of finding a group of that size *|G|* given the specific genomes *s* in the analysis. We estimate this by taking the genomes *s*, and producing randomized versions of those genomes *s<sub>r</sub>* by shuffling the gene IDs in the `.chrom` file. This is performed millions of times, and we count the frequency of finding groups of size *|G|*. In other words, *α = 
+For each group of orthologs *G*, we can estimate the false discovery rate *α* of finding a group with *i* or fewer genes given the real genomes in these comparisons. We estimate this false discovery rate by producing randomized versions of the genomes by shuffling the gene IDs in the `.chrom` file, measuring whether a group of *i* or fewer genes was present, then repeating this measurement hundreds of millions of times.
+
+#### <a name=“groupbyfilter”></a>ALGs part 3 - Filter groups of orthologs
+
+The groups of reciprocal best hits, as well as the newly-calculated false discovery rates, are saved in the resulting `.groupby` file. This can be manually or programmatically filtered to only keep groups with certain properties, or groups with a significantly low false discovery rate.
+
+This can be performed with the script `odp_groupby_filter`, by specifying the `.groupby` file, and by specifying the acceptable false discovery rate cutoff.
+
+This process can also be performed in a table editor, such as the spreadsheets on Google Drive, Apple Sheets, or Microsoft Excel.
+
+After removing the rows that have a less-than-significant false discovery rate, continue on to the next step to annotate the groups of orthologs.
+
+#### <a name=“groupbyannotate”></a>ALGs part 4 - Annotate groups of orthologs
+
+At this stage the resulting rows are groups of orthologous genes that are present on the same set of chromosomes in the species under consideration, and have been since the common ancestor of these species. In other words, these are ancestral linkage groups (ALGs) for this clade.
+
+It is useful at this stage to assign names to each of the rows in the `group` column of the `.groupby` file. There is some precedence for these naming conventions, see [Simakov et al. (2020)](https://www.nature.com/articles/s41559-020-1156-z) and [Simakov et al. (2022)](https://www.science.org/doi/full/10.1126/sciadv.abi5884). So, if your analysis includes animal genomes then it may be helpful to include some of the species from these publications.
+
+It is not necessary that each row has its own unique group ID. However, doing so will help plot mixing in downstream analyses.
+
+#### <a name=“groupbymerge”></a>ALGs part 5 - Merge `.groupby`/`.rbh` files
+
+In this section let’s consider a few species to compare:
+  - Unicellular (+colonial multicellular) outgroups of animals:
+    - the icthyosporean _Creolimax fragrantissima_ (CFR)
+    - the filasterean amoeba_Capsaspora owczarzaki_ (COW)
+    - the choanoflagellate _Monosiga brevicollis_ (MBR)
+  - The animals:
+    - the ctenophore _Hormiphora californensis_ (HCO)
+    - the sponge _Ephydatia muelleri_ (EMU)
+    - the jellyfish _Rhopilema esculentum_ (RES)
+
+It is desirable to merge the `.groupby` files from the searches of multiple species if the evolutionary distance between the outgroup and the other species is extreme. For example, the degree of synteny between animals and their unicellular Holozoan relatives is very little, and merging multiple searches enables the discovery of more ancestrally linked genes.
+
+We can perform the ALG-finding steps 1-4 described above for the following three analyses:
+  - `CFR-HCA-EMU-RES`
+  - `COW-HCA-EMU-RES`
+  - `MBR-HCA-EMU-RES`
+
+Each row in the `.groupby` files for these analyses will contain one gene per species in the analysis. It is possible that many of the orthologs will also contain proteins in two or more unicellular outgroups, so we now run `odp_groupby_to_rbh` to unwrap each `.groupby` file to a `.rbh` file, then `odp_rbh_merge` to join the `.rbh` files on the species `HCA`, `EMU`, and `RES`.
+
+Each ortholog (row) in the resulting `.rbh` file will have a gene for each animal species (`HCA`, `EMU`, `RES`), and will contain a gene in between one and three of the unicellular species (`CFR`, `COW`, `MBR`).
+
+The notation we use to refer to an `.rbh` file created by merging other `.rbh` files uses parentheses to note the species that may have missing data, and unmodified text to note the species that will always have a gene for each ortholog. The analysis discussed above is notated as `(CFR-COW-MBR)-HCA-EMU-RES`.
+
+#### <a name=“groupbytohmm”></a>ALGs part 6 - Find orthologs in more species
+
+Steps 1-4 of finding ALGs relies on using only a few species (perhaps 3-5) to avoid loss of orthologs due to the stringent ortholog selection process. [Step 5 - Merge `.groupby`/`.rbh` files, discussed above,](#groupbymerge) enables the inclusion of more genes by allowing for missing data in select groups. Then, by constructing hidden Markov models of the orthologs, we can search for orthologs in more species.
+
+The script `odp_rbh_to_hmm` reads in a `.rbh` file and constructs one HMM model per ortholog (row). The models are then searched against the proteins of every additional species that is included in the `config.yaml` file. The best protein for each HMM is selected, and only proteins with a significant match are kept. Missing data are permissible in this step, so it is not guaranteed that every ortholog will have an identifiable protein in every species added in this step.
+
+The output of this pipeline is another `.rbh` file, now with the proteins of the additional species identified with the HMM.
+
+#### <a name=“plotmixing”></a>ALGs part 7 - Plot mixing of select linkage groups
+
+If you have followed the above steps, you now have a `.rbh` file with orthologs that have been annotated by group, and includes many additional species thanks to the merging and HMM search steps.
+
+If you are using `odp` to look for phylogenetically diagnostic fusion-then-mixing events, then it is useful to plot linkage groups to visualize the extent of mixing of those groups. The script `odp_rbh_plot_mixing` does that. The output of this script are PNG and PDFs of the orthologs in those two groups plotted in the chromosome coordinates for each species. This script also estimates the degree of intermixing of two groups of genes on the chromosomes on which they coexist.
+
+### <a name=“4speciesphylogeny”></a>Determine which clade is sister
+
+The module `odp_genome_rearrangegment_simulation` was developed to help answer the question of whether ctenophores or sponges are the sister clade of all other animals. This script requires one species that is the known outgroup, and one species nested in the phylogeny with a known relative position to all other species. In our study, we performed analyses in which the filasterean amoeba _Capsaspora owczarzaki_ or the choanoflagellate _Salpingoeca rosetta_ were the outgroup species. The species with the known phylogenetic position was the fire jellyfish _Rhopilema esculentum_. The program uses these genomes to polarize the relationships between the two genomes in an unresolved polytomy, in this case the ctenophore _Hormiphora californensis_ and the sponge _Ephydatia muelleri_.
+
+The program `odp_genome_rearrangement_simulation` does the following:
+1. Finds linkage groups that simultaneously satisfy all of these requirements:
+  - The linkage groups are on separate chromosomes in the outgroup species
+  - The linkage groups are on separate chromosomes in one of the unplaced species
+  - The linkage groups are fused and mixed on single chromosomes in the other unplaced species
+  - The linkage groups are fused and mixed on single chromosomes in the species with a known phylogenetic positions
+2. Quantifies the number of fusion events identified in step 1, and calculates the number of genes per linkage group, and the number of linkage groups participating in those events.
+3. For each species in the analysis, tests whether the phylogentically informative fusion-then-mixing events seen in the real genomes are due to randomness, or true biological signal. This is done by:
+  - One simulation shuffles the protein IDs in the genome of one species. Step 1 above is run on this shuffled genome, and the three other observed genomes. In other workds, the number of phylogenetically informative fusion-then-mixing events are identified given the new shuffled genome.
+  - Step 2 above is run on the events found above.
+  - These steps are performed millions of times to estimate how many times we see a genome configuration that has at least as many genes, linkage groups, and fusion events participating in phylogentically diagnostic fusion-then-mixing events.
+
+The output of this program is histograms showing the different measured parameters from the simulations (grey bars), plotted with the parameters observed from the real genomes (red vertical bars). These plots show whether the sister clade hypotheses seen in the real data can be explained by a highly rearranged state in any of the genomes in the analysis.
+
+## <a name=“citation”></a>Citation
+
+There is currently no citation for this work, so please cite the repository. This section will be updated when the manuscript has been published or uploaded to bioRxiv.
