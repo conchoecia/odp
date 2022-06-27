@@ -213,7 +213,7 @@ rule reciprocal_best_hits:
         odpf.reciprocal_best_hits_blastp_or_diamond_blastp(
             input.blastp1to2, input.blastp2to1, output.blastp1to2)
         df = pd.read_csv(output.blastp1to2, sep = "\t", header = None)
-        newdf = df[[0,1,2,3,4,5,8,9,6,7,10,11]]
+        newdf = df[[1,0,2,3,4,5,8,9,6,7,10,11]]
         newdf.to_csv(output.blastp2to1, sep ="\t", header = None, index = None)
 
 def get_component_size_dict(G):
