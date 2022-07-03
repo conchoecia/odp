@@ -1,11 +1,37 @@
 """
-This script takes the rbh hits file, and mutates one group to match the number
-  of chromosomes of another group.
+This script takes the rbh hits file, specifically of a 4-way rbh search,
+  and mutates one group to match the number of chromosomes of another group.
 
-the input file must be named:
-  {sample1}_{sample2}_{sample3}_reciprocal_best_hits.tsv
+This program helps find support if there is support for either of these
+phylogenetic hypotheses:
 
-... where sample1, sample2, sampleN is the sample name in the config.
+     ,========= outer            ,========= outer
+   =={                         =={
+     {  ,====== species1         {  ,====== species2
+     '=={                 OR     '=={
+        {  ,=== species2            {  ,=== species1
+        '=={                        '=={
+           '=== inner                  '=== inner
+
+
+The config file will look something like this:
+
+```
+# this parameter is the rbh file you will use to look for groups
+rbh_file: "EMU_HCA_RESLi_SRO_reciprocal_best_hits.rbh"
+outer:  "SRO"
+species1: "HCA"
+species2: "EMU"
+inner: "RESLi"
+
+# This is the decay simulation.
+num_swaps: 5000 # around 7 miniutes
+num_simulations: 5000
+
+# Randomization trials. Should be divisible by 100,000
+# Each of the four genomes will be randomized in this many trials
+num_randomizations:  1000000
+```
 
 """
 # data stuff
@@ -39,9 +65,9 @@ config["tool"] = "odp_genome_mutation_analysis"
 
 # make sure the appropriate fields are present
 check_these = ["rbh_file",
-               "mutate",
-               "inner1",
-               "inner2",
+               "species1",
+               "species2",
+               "inner",
                "outer",
                "num_simulations",
                "species"]
@@ -50,31 +76,34 @@ for check_this in check_these:
         raise IOError("You must specify '{}' in config".format(check_this))
 
 # make sure that the group fields are present
-check_these = ["mutate",
-               "inner1",
-               "inner2",
+check_these = ["species1",
+               "species2",
+               "inner",
                "outer"]
 for check_this in check_these:
     if config[check_this] not in config["species"]:
         raise IOError("The sample {} is not in the species".format(config[check_this]))
 
 # randomizations
-num_randomizations_per_round=100000
+num_randomizations_per_round=10000
 num_rand_rounds = int(config["num_randomizations"]/num_randomizations_per_round)
-print("number of randomization rounds is : {}".format(num_rand_rounds))
+#print("number of randomization rounds is : {}".format(num_rand_rounds))
 
 # make sure none of the sample names have underscores
 for thissample in config["species"]:
     if "_" in thissample:
         raise IOError("Sample names can't have '_' char: {}".format(thissample))
 
-four_species = [config["outer"], config["mutate"],
-                config["inner1"], config["inner2"]]
+four_species = [config["outer"], config["species1"],
+                config["species2"], config["inner"]]
 
 rule all:
     input:
         # just check the data
         config["tool"] + "/sim_randomization/initialization/random_sim_init.txt",
+        config["tool"] + "/sim_randomization/initialization/groups_supporting_sp1_sister.txt",
+        config["tool"] + "/sim_randomization/initialization/groups_supporting_sp2_sister.txt",
+
         expand(config["tool"] + "/sim_randomization/{species}/random_sim_{species}_{randcore}.txt",
                randcore = list(range(1, num_rand_rounds+1) ),
                species  = four_species),
@@ -82,23 +111,36 @@ rule all:
                species = four_species),
         expand("odp_genome_mutation_analysis/figures/randomization_stats_mutating_{species}.txt",
                species = four_species),
+        expand("odp_genome_mutation_analysis/figures/FLG_support_{species}.pdf",
+               species = four_species)
+
+def flatten3(li):
+    """
+    flattens nested lists
+    """
+    flatten = []
+    for i in li:
+        for ii in i:
+            for iii in ii:
+                flatten.append(iii)
+    return flatten
 
 def _get_counts_supporting_hypothesis(informative,
-                                      outer, mutate,
-                                      inner1, inner2):
+                                      outer, speciesA,
+                                      speciesB, inner):
     """
     Takes a df of potentially informative relationships and looks for
      phylogenetic support of this tree:
 
               ,========= outer
             =={
-              {  ,====== mutate
+              {  ,====== speciesA
               '=={
-                 {  ,=== inner1
+                 {  ,=== speciesB
                  '=={
-                    '=== inner2
+                    '=== inner
 
-    Just returns a list of lists of the sizes of groupings that support this
+    Just returns a dataframe of the groupings that support this
      hypothesis
 
      This data structure: [[5,14], [7,10,5], [8,12]]
@@ -106,43 +148,43 @@ def _get_counts_supporting_hypothesis(informative,
        - the pairings have 5 and 14 genes, 7 and 10 and 5, 8 and 12 genes...
     """
     # test hypothesis1
-    hyp1df = informative.groupby(["{}_scaf".format(inner1),
-                                  "{}_scaf".format(inner2)])
+    hypAdf = informative.groupby(["{}_scaf".format(speciesB),
+                                  "{}_scaf".format(inner)])
 
     keeps = []
-    for group_name, df_group in hyp1df:
+    for group_name, df_group in hypAdf:
         # Remove the entries where the outer has two of the same scaf.
-        # These are derived splits in mutate.
+        # These are derived splits in species1.
         subgroup = df_group.groupby(["{}_scaf".format(outer),
-                                     "{}_scaf".format(inner1),
-                                     "{}_scaf".format(inner2)
+                                     "{}_scaf".format(speciesB),
+                                     "{}_scaf".format(inner)
                                        ]).filter(lambda x: len(x) < 2)
 
-        # This gets rid of cases where mutate has two of the same scaf.
+        # This gets rid of cases where species1 has two of the same scaf.
         # These are cases where we're not sure whether the outer split
         #  is derived in the outer group or a merge in the ancestor of
-        #  mutate, inner1, and inner2.
-        subgroup = subgroup.groupby(["{}_scaf".format(mutate),
-                                     "{}_scaf".format(inner1),
-                                     "{}_scaf".format(inner2)
+        #  species1, species2, and inner.
+        subgroup = subgroup.groupby(["{}_scaf".format(speciesA),
+                                     "{}_scaf".format(speciesB),
+                                     "{}_scaf".format(inner)
                                      ]).filter(lambda x: len(x) < 2)
 
         if len(subgroup) > 1:
             keeps.append(subgroup)
 
     if len(keeps) > 0:
-        hyp1df = pd.concat(keeps)
-        hyp1df = hyp1df.groupby(["{}_scaf".format(inner1),
-                                 "{}_scaf".format(inner2),
+        hypAdf = pd.concat(keeps)
+        hypAdf = hypAdf.groupby(["{}_scaf".format(speciesB),
+                                 "{}_scaf".format(inner),
                                  ]).agg(list).reset_index()
 
     else:
-        hyp1df = pd.DataFrame(columns = informative.columns)
-    return list(hyp1df["count"])
+        hypAdf = pd.DataFrame(columns = informative.columns)
+    return hypAdf
 
 def stats_on_df(df,
-                outer, mutate,
-                inner1, inner2):
+                outer, species1,
+                species2, inner):
     """
     This calculates some statistics about the dataframe.
     All it records is the number of genes in the FLG pairs:
@@ -152,13 +194,15 @@ def stats_on_df(df,
        - the pairings have 5 and 14 genes, 7 and 10 and 5, 8 and 12 genes...
 
     The output is two columns:
-    - column1: hyp1 data structure
-    - column2: hyp2 data structure
+    - column1: counts supporting hyp1 data structure
+    - column2: counts supporting hyp2 data structure
+    - column3: rbh groups supporting sp1 as sister clade
+    - column4: rbh groups supporting sp2 as sister clade
     """
     gene_cols = ["{}_gene".format(x)
-                 for x in [outer, mutate, inner1, inner2] ]
+                 for x in [outer, species1, species2, inner] ]
     scaf_cols = ["{}_scaf".format(x)
-                 for x in [outer, mutate, inner1, inner2] ]
+                 for x in [outer, species1, species2, inner] ]
     grouped_multiple = df.groupby(scaf_cols).agg(list).reset_index()
     # get the size
     grouped_multiple["count"] = grouped_multiple.rbh.str.len()
@@ -168,17 +212,19 @@ def stats_on_df(df,
     grouped_multiple = grouped_multiple[scaf_cols + ["rbh", "count"]]
 
     # only get things that are informative excluding the outgroup
-    informative = grouped_multiple.groupby(["{}_scaf".format(inner1), "{}_scaf".format(inner2)]).filter(lambda x: len(x) >= 2)
+    informative = grouped_multiple.groupby(["{}_scaf".format(species2), "{}_scaf".format(inner)]).filter(lambda x: len(x) >= 2)
     ## don't need the next line, it's just for QC
-    #informative = informative.sort_values(["{}_scaf".format(inner2),
-    #                                       "{}_scaf".format(inner1),
-    #                                       "{}_scaf".format(mutate),
+    #informative = informative.sort_values(["{}_scaf".format(inner),
+    #                                       "{}_scaf".format(species2),
+    #                                       "{}_scaf".format(species1),
     #                                       "{}_scaf".format(outer)]).reset_index(drop=True)
 
 
-    r1 = _get_counts_supporting_hypothesis(informative, outer, mutate, inner1, inner2)
-    r2 = _get_counts_supporting_hypothesis(informative, outer, inner1, mutate, inner2)
-    return [r1, r2]
+    r1 = _get_counts_supporting_hypothesis(informative, outer, species1, species2, inner)
+    r2 = _get_counts_supporting_hypothesis(informative, outer, species2, species1, inner)
+    return [list(r1["count"]), list(r2["count"]),
+            flatten3(list(r1["rbh"])),
+            flatten3(list(r2["rbh"]))]
 
 # randomization simulation
 rule randomization_simulation:
@@ -193,9 +239,9 @@ rule randomization_simulation:
     threads: 1
     params:
         outer   = config["outer"],
-        mutate  = config["mutate"],
-        inner1  = config["inner1"],
-        inner2  = config["inner2"],
+        species1  = config["species1"],
+        species2  = config["species2"],
+        inner  = config["inner"],
         species = lambda wildcards: wildcards.species,
         num_rounds = num_randomizations_per_round
     run:
@@ -205,24 +251,24 @@ rule randomization_simulation:
         scaf_cols = [x for x in df.columns if "_scaf" in x]
         df = df[['rbh'] + scaf_cols]
 
-        # mutate col
-        mutate_col = "{}_scaf".format(params.species)
+        # species1 col
+        species1_col = "{}_scaf".format(params.species)
 
         # go until we say to stop
         # how many days for simulation
         start_time = time.time()
         counter = 1
         while True:
-            # randomize the mutate column
-            df[mutate_col] = np.random.permutation(df[mutate_col].values)
-            #print(list(df[mutate_col][0:10]))
+            # randomize the species1 column
+            df[species1_col] = np.random.permutation(df[species1_col].values)
+            #print(list(df[species1_col][0:10]))
             ssdone = False
             stats = stats_on_df(
                     df,
                     params.outer,
-                    params.mutate,
-                    params.inner1,
-                    params.inner2)
+                    params.species1,
+                    params.species2,
+                    params.inner)
             print("{}\t{}".format(stats[0], stats[1]), file = outhandle)
 
             # cleanup
@@ -251,13 +297,15 @@ rule randomization_initialization:
     input:
         rbh_file = config["rbh_file"],
     output:
-        random_sim = config["tool"] + "/sim_randomization/initialization/random_sim_init.txt"
+        random_sim  = config["tool"] + "/sim_randomization/initialization/random_sim_init.txt",
+        species1sis = config["tool"] + "/sim_randomization/initialization/groups_supporting_sp1_sister.txt",
+        species2sis = config["tool"] + "/sim_randomization/initialization/groups_supporting_sp2_sister.txt",
     threads: 1
     params:
         outer  = config["outer"],
-        mutate = config["mutate"],
-        inner1 = config["inner1"],
-        inner2 = config["inner2"],
+        species1 = config["species1"],
+        species2 = config["species2"],
+        inner = config["inner"],
         num_rounds = num_rand_rounds
     run:
         # now we load up the rbh table
@@ -269,12 +317,18 @@ rule randomization_initialization:
         stats = stats_on_df(
             df,
             params.outer,
-            params.mutate,
-            params.inner1,
-            params.inner2)
+            params.species1,
+            params.species2,
+            params.inner)
         print("{}\t{}".format(stats[0], stats[1]),
               file = outhandle)
         outhandle.close()
+        with open(output.species1sis, "w") as f:
+            for x in stats[2]:
+                print(x, file = f)
+        with open(output.species2sis, "w") as f:
+            for x in stats[3]:
+                print(x, file = f)
 
 rule make_randomization_summary:
     """
@@ -681,3 +735,85 @@ rule plot_joint_clouds:
                     fig = g.fig
                     pdf_pages.savefig(fig)
                     plt.close(g.fig)
+
+rule plot_hypothesis_support:
+    """
+    Plots the hypothesis support of S1 or S2 as sister.
+    """
+    input:
+        data = "odp_genome_mutation_analysis/sim_randomization/plottable_final/random_sim_final_plottable_{species}.txt",
+        init = "odp_genome_mutation_analysis/sim_randomization/initialization/random_sim_init_plottable.txt"
+    output:
+        pdf = "odp_genome_mutation_analysis/figures/FLG_support_{species}.pdf",
+    params:
+        species = lambda wildcards: wildcards.species
+    run:
+        import matplotlib.cm as cm
+        from matplotlib import pyplot as plt
+        import matplotlib
+        matplotlib.rcParams['pdf.fonttype'] = 42
+        matplotlib.rcParams['ps.fonttype'] = 42
+        initdf = pd.read_csv(input.init, index_col = None, sep = "\t")
+        df = pd.read_csv(input.data, index_col = None, sep = "\t")
+
+        import seaborn as sns
+        sns.set_theme(style="ticks")
+
+        possible_vars = list(set(["_".join(x.split("_")[1::]) for x in df.columns]))
+        plot_these = ["total_number_of_genes_in_FLGs",
+                      "total_number_of_groupings",
+                      "max_number_of_genes_in_grouping",
+                      "max_number_of_genes_in_single_FLG"]
+
+        plot_to_xlabel = {"total_number_of_genes_in_FLGs": "Genes in PI LGs",
+                          "total_number_of_groupings": "Number of LG groupings",
+                          "max_number_of_genes_in_grouping": "Genes in largest LG grouping",
+                          "max_number_of_genes_in_single_FLG": "Genes in largest LG"
+                         }
+
+        #print(plot_these)
+        #print(possible_vars)
+        for x in plot_these:
+            if x not in possible_vars:
+                raise IOError("{} was not in the input df".format(x))
+
+        with PdfPages(output.pdf) as pdf_pages:
+            for thisthing in plot_these:
+                fig, ax = plt.subplots(2, 1, sharey = True, sharex = True)
+                fig.suptitle("{}, {} randomized".format(thisthing, params.species), fontsize=8)
+                fig.set_size_inches(5, 2.5)
+                columns = ["{}_{}".format(x, thisthing) for x in ["hyp1", "hyp2"]]
+                index = 0
+
+                hyp1_init = initdf.iloc[0][columns[0]]
+                hyp2_init = initdf.iloc[0][columns[1]]
+                xmax = int(max([hyp1_init, hyp2_init,
+                            max(df[columns[0]]),
+                            max(df[columns[1]])
+                          ]) * 1.2)
+                ymax = max([len(df[x]) for x in columns])
+                for thiscol in columns:
+                    sns.histplot(df[thiscol], discrete = True,
+                                 label=thiscol, color = "#000000",
+                                      ax=ax[index])
+                    ax[index].set_title(thiscol, fontsize = 6)
+                    ax[index].ticklabel_format(axis='y', style='sci', scilimits=(0,0))
+                    ax[index].tick_params(axis='both', which='major', labelsize=8)
+                    ax[index].xaxis.label.set_size(8)
+                    ax[index].yaxis.label.set_size(8)
+                    sns.despine(offset=2, trim=False)
+                    index += 1
+
+                # set the plotting limits
+                #ax[0].set_xlim([-1,xmax])
+                #ax[1].set_xlim([-1,xmax])
+                ylim = ax[0].get_ylim()[-1]
+                ax[0].axvline(hyp1_init, 0, (ylim*0.75)/ylim, color = "#c44e52")
+                ax[1].axvline(hyp2_init, 0, (ylim*0.75)/ylim, color = "#c44e52")
+
+                # set the xlabel
+                ax[1].set_xlabel(plot_to_xlabel[thisthing])
+                plt.tight_layout()
+
+                pdf_pages.savefig(fig)
+                plt.close()
