@@ -13,10 +13,13 @@ Step 2: Converts an rbh file to a groupby file. This script calculates the
 
 Step 3: Filters the groupby file to only include groups of a size with a FDR
         less than or equal to 0.05.
+
+Step 4: Convert the filtered groupby file back to a rbh file.
 """
 
 from Bio import SeqIO
 import copy
+import ast
 from itertools import groupby
 from itertools import combinations
 from itertools import permutations
@@ -127,8 +130,9 @@ rule all:
             "_".join(thisanalysis)) for thisanalysis in analyses_list],
         # the filtered groupby file
         [config["tool"] + "/step2-groupby/{}.rbh.filt.groupby".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        [config["tool"] + "/step3-unwrap/{}.filt.unwrapped.rbh".format(
             "_".join(thisanalysis)) for thisanalysis in analyses_list]
-
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     """
@@ -567,3 +571,83 @@ rule filter_rbh_files:
             df = pd.read_csv(input.rbh, sep = "\t", index_col = None)
             df = df.loc[df["alpha"] <= params.alpha, ]
             df.to_csv(output.rbh, sep="\t", index = False, na_rep='nan')
+
+def parse_pd_list_or_string(pd_list, rowcount):
+    templist = []
+    if type(pd_list) == str:
+        for entry in ["nan", "NaN"]:
+            pd_list = pd_list.replace(entry, "None")
+        if '[' in pd_list:
+            # the thing is a list, parse it as a list
+            return ast.literal_eval(pd_list)
+        else:
+            # if it isn't a list, just
+            #print(pd_list, rowcount)
+            return [pd_list] * rowcount
+    elif (type(pd_list) == float) and (np.isnan(pd_list)):
+        return [None] * rowcount
+
+rule unwrap_rbh_file_with_group_column:
+    input:
+        rbh = config["tool"] + "/step2-groupby/{analysis}.rbh.filt.groupby"
+    output:
+        rbh = config["tool"] + "/step3-unwrap/{analysis}.filt.unwrapped.rbh"
+    params:
+        prefix = config["tool"] + "/output/",
+        analysis = lambda wildcards: wildcards.analysis
+    threads: 1
+    run:
+        df = pd.read_csv(input.rbh, sep = "\t", index_col = None)
+        if len([x for x in df.columns if x.startswith("Unnamed")]) > 0:
+            print("There is a column that is unnamed, and probably doesn't have data in that column. Check your input.", file = sys.stderr)
+        df = df[[x for x in df.columns if not x.startswith("Unnamed")]]
+        if True in [np.isnan(x) for x in df["count"].unique()]:
+            raise IOError("There are some rows in this dataset where count is nan. That should not occur in a rbh or rbh.groupby file. Check that your input has no rows that are erroneously empty.")
+
+        # get all the species in the dataframe
+        complete_species_list = [x.split("_")[0] for x in df.columns
+                                 if x.endswith("_scaf")]
+        species_string = params.analysis
+
+        rbh_entries = []
+        for index, row in df.iterrows():
+            rbh_list = ast.literal_eval(row["rbh"])
+            species_to_gene_list = {}
+            species_to_gene_pos  = {}
+            species_to_gene_scaf = {}
+            # make lookup tables
+            for thisspecies in complete_species_list:
+                rowcount = row["count"]
+                parse_pairs = [("gene", species_to_gene_list),
+                               ("pos",  species_to_gene_pos),
+                               ("scaf", species_to_gene_scaf) ]
+                for thiscol, thislist in parse_pairs:
+                    # gene_col
+                    colname = "{}_{}".format(thisspecies, thiscol)
+                    #species_to_gene_list[thisspecies] = ast.literal_eval(row[colname])
+                    thislist[thisspecies] = parse_pd_list_or_string(
+                                                         row[colname], rowcount)
+
+            for i in range(len(rbh_list)):
+                thisgroup = row["gene_group"]
+                thisentry = {"rbh": rbh_list[i],
+                             "gene_group": thisgroup,
+                             "count":      row["count"]}
+                for keep_this in ["ALG", "color", "alpha", "alpha_type"]:
+                    if keep_this in row:
+                        thisentry[keep_this] = row[keep_this]
+                for thisspecies in complete_species_list:
+                    # get col names
+                    scafcol = "{}_scaf".format(thisspecies)
+                    genecol = "{}_gene".format(thisspecies)
+                    poscol  = "{}_pos".format(thisspecies)
+                    thisentry[scafcol] = species_to_gene_scaf[thisspecies][i]
+                    thisentry[genecol] = species_to_gene_list[thisspecies][i]
+                    thisentry[poscol]  = species_to_gene_pos[thisspecies][i]
+                rbh_entries.append(thisentry)
+
+        unwrapped = pd.DataFrame(rbh_entries)
+        unwrapped = unwrapped[[x for x in unwrapped.columns
+                               if x not in ["count", "alpha", "alpha_type"]]]
+        outfile = params.prefix + species_string + ".unwrapped.rbh"
+        unwrapped.to_csv(output.rbh, sep="\t", na_rep = "None", index = False)
