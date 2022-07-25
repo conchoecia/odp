@@ -97,6 +97,16 @@ for thissample in config["species"]:
 four_species = [config["outer"], config["species1"],
                 config["species2"], config["inner"]]
 
+# check that the four species are present in the dataframe
+tempdf = pd.read_csv(config["rbh_file"], index_col = None, sep = "\t")
+print(tempdf.columns)
+for thisspecies in four_species:
+    if "{}_scaf".format(thisspecies) not in tempdf.columns:
+        raise IOError("Species {} was one of the defined species, but wasn't in the provided rbh file".format(thisspecies))
+for thisspecies in [x.replace("_scaf", "") for x in tempdf.columns if x.endswith("_scaf")]:
+    if thisspecies not in four_species:
+        raise IOError("Species {} was in the rbh file, but wasn't in the specified species for this analysis.".format(thisspecies))
+
 rule all:
     input:
         # just check the data
