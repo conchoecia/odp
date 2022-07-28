@@ -113,6 +113,7 @@ four_species = [config["outgroup"],
                 config["species1"],
                 config["species2"],
                 config["species3"]]
+spstring = "-".join(four_species)
 
 # check that the four species are present in the dataframe
 tempdf = pd.read_csv(config["rbh_file"], index_col = None, sep = "\t")
@@ -138,12 +139,12 @@ rule all:
                randcore = list(range(1, num_rand_rounds+1) ),
                species  = four_species),
         # plots
-        expand("odp_genome_mutation_analysis/figures/randomization_marginals_mutating_{species}.pdf",
-               species = four_species),
-        expand("odp_genome_mutation_analysis/figures/randomization_stats_mutating_{species}.txt",
-               species = four_species),
-        expand("odp_genome_mutation_analysis/figures/FLG_support_{species}.pdf",
-               species = four_species)
+        expand("odp_genome_mutation_analysis/figures/{spstr}_randomization_marginals_{species}-randomizations.pdf",
+               spstr = spstring, species = four_species),
+        expand("odp_genome_mutation_analysis/figures/{spstr}_randomization_stats_{species}-randomizations.txt",
+               spstr = spstring, species = four_species),
+        expand("odp_genome_mutation_analysis/figures/{spstr}_support_{species}-randomizations.pdf",
+               spstr = spstring, species = four_species)
 
 def flatten3(li):
     """
@@ -223,8 +224,35 @@ def _get_groups_supporting_hypothesis(grouped_df,
                 # get a list of ranges of the extent of genes in the groups
                 ranges_list = []
                 for index in subgroup.index:
-                    thismin = int(min(subgroup.loc[index, "{}_pos".format(thissp)]))
-                    thismax = int(max(subgroup.loc[index, "{}_pos".format(thissp)]))
+                    unwrapped  = subgroup.loc[index, "{}_pos".format(thissp)]
+                    unwrapped2 = subgroup.loc[index, "{}_pos".format(thissp)]
+                    if type(unwrapped) == str:
+                        print("string", unwrapped)
+                        pass
+                    elif type(unwrapped) in [list, tuple]:
+                        everything_int = True
+                        for x in unwrapped:
+                            if type(x) not in [int, float]:
+                                everything_int = False
+                        if everything_int:
+                           # if  everything here is an int, then we're OK
+                           # The list is OK and can be processed
+                            unwrapped2 = [int(x) for x in unwrapped]
+                        else:
+                            # If there are things that aren't ints they're probably
+                            # a multi=nested list
+                            unwrapped2 = []
+                            for i in unwrapped:
+                                if type(i) == str:
+                                    for ii in i.split(","):
+                                        unwrapped2.append(int(ii))
+                                else:
+                                    raise IOError("The type here is {}, but we only know how to handle strings.".format(
+                                        type(i)))
+                    else:
+                        raise IOError("Not sure how to handle this. Contact the developer.")
+                    thismin = int(min(unwrapped2))
+                    thismax = int(max(unwrapped2))
                     ranges_list.append([thismin, thismax])
                 # now make sure at least two of the groups have overlapped
                 for i in range(len(ranges_list)):
@@ -711,8 +739,8 @@ rule plot_joint_clouds:
         data = "odp_genome_mutation_analysis/sim_randomization/plottable_final/random_sim_final_plottable_{species}.txt",
         init = "odp_genome_mutation_analysis/sim_randomization/initialization/random_sim_init_plottable.txt"
     output:
-        pdf = "odp_genome_mutation_analysis/figures/randomization_marginals_mutating_{species}.pdf",
-        stats = "odp_genome_mutation_analysis/figures/randomization_stats_mutating_{species}.txt"
+        pdf   = "odp_genome_mutation_analysis/figures/{spstr}_randomization_marginals_{species}-randomizations.pdf",
+        stats = "odp_genome_mutation_analysis/figures/{spstr}_randomization_stats_{species}-randomizations.txt"
     run:
         import matplotlib.cm as cm
         outhandle = open(output.stats, "w")
@@ -875,7 +903,7 @@ rule plot_hypothesis_support:
         data = "odp_genome_mutation_analysis/sim_randomization/plottable_final/random_sim_final_plottable_{species}.txt",
         init = "odp_genome_mutation_analysis/sim_randomization/initialization/random_sim_init_plottable.txt"
     output:
-        pdf = "odp_genome_mutation_analysis/figures/FLG_support_{species}.pdf",
+        pdf = "odp_genome_mutation_analysis/figures/{spstr}_support_{species}-randomizations.pdf"
     params:
         species = lambda wildcards: wildcards.species
     run:
