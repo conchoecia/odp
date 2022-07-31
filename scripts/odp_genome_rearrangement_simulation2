@@ -141,6 +141,8 @@ rule all:
                spstr = spstring),
         expand(config["tool"] + "/sim_randomization/{spstr}/initialization/{spstr}_groups_supporting_{sp}_sister.txt",
                spstr = spstring, sp = three_sp),
+        expand(config["tool"] + "/sim_randomization/{spstr}/initialization/{spstr}_df_of_fusionsUnmixed_{sp}.txt",
+               spstr = spstring, sp = three_sp),
         expand(config["tool"] + "/sim_randomization/{spstr}/initialization/{spstr}_df_of_groups_supporting_{sp}_sister.txt",
                spstr = spstring, sp = three_sp),
 
@@ -261,6 +263,8 @@ def _get_groups_supporting_hypothesis(grouped_df,
         #     2     COW3     HCA5     EMU9     RES5
 
         #print()
+        #print("NEW SUBGROUP ANALYSIS")
+        #print("spA: {}  spB: {}  spC: {}".format(speciesA, speciesB, speciesC))
         #print(df_group[[x for x in df_group.columns if x.endswith("_scaf")]])
 
         done = False
@@ -274,16 +278,38 @@ def _get_groups_supporting_hypothesis(grouped_df,
                                      "{}_scaf".format(speciesC)
                                        ]).filter(lambda x: len(x) > 1)
         #print("subgroup")
-        #print(df_group)
+        #print(df_group[["{}_scaf".format(x) for x in [outgroup, speciesA, speciesB, speciesC]] + ["count"]])
         #print("temp_dups")
-        #print(temp_dups)
-        #print("temp_singletons")
-        #print(temp_singletons)
+        #print(temp_dups[["{}_scaf".format(x) for x in [outgroup, speciesA, speciesB, speciesC]] + ["count"]])
+        #print("temp_singletos")
+        #print(temp_singletons[["{}_scaf".format(x) for x in [outgroup, speciesA, speciesB, speciesC]] + ["count"]])
         if (len(temp_dups) > 1) and (len(temp_singletons) > 0):
             # make sure that the length of the temp_singletons is just 1.
             # I can't conceive of a situation in which there should be more than one
             if len(temp_singletons) > 1:
-                raise IOError("Contact the developer for this error. More than one line in temp_singletons.")
+                # In this scenario there are two rows that should not be considered:
+                #  the ones with COW3
+                # These are ambiguous and could be derived fissions in HCA or a derived
+                #  fusion in COW. So, we just remove these and they will later be flagged
+                #  as ambiguous.
+                #
+                #    spA: HCA  spB: CLA  spC: PMA
+                #    subgroup
+                #      COW_scaf HCA_scaf    CLA_scaf PMA_scaf  count
+                #    0     COW3    HCA11  CLA15_hapA     PMA3      5
+                #    1     COW3     HCA2  CLA15_hapA     PMA3      5
+                #    2     COW5     HCA6  CLA15_hapA     PMA3      6
+                #    3     COW2     HCA9  CLA15_hapA     PMA3      5
+                #    temp_dups
+                #      COW_scaf HCA_scaf    CLA_scaf PMA_scaf  count
+                #    0     COW3    HCA11  CLA15_hapA     PMA3      5
+                #    1     COW3     HCA2  CLA15_hapA     PMA3      5
+                #    temp_singletos
+                #      COW_scaf HCA_scaf    CLA_scaf PMA_scaf  count
+                #    2     COW5     HCA6  CLA15_hapA     PMA3      6
+                #    3     COW2     HCA9  CLA15_hapA     PMA3      5
+                #
+                temp_dups = pd.DataFrame(columns = temp_singletons.columns)
             else:
                 # get the chrom of sp1 in the temp_singletons
                 opposite_chrom = temp_singletons.iloc[0]["{}_scaf".format(speciesA)]
@@ -541,17 +567,17 @@ def stats_on_df(df,
         if support_string != "":
             grouped_multiple.loc[index, "data_support"] = support_string
 
-    print("r1", "\n", r1_FM_df[[x for x in r1_FM_df.columns if x.endswith("_scaf")]])
-    print("r1", "\n", r1_FU_df)
-    print()
-    print("r2", "\n", r2_FM_df)
-    print("r2", "\n", r2_FU_df)
-    print()
-    print("r3", "\n", r3_FM_df)
-    print("r3", "\n", r3_FU_df)
-    print()
-    print_me = grouped_multiple[[x for x in grouped_multiple.columns if x.endswith("_scaf")] + ["data_support"]]
-    print(print_me)
+    #print("r1", "\n", r1_FM_df[[x for x in r1_FM_df.columns if x.endswith("_scaf")]])
+    #print("r1", "\n", r1_FU_df)
+    #print()
+    #print("r2", "\n", r2_FM_df)
+    #print("r2", "\n", r2_FU_df)
+    #print()
+    #print("r3", "\n", r3_FM_df)
+    #print("r3", "\n", r3_FU_df)
+    #print()
+    #print_me = grouped_multiple[[x for x in grouped_multiple.columns if x.endswith("_scaf")] + ["data_support"]]
+    #print(print_me)
 
     return [r1_FM_df, r2_FM_df, r3_FM_df,
             list(r1_FM["count"]),
@@ -560,6 +586,7 @@ def stats_on_df(df,
             flatten3(list(r1_FM["rbh"])),
             flatten3(list(r2_FM["rbh"])),
             flatten3(list(r3_FM["rbh"])),
+            r1_FU_df, r2_FU_df, r3_FU_df,
             grouped_multiple
             ]
 
@@ -640,6 +667,8 @@ rule randomization_initialization:
         annotated_gb = config["tool"] + "/sim_randomization/{spstr}/initialization/{spstr}_rows_annotated.rbh.groupby",
         sp1_sisdf  = expand(config["tool"] + "/sim_randomization/{{spstr}}/initialization/{{spstr}}_df_of_groups_supporting_{sp}_sister.txt",
                             sp = three_sp),
+        sp1_FUdf   = expand(config["tool"] + "/sim_randomization/{{spstr}}/initialization/{{spstr}}_df_of_fusionsUnmixed_{sp}.txt",
+                            sp = three_sp),
         sp1groupdf = expand(config["tool"] + "/sim_randomization/{{spstr}}/initialization/{{spstr}}_groups_supporting_{sp}_sister.txt",
                             sp = three_sp)
     threads: 1
@@ -651,6 +680,7 @@ rule randomization_initialization:
         num_rounds = num_rand_rounds,
         df_prefix = lambda wildcards: config["tool"] + "/sim_randomization/{st}/initialization/{st}_df_of_groups_supporting_".format(st = wildcards.spstr),
         df_suffix = "_sister.txt",
+        FU_prefix = lambda wildcards: config["tool"] + "/sim_randomization/{st}/initialization/{st}_df_of_fusionsUnmixed_".format(st = wildcards.spstr),
         grouppref = lambda wildcards: config["tool"] + "/sim_randomization/{st}/initialization/{st}_groups_supporting_".format(st = wildcards.spstr),
         groupsuff = "_sister.txt",
     run:
@@ -675,9 +705,6 @@ rule randomization_initialization:
         sp3out = params.df_prefix + params.species3 + params.df_suffix
         stats[2].to_csv(sp3out, sep="\t", index = False)
 
-        # print out the annotated groupby dataframe
-        stats[9].to_csv(output.annotated_gb, sep = "\t", index = False)
-
         # print out the number of groups supporting each hypothesis
         outhandle = open(output.random_sim, "w")
         print("{}\t{}\t{}".format(stats[3], stats[4], stats[5]),
@@ -697,6 +724,19 @@ rule randomization_initialization:
         with open(sp1out, "w") as f:
             for x in stats[8]:
                 print(x, file = f)
+
+        # print out the dataframs of groups that have fusions, but not fusions with mixing
+        sp1out = params.FU_prefix + params.species1 + ".txt"
+        stats[9].to_csv(sp1out, sep="\t", index = False)
+        sp2out = params.FU_prefix + params.species2 + ".txt"
+        stats[10].to_csv(sp2out, sep="\t", index = False)
+        sp3out = params.FU_prefix + params.species3 + ".txt"
+        stats[11].to_csv(sp3out, sep="\t", index = False)
+
+        # print out the annotated groupby dataframe
+        stats[-1].to_csv(output.annotated_gb, sep = "\t", index = False)
+
+
 
 rule make_randomization_summary:
     """
