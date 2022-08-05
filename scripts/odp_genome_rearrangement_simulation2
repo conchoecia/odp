@@ -541,28 +541,28 @@ def stats_on_df(df,
         row_string = _row_string(row, outgroup, species1, species2, species3)
         # sister hypotheses
         if row_string in rows_supporting_s1sis:
-            support_list.append("sp1sis")
+            support_list.append("{}_sis".format(species1))
         if row_string in rows_supporting_s2sis:
-            support_list.append("sp2sis")
+            support_list.append("{}_sis".format(species2))
         if row_string in rows_supporting_s3sis:
-            support_list.append("sp3sis")
+            support_list.append("{}_sis".format(species3))
         # fused but unmixed
         if row_string in rows_supporting_s1FU:
-            support_list.append("sp1FU")
+            support_list.append("{}_FU".format(species1))
         if row_string in rows_supporting_s2FU:
-            support_list.append("sp2FU")
+            support_list.append("{}_FU".format(species2))
         if row_string in rows_supporting_s3FU:
-            support_list.append("sp3FU")
+            support_list.append("{}_FU".format(species3))
         # derived fissions
         if row_string in sp1_derFiss_rows:
-            support_list.append("sp1DerFissOrOGfus")
+            support_list.append("{}_DerFissOrOGfus".format(species1))
         if row_string in sp2_derFiss_rows:
-            support_list.append("sp2DerFissOrOGfus")
+            support_list.append("{}_DerFissOrOGfus".format(species2))
         if row_string in sp3_derFiss_rows:
-            support_list.append("sp3DerFissOrOGfus")
+            support_list.append("{}_DerFissOrOGfus".format(species3))
         # polytomies
         if row_string in rows_supporting_polytomy:
-            support_list.append("spAspBspCpolytomy")
+            support_list.append("{}_{}_{}_polytomy".format(species1, species2, species3))
         support_string = "_".join(support_list)
         if support_string != "":
             grouped_multiple.loc[index, "data_support"] = support_string
