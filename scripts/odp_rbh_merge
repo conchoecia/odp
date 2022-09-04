@@ -50,12 +50,12 @@ rule groupby_RBH_results:
             df_list.append(df)
         all_data = pd.concat(df_list)
         all_data = all_data[[x for x in all_data.columns
-                             if x not in ["RBH"]]]
+                             if x not in ["rbh"]]]
+
         # There will invariably be some overlaps.
         # We have to go through and handle the duplicates
         grouped = all_data.groupby(params.anchors)
         keeps = []
-        print(len(grouped))
         for name, group in grouped:
             # this collapses each row.
             # We are anchoring around the common species,
@@ -67,10 +67,33 @@ rule groupby_RBH_results:
         grouped2 = pd.concat(keeps).reset_index(drop=True)
         all_species = sorted([x.replace("_scaf", "") for x in grouped2.columns
                        if "_scaf" in x])
+        grouped2["nancount"] = grouped2.isnull().sum(axis=1)
+
+        print(grouped2.columns)
+        print("Before filtering there were {} rows.".format(len(grouped2)))
+
+        # get rid of genes with more than one entry
+        for thisanchor in params.anchors + \
+            ["{}_gene".format(x) for x in all_species]:
+            gb = grouped2.sort_values(by=[thisanchor,"nancount"],
+                                      ascending = [True, True]
+                                      ).groupby(by=[thisanchor], dropna=False)
+            keeps = []
+            for name, group in gb:
+                # keep the row with the most info
+                if pd.isnull(name):
+                    temprow = group.reset_index(drop=True)
+                else:
+                    temprow = group.head(1).reset_index(drop=True)
+                keeps.append(temprow)
+            grouped2 = pd.concat(keeps)
+        grouped2 = grouped2[[x for x in grouped2.columns if x != "nancount"]]
+        print("After filtering there were {} rows.".format(len(grouped2)))
+
         sp_string = "_".join(all_species)
         all_cols = list(grouped2.columns)
-        grouped2["RBH"] = ["mer_{}_{}".format(sp_string, i)
+        grouped2["rbh"] = ["mer_{}_{}".format(sp_string, i)
                            for i in range(1, len(grouped2)+1)]
-        grouped2 = grouped2[["RBH"] + all_cols]
+        grouped2 = grouped2[["rbh"] + all_cols]
         pd.set_option('display.float_format', lambda x: '%.3f' % x)
         grouped2.to_csv(output.rbh, sep="\t", na_rep = "nan", index = False)
