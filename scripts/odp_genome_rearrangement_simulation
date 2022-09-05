@@ -2,16 +2,30 @@
 This script takes the rbh hits file, specifically of a 4-way rbh search,
   and mutates one group to match the number of chromosomes of another group.
 
-This program helps find support if there is support for either of these
-phylogenetic hypotheses:
+This program considers the chromosome-scale genomes of four species,
+with one known outgroup species. The program assumes the other three species
+are a polytomy.
 
-     ,========= outer            ,========= outer
-   =={                         =={
-     {  ,====== species1         {  ,====== species2
-     '=={                 OR     '=={
-        {  ,=== species2            {  ,=== species1
-        '=={                        '=={
-           '=== inner                  '=== inner
+      ,========= outer
+    =={
+      {  ,====== species1
+      '=={
+         {====== species2
+         {
+         '====== inner
+
+Using fusion-with-mixing events, the program looks for support for these three
+possible phylogenetic topologies:
+
+      hypothesis 1               hypothesis 2               hypothesis 3
+
+     ,========= outer           ,========= outer           ,========= outer
+   =={                        =={                        =={
+     {  ,====== species1        {  ,====== species2        {  ,====== inner
+     '=={                 OR    '=={                 OR    '=={
+        {  ,=== species2           {  ,=== species1           {  ,=== species1
+        '=={                       '=={                       '=={
+           '=== inner                 '=== inner                 '=== species2
 
 
 The config file will look something like this:
@@ -34,6 +48,7 @@ num_randomizations:  1000000
 ```
 
 """
+
 # data stuff
 import pandas as pd
 import numpy as np
@@ -605,21 +620,21 @@ rule plot_joint_clouds:
         import seaborn as sns
         sns.set_theme(style="ticks")
 
-
         # define custom colormap with fixed colour and alpha gradient
         # use simple linear interpolation in the entire scale
-        cm.register_cmap(name='alpha_gradient',
-                 data={'red':   [(0.,0.,0),
-                                 (0.,0.,0)],
+        cdict = {'red':   [(0.,0.,0),
+                           (0.,0.,0)],
 
-                       'green': [(0.,0.,0.),
-                                 (0.,0.,0.)],
+                 'green': [(0.,0.,0.),
+                           (0.,0.,0.)],
 
-                       'blue':  [(0.,0.,0.),
-                                 (0.,0.,0.)],
+                 'blue':  [(0.,0.,0.),
+                           (0.,0.,0.)],
 
-                       'alpha': [(1.,1,1),
-                                 (0.,0,0)]})
+                 'alpha': [(1.,1,1),
+                           (0.,0,0)]}
+
+        cm.register_cmap(cmap=LinearSegmentedColormap("alpha_gradient", cdict))
 
         N = 256
         vals = np.ones((N, 4))
@@ -748,7 +763,7 @@ rule plot_joint_clouds:
 
 rule plot_hypothesis_support:
     """
-    Plots the hypothesis support of S1 or S2 as sister.
+    Plots the hypothesis support of S1 or S2 or S3 as sister.
     """
     input:
         data = "odp_genome_mutation_analysis/sim_randomization/plottable_final/random_sim_final_plottable_{species}.txt",
@@ -813,6 +828,9 @@ rule plot_hypothesis_support:
                     ax[index].yaxis.label.set_size(8)
                     sns.despine(offset=2, trim=False)
                     index += 1
+                ax[0].set(ylabel="count\n{} sister".format(config["species1"]))
+                ax[1].set(ylabel="count\n{} sister".format(config["species2"]))
+
 
                 # set the plotting limits
                 #ax[0].set_xlim([-1,xmax])
