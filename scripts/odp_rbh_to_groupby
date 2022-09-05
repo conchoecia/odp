@@ -31,7 +31,7 @@ OdpF.check_legality(config)
 # randomizations
 if not "num_permutations" in config:
     raise IOError("you must specify num_permutations in the config to help calculate the false discovery rate")
-num_permutations_per_round=100000
+num_permutations_per_round=10000
 num_permutation_rounds = int(config["num_permutations"]/num_permutations_per_round)
 #print("number of randomization rounds is : {}".format(num_rand_rounds))
 
