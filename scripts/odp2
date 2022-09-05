@@ -703,6 +703,7 @@ def synteny_plot(df_file, plotdf_file, synplot,
                  xsample, ysample,
                  xorder,  yorder,
                  xbreaks, ybreaks,
+                 orthology_method,
                  sort_y_by_x = True,
                  index_or_absolute = False):
     """
@@ -833,8 +834,9 @@ def synteny_plot(df_file, plotdf_file, synplot,
     # now make a scatter plot
     #figDouble = 16
     figWidth  = 14
-    figHeight = 11
+    figHeight = 18
     fig = plt.figure(figsize=(figWidth,figHeight))
+
     #set the panel dimensions
     panelWidth = 4
     panelHeight = 4
@@ -842,8 +844,13 @@ def synteny_plot(df_file, plotdf_file, synplot,
     #find the margins to center the panel in figure
     leftStart = 2.5
     secondLeftStart = 8.5
-    bottomMargin = 5.5
+    bottomMargin = 12.5
     # panel1 will host the index-based plot
+    plt.gcf().text((leftStart-0.75)/figWidth,
+                    (bottomMargin+panelHeight+0.25)/figHeight,
+                   "a", weight = "bold",
+                   fontsize = 20, ha = "left")
+
     panel1 = plt.axes([leftStart/figWidth, #left
                          bottomMargin/figHeight,    #bottom
                          panelWidth/figWidth,   #width
@@ -858,6 +865,10 @@ def synteny_plot(df_file, plotdf_file, synplot,
                          panelHeight/figHeight])     #height
 
     # panel2 will host the position-based plot
+    plt.gcf().text((secondLeftStart-0.75)/figWidth,
+                    (bottomMargin+panelHeight+0.25)/figHeight,
+                   "b", weight = "bold",
+                   fontsize = 20, ha = "left")
     panel2 = plt.axes([secondLeftStart/figWidth, #left
                          bottomMargin/figHeight,    #bottom
                          panelWidth/figWidth,   #width
@@ -915,13 +926,13 @@ def synteny_plot(df_file, plotdf_file, synplot,
 
     # set labels
     plt.gcf().text((leftStart + (panelWidth/2))/figWidth,
-                   10.5/figHeight,
+                   17.35/figHeight,
                    "{} vs {} synteny (gene indices)".format(xsample, ysample),
-                   fontsize = 12, ha = "center")
+                   fontsize = 15, ha = "center")
     plt.gcf().text((secondLeftStart + (panelWidth/2))/figWidth,
-                   10.5/figHeight,
+                   17.35/figHeight,
                    "{} vs {} synteny (chromosome coordinates)".format(xsample, ysample),
-                   fontsize = 12, ha = "center")
+                   fontsize = 15, ha = "center")
 
     # set a legend if it is prot_to_color_mode
     prot_to_color_mode = False
@@ -1209,72 +1220,207 @@ def synteny_plot(df_file, plotdf_file, synplot,
     pospanelyd.set_ylim([0,pos_ymax])
     pospanelyd.set_xlabel('Dy', fontsize=10)
 
-    for this_axis in [panel1, panelxd, panelyd, pospanelxd, pospanelyd]:
-        this_axis.xaxis.get_offset_text().set_visible(False)
-        this_axis.yaxis.get_offset_text().set_visible(False)
 
-    # add some tables
+    # TABLE OF THE CHROMOSOME PIECES and significance
+    pd.set_option('display.float_format', '{:.2E}'.format)
+    table_title_font_size = 11
+    rowheight = 0.14
     cutoff = 0.1
+
+    # table measurements
+    table_left_margin = 2.15
+    left_table_width = 3.9
+    middle_table_width = 2.9
+    right_table_width = 3.4
+    table_spacing = 0.4
+    cde_h_offset = 0.15
+    cde_v_offset = 0.1
+
+
     gb =  plotdf.loc[plotdf["break_FET"] <= cutoff, ].groupby(by=["{}_breakchrom".format(xsample), "{}_breakchrom".format(ysample), "break_FET"]).size().reset_index()
     gb.columns = ["{} scaf".format(xsample), "{} scaf".format(ysample), "p (FET)", "Count"]
-    gb2 = plotdf.loc[plotdf["whole_FET"] <= cutoff, ].groupby(by=["{}_scaf".format(xsample), "{}_scaf".format(ysample), "whole_FET"]).size().reset_index()
-
-    gb2.columns = ["{} scaf".format(xsample), "{} scaf".format(ysample), "p (FET)", "Count"]
-    gb = pd.concat([gb, gb2])
-    gb = gb.sort_values(by=["{} scaf".format(xsample), "{} scaf".format(ysample)]).reset_index(drop=True)
-
+    gb = gb.sort_values(by=["Count", "{} scaf".format(xsample), "{} scaf".format(ysample)],
+                        ascending = False).reset_index(drop=True)
     gb["p (FET)"] = gb["p (FET)"].apply(lambda x: "{:.2e}".format(x))
     gb["{} scaf".format(xsample)] = gb["{} scaf".format(xsample)].apply(
         lambda x: " : ".join(str(x).split(":")))
     gb["{} scaf".format(ysample)] = gb["{} scaf".format(ysample)].apply(
         lambda x: " : ".join(str(x).split(":")))
 
-    rowheight = 0.125
+    plt.gcf().text((table_left_margin + left_table_width + (2*table_spacing) + \
+                    middle_table_width + (right_table_width/2))/figWidth,
+                    (bottomMargin-1.25)/figHeight,
+                   "{} vs {} FET, chrom. pieces".format(xsample, ysample),
+                   fontsize = table_title_font_size, ha = "center")
+    plt.gcf().text((table_left_margin + left_table_width + (2*table_spacing) + \
+                    middle_table_width - cde_h_offset)/figWidth,
+                    (bottomMargin-1.25 + cde_v_offset)/figHeight,
+                   "e", weight = "bold",
+                   fontsize = 20, ha = "left")
     tableheight = rowheight*(len(gb)+1)
-    pd.set_option('display.float_format', '{:.2E}'.format)
 
-    sigtable = plt.axes([leftStart/figWidth, #left
-                         (bottomMargin - tableheight- 1)/figHeight,    #bottom
-                         panelWidth/figWidth,   #width
+    chrompiecetable = plt.axes([(table_left_margin + left_table_width + table_spacing + middle_table_width + table_spacing)/figWidth, #left
+                         (bottomMargin - tableheight- 1.35)/figHeight,    #bottom
+                         right_table_width/figWidth,   #width
                          tableheight/figHeight])     #height
-    sigtable.tick_params(axis='both',which='both',
+    chrompiecetable.tick_params(axis='both',which='both',
                         bottom=False, labelbottom=False,
                         left=False, labelleft=False,
                         right=False, labelright=False,
                         top=False, labeltop=False)
-    for this_panel in [sigtable]:
+    thistab_chrompiece = chrompiecetable.table(rowLabels=["{}".format(x) for x in gb.index],
+                   cellText=gb.values,
+                   colLabels=gb.columns,
+                   cellLoc = "left",
+                   colLoc  = "left",
+                   edges = "horizontal",
+                   bbox = [0,0,1,1])
+    thistab_chrompiece.auto_set_column_width(col=list(range(len(gb.columns))))
+
+    # TABLE OF WHOLE CHROMOSOME SIGNIFICANCE
+    plt.gcf().text((table_left_margin + left_table_width + table_spacing + (middle_table_width*0.5))/figWidth,
+                    (bottomMargin-1.25)/figHeight,
+                   "{} vs {} FET, whole chroms.".format(xsample, ysample),
+                   fontsize = table_title_font_size, ha = "center")
+    plt.gcf().text((table_left_margin + left_table_width + (table_spacing) - cde_h_offset)/figWidth,
+                    (bottomMargin-1.25 + cde_v_offset)/figHeight,
+                   "d", weight = "bold",
+                   fontsize = 20, ha = "left")
+    gb2 = plotdf.loc[plotdf["whole_FET"] <= cutoff, ].groupby(by=["{}_scaf".format(xsample), "{}_scaf".format(ysample), "whole_FET"]).size().reset_index()
+    gb2.columns = ["{} scaf".format(xsample), "{} scaf".format(ysample), "p (FET)", "Count"]
+    gb2 = gb2.sort_values(by=["Count", "{} scaf".format(xsample), "{} scaf".format(ysample)],
+                        ascending = False).reset_index(drop=True)
+    gb2["p (FET)"] = gb2["p (FET)"].apply(lambda x: "{:.2e}".format(x))
+    tableheight = rowheight*(len(gb2)+1)
+    chromwholetable = plt.axes([(table_left_margin+left_table_width +table_spacing)/figWidth, #left
+                         (bottomMargin - tableheight- 1.35)/figHeight,    #bottom
+                         (middle_table_width)/figWidth,   #width
+                         tableheight/figHeight])     #height
+    chromwholetable.tick_params(axis='both',which='both',
+                        bottom=False, labelbottom=False,
+                        left=False, labelleft=False,
+                        right=False, labelright=False,
+                        top=False, labeltop=False)
+    thistab_chromwhole = chromwholetable.table(
+                            rowLabels=["{}".format(x) for x in gb2.index],
+                            cellText=gb2.values,
+                            colLabels=gb2.columns,
+                            cellLoc = "left",
+                            colLoc  = "left",
+                            edges = "horizontal",
+                            bbox = [0,0,1,1])
+    thistab_chromwhole.auto_set_column_width(col=list(range(len(gb2.columns))))
+
+    # TABLE OF COLOR GROUP RESULTS
+    plt.gcf().text((table_left_margin + (left_table_width/2))/figWidth,
+                    (bottomMargin-1.25)/figHeight,
+                   "{} vs {} groupings".format(xsample, ysample),
+                   fontsize = table_title_font_size, ha = "center")
+    plt.gcf().text((table_left_margin - cde_h_offset)/figWidth,
+                    (bottomMargin-1.25 + cde_v_offset)/figHeight,
+                   "c", weight = "bold",
+                   fontsize = 20, ha = "left")
+    gb3 = plotdf.loc[plotdf["whole_FET"] <= 1, ].groupby(by=["{}_scaf".format(xsample), "{}_scaf".format(ysample),"whole_FET", "gene_group"]).size().reset_index()
+    gb3.columns = ["{} scaf".format(xsample), "{} scaf".format(ysample), "p (FET)", "Group", "Count"]
+    gb3["Color"] = "#None"
+    gb3 = gb3.sort_values(by=["p (FET)"], ascending = True).reset_index(drop=True)
+    gb3["p (FET)"] = gb3["p (FET)"].apply(lambda x: "{:.2e}".format(x))
+
+    tableheight = rowheight*(len(gb3)+1)
+    colortable = plt.axes([table_left_margin/figWidth, #left
+                         (bottomMargin - tableheight- 1.35)/figHeight,    #bottom
+                         left_table_width/figWidth,   #width
+                         tableheight/figHeight])     #height
+    colortable.tick_params(axis='both',which='both',
+                        bottom=False, labelbottom=False,
+                        left=False, labelleft=False,
+                        right=False, labelright=False,
+                        top=False, labeltop=False)
+    thistab_color = colortable.table(
+                       rowLabels=["{}".format(x) for x in gb3.index],
+                       cellText=gb3.values,
+                       colLabels=gb3.columns,
+                       cellLoc = "left",
+                       colLoc  = "left",
+                       edges = "horizontal",
+                       bbox = [0,0,1,1])
+    thistab_color.auto_set_column_width(col=list(range(len(gb3.columns))))
+
+
+    for this_tab in [thistab_chrompiece, thistab_chromwhole, thistab_color]:
+        this_tab.auto_set_font_size(False)
+        this_tab.set_fontsize(7)
+
+    print(gb)
+    print()
+    print(gb2)
+    print()
+    print(gb3)
+
+    captionax = plt.axes([1.0/figWidth, #left
+                          1.0/figHeight,    #bottom
+                          (figWidth-2)/figWidth,   #width
+                          1/figHeight])     #height
+    captionax.tick_params(axis='both',which='both',
+                        bottom=False, labelbottom=False,
+                        left=False, labelleft=False,
+                        right=False, labelright=False,
+                        top=False, labeltop=False)
+
+    # top text
+    plt.gcf().text(0.1/figHeight,
+                   (figHeight-0.1)/figHeight,
+                   "{}: {} orthologs on {} {} scaffolds and {} {} scaffolds".format(
+                       orthology_method, len(plotdf),
+                       len(plotdf["{}_scaf".format(xsample)].unique()), xsample,
+                       len(plotdf["{}_scaf".format(ysample)].unique()), ysample),
+                   weight = "bold",
+                   fontsize = 13, ha = "left", va="top")
+    # caption
+    if orthology_method == "diamond":
+        orthology_method = "reciprocal best diamond blastp match between two species"
+    elif orthology_method == "blastp":
+        orthology_method = "reciprocal best blastp match between two species"
+    t = [
+        "(a) depicts the chromosomes/scaffolds of {} (x-axis) plotted".format(xsample),
+        "against the chromosomes/scaffolds of {} (y_axis).".format(ysample),
+        "Each dot in the plot represents an ortholog, specifically a {}.".format(orthology_method),
+        "The unit of the x- and y-axes are the number of orthologous proteins between these two species:",
+        "{} orthologs found between {} {} scaffolds and {} {} scaffolds.".format(
+            len(plotdf),
+            len(plotdf["{}_scaf".format(xsample)].unique()), xsample,
+            len(plotdf["{}_scaf".format(ysample)].unique()), ysample),
+        "If there are chromosome breaks, Fisher's exact test is used to calculate the",
+        "significance of the interactions between the sub-chromosomal pieces. Otherwise",
+        "Fisher's exact test is calculated on whole chromosomes.",
+        "The opacity of the dots depict the significance from Fisher's exact test.",
+        "Dots that are a solid color are in cells with a FET p-value less than or equal to 0.05.",
+        "Dots that are translucent are in cells with a FET p-value greater than 0.05.",
+        "The Dx and Dy values depict places where there may be sudden breaks in synteny.",
+        "See the supplementary information the following paper for more information on Dx and Dy: Simakov, Oleg, et al. \"Deeply conserved synteny resolves early events in vertebrate evolution.\" Nature Ecology & Evolution 4.6 (2020): 820-830.",
+        "(b) depicts the same information as panel a, but it is plotted in the",
+        "organisms chromosome basepair coordinates rather than gene index.",
+        "This is useful for visualizing gene-poor regions of the chromosomes",
+        "(c) shows which gene groups are most prevalent in each chromosome pair.",
+        "The FET p-value in this table corresponds to the whole-chormosome FET p-value",
+        ", and is not a FET value of the correlation between the chromosome pair and the gene group.",
+        "(d) shows chromosome-scale significance values.",
+        "This table shows the same information as c, but does not factor in gene group information.",
+        "(e) shows the FET p-values of the sub-chromosomal compartments. Useful for",
+        "showing if single arms of chromosomes are correlated with other regions."
+         ]
+    t = " ".join(t)
+
+    captext = captionax.text(0, 1, t, fontsize = 10, ha="left", va="top", wrap=True)
+
+
+    for this_panel in [chrompiecetable, chromwholetable, colortable, captionax]:
         this_panel.spines['top'].set_visible(False)
         this_panel.spines['left'].set_visible(False)
         this_panel.spines['bottom'].set_visible(False)
         this_panel.spines['right'].set_visible(False)
 
-    thistab = sigtable.table(rowLabels=["  {}  ".format(x) for x in gb.index],
-                   cellText=gb.values,
-                   colLabels=gb.columns,
-                   cellLoc = "center",
-                   colLoc  = "center",
-                   edges = "horizontal",
-                   bbox = [0,0,1,1])
-                   #rowColours = (["#DFDFDF","#FFFFFF"] * len(gb.index))[:len(gb.index)],
-                   #bbox=[leftStart/figWidth,
-                   #      4/figHeight,
-                   #      (panelWidth/2)/figWidth,
-                   #      tableheight/figHeight])
-                   #      #,1,0.65])#x,y,w,h
-                   #      #[[xmin, ymin], [xmax, ymax]]
-    thistab.auto_set_column_width(col=list(range(len(gb.columns))))
-    thistab.auto_set_font_size(False)
-    thistab.set_fontsize(6)
-
-    #for key, cell in thistab.get_celld().items():
-    #    # scrub borders for clean look(see source below)
-    #    cell.set_linewidth(0)
-
-    print(gb)
-    plt.tight_layout()
     plt.savefig(synplot)
-
-
 
 """
 This makes the synteny plot without doing any special coloring of the dots
@@ -1289,7 +1435,8 @@ rule plot_synteny:
     threads:
         1
     params:
-        analysis = lambda wildcards: wildcards.analysis
+        analysis = lambda wildcards: wildcards.analysis,
+        orthology_method = config["diamond_or_blastp"]
     run:
         xsample = params.analysis.split("_")[0]
         ysample = params.analysis.split("_")[1]
@@ -1302,5 +1449,6 @@ rule plot_synteny:
                      xsample, ysample,
                      xorder, yorder,
                      xbreaks, ybreaks,
+                     params.orthology_method,
                      sort_y_by_x = False,
                      index_or_absolute = "index")
