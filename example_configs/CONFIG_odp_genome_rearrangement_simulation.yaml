@@ -1,0 +1,31 @@
+rbh_file: "OUTER_SP1_SP2_INN_reciprocal_best_hits.tsv"
+outer:    "OUTER"
+species1: "SP1"
+species2: "SP2"
+inner:    "INN"
+
+## This is the decay simulation.
+#num_swaps: 5000 # around 7 miniutes
+#num_simulations: 5000
+
+# randomization trials. Should be divisible by 100,000
+num_randomizations:  100000000
+
+species:
+  # bilats
+  OUTER: # three-letter code version
+    genome:      "/path/to/OUTER.fasta"
+    prot_to_loc: "/path/to/OUTER.chrom"
+    proteins:    "/path/to/OUTER.pep"
+  SP1: # three-letter code version
+    genome:      "/path/to/SP1.fasta"
+    prot_to_loc: "/path/to/SP1.chrom"
+    proteins:    "/path/to/SP1.pep"
+  SP2: # three-letter code version
+    genome:      "/path/to/SP2.fasta"
+    prot_to_loc: "/path/to/SP2.chrom"
+    proteins:    "/path/to/SP2.pep"
+  INN: # three-letter code version
+    genome:      "/path/to/INN.fasta"
+    prot_to_loc: "/path/to/INN.chrom"
+    proteins:    "/path/to/INN.pep"
