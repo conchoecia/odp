@@ -43,6 +43,7 @@ from itertools import permutations
 from itertools import combinations
 #import matplotlib
 from matplotlib.patches import Patch
+from matplotlib.lines   import Line2D
 from matplotlib.font_manager import FontProperties
 
 #from matplotlib.lines import Line2D
@@ -51,6 +52,7 @@ import networkx as nx
 import numpy as np
 #from operator import itemgetter
 import odp_functions as odpf
+import odp_color_manager as oc
 import pandas as pd
 import scipy.stats as stats
 #import statistics
@@ -266,20 +268,13 @@ rule all:
         # find the reciprocal best hits
         [config["tool"] + "/step1-rbh/{}_reciprocal_best_hits.rbh".format(x)
          for x in config["analysispairs"]],
-
+        # no color here
         [config["tool"] + "/step2-figures/synteny_nocolor/{}_xy_reciprocal_best_hits.plotted.rbh".format(x)
+         for x in config["analysispairs"]],
+        [config["tool"] + "/step2-figures/synteny_nocolor/{}_xy_synteny.pdf".format(x)
+         for x in config["analysispairs"]],
+        [config["tool"] + "/step2-figures/synteny_nocolor/{}_yx_synteny.pdf".format(x)
          for x in config["analysispairs"]]
-
-        ## the alpha file
-        #[config["tool"] + "/step2-groupby/FDR/{}.FDR.tsv".format(
-        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        ## the groupby file
-        #[config["tool"] + "/step2-groupby/{}.rbh.groupby".format(
-        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
-
-        #[config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(
-        #    config["blastjobs"][this][0], config["blastjobs"][this][1])
-        # for this in config["blastjobs"]]
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     """
@@ -697,15 +692,29 @@ def h2r(h):
     converts hex to rgb
     """
     h = h.strip("#").upper()
-    return list(int(h[i:i+2], 16) for i in (0, 2, 4))
+    return [x/255 for x in list(int(h[i:i+2], 16) for i in (0, 2, 4))]
 
-def synteny_plot(df_file, plotdf_file, synplot,
+def inverse_color(hexcolor):
+    """
+    Takes in a hex color and determines if the text should be black or white
+
+    taken from: https://stackoverflow.com/questions/3942878
+    """
+    red,green,blue = [x*255 for x in h2r(hexcolor)]
+
+    if (red*0.299 + green*0.587 + blue*0.114) > 186:
+        return "#000000"
+    else:
+        return "#ffffff"
+
+def synteny_plot_sheet(df_file, plotdf_file, synplot,
                  xsample, ysample,
                  xorder,  yorder,
                  xbreaks, ybreaks,
                  orthology_method,
                  sort_y_by_x = True,
-                 index_or_absolute = False):
+                 prot_to_color_name = None,
+                 prot_to_color_dir  = None):
     """
     If the user provided a plot order, then we should not skip any scaffolds.
 
@@ -720,6 +729,12 @@ def synteny_plot(df_file, plotdf_file, synplot,
     from matplotlib.ticker import StrMethodFormatter, NullFormatter
     import numpy as np
     # set seaborn stuff
+
+    prot_to_color_mode = False
+
+    # check if we are in prot_to_color_mode
+    if prot_to_color_name and os.path.exists(prot_to_color_dir):
+        prot_to_color_mode = True
 
     # read in the rbh file
     df = pd.read_csv(df_file, delimiter="\t")
@@ -778,19 +793,8 @@ def synteny_plot(df_file, plotdf_file, synplot,
 
     # this is what we plot
     plotdf = ydf
-    plotdf.to_csv(plotdf_file, sep ="\t", header = None, index = None)
 
-    # figure out where the breaks are
-    # These are where there are low-opacity,
-    #  dotted lines to show breaks in synteny
-    if index_or_absolute == "index":
-        pass
-    elif index_or_absolute == "absolute":
-        pass
-    else:
-        raise IOError("We don't know what the options were for index_or_absolute: {}".format(index_or_absolute))
-
-    # plotting stuff
+    # Options for plotting
     #sns.set(rc={'text.usetex' : True})
     sns.set_style("ticks", {'font.family': ['sans-serif'],
                                 'font.sans-serif': ['Helvetica'],
@@ -800,36 +804,6 @@ def synteny_plot(df_file, plotdf_file, synplot,
     # text as font in pdf
     matplotlib.rcParams['pdf.fonttype'] = 42
     matplotlib.rcParams['ps.fonttype'] = 42
-
-    #print("found {} points to plot".format(len(df["xmiddle"])))
-    #print("max bitscore: ", max(bitscore))
-    #bitscore_adjusted = [(x/max(bitscore))*60 for x in bitscore]
-    #colors = [(0, 0, 1.0, min( 1.0, (x/max(bitscore))*(max(bitscore)/np.mean(bitscore)))) for x in bitscore]
-    #dotsize = [6 for x in bitscore]
-    #drops = set()
-    #if prot_to_color:
-    #    for i in range(len(xgene)):
-    #        alpha = colors[i][3]
-    #        if (xgene[i] in prot_to_color) or (ygene[i] in prot_to_color):
-    #            if xgene[i] in prot_to_color:
-    #                newcolor = list(matplotlib.colors.to_rgba(prot_to_color[xgene[i]]))
-    #            elif ygene[i] in prot_to_color:
-    #                newcolor = list(matplotlib.colors.to_rgba(prot_to_color[ygene[i]]))
-    #            if prot_to_color_mode:
-    #                dotsize[i] = 15
-    #                newcolor[3] = 1
-    #        else:
-    #            print("couldn't find a color for: {}".format(xgene[i]))
-    #            if prot_to_color_mode:
-    #                newcolor = [0.5, 0.5, 0.5, 0.2]
-    #            else:
-    #                newcolor = [0, 0, 0, 1]
-    #            drops.add(i)
-    #        if prot_to_color_mode:
-    #            pass
-    #        else:
-    #            newcolor[3] = 1
-    #        colors[i] = newcolor
 
     # now make a scatter plot
     #figDouble = 16
@@ -934,48 +908,68 @@ def synteny_plot(df_file, plotdf_file, synplot,
                    "{} vs {} synteny (chromosome coordinates)".format(xsample, ysample),
                    fontsize = 15, ha = "center")
 
-    # set a legend if it is prot_to_color_mode
-    prot_to_color_mode = False
-    if prot_to_color_mode:
-        legend_elements = [
-          Patch(facecolor=group_to_color_dict[key],
-                edgecolor='black', lw = 0,
-                label=key) for key in group_to_color_dict]
-        panellg.legend(handles=legend_elements,
-                       fontsize = 10, loc='center left')
-    else:
-        legend_elements = [
-          Patch(facecolor=[0,0,0,0.333],
-                edgecolor='black', lw = 0,
-                label="p > 0.05"),
-          Patch(facecolor=[0,0,0,1],
-                edgecolor='black', lw = 0,
-                label="p < 0.05")
-        ]
-        panellg.legend(handles=legend_elements,
-                       fontsize = 10, loc='center left')
-
-    [s.set_visible(False) for s in panellg.spines.values()]
-    [t.set_visible(False) for t in panellg.get_xticklines()]
-    [t.set_visible(False) for t in panellg.get_yticklines()]
-
-    #print("size dotsize: {}".format(len(dotsize)))
-    #print("size x: {}".format(len(x)))
-    #print("size y: {}".format(len(y)))
-    #print("prot_to_color change")
-    #if prot_to_color_mode:
-    #    # there is a bug where prot-to_color_mode doesn't work if there are genes missing
-    #    print("We're in prot_to_color mode")
-    #    dotsize = [6 for i in x]
-    #else:
-    #    print("we're not in prot to color mode")
 
     # first the index section
     x = plotdf["{}_plotindex".format(xsample)]
     y = plotdf["{}_plotindex".format(ysample)]
     xmax = max(plotdf["{}_plotindex".format(xsample)])
     ymax = max(plotdf["{}_plotindex".format(ysample)])
-    color_list = [h2r("#000000") for x in plotdf["break_FET"]]
+
+    color_list = []
+    alpha_list = []
+    legend_elements = []
+    if prot_to_color_mode:
+        # parse the colorset
+        LG = oc.LG_db("test", "colordir")
+        plotdf = LG.color_dataframe(plotdf)
+        # handle the legend now
+        legend_elements += [
+          Patch(facecolor=LG.group_to_color[key],
+                edgecolor='black', lw = 0,
+                label=key) for key in LG.group_to_color
+         if key not in ["none", "na", "NA"]]
+    else:
+        # we're not in prot_to_color_mode, so check to make sure there is a color
+        if "color" not in plotdf.columns:
+            plotdf["color"] = "#000000"
+        else:
+            # if there is a color column, make sure that it is a real column
+            plotdf["color"] = plotdf["color"].apply(lambda x: x if "#" in x else "#000000")
+        # We also have to check if there are groups already.
+        #  There shouldn't be but we must check anyway.
+        if "gene_group" not in plotdf.columns:
+            plotdf["gene_group"] = None
+        else:
+            # there's already a column, so leave the groups alone
+            pass
+
+
+    legend_elements += [
+      Line2D([], [],
+            marker='o',
+            markerfacecolor=[0,0,0,0.333],
+            markeredgecolor='black',
+            markeredgewidth = 0,
+            markersize = 10,
+            linewidth = 0,
+            label="p > 0.05"),
+      Line2D([], [],
+            marker='o',
+            markerfacecolor=[0,0,0,1],
+            markeredgecolor='black',
+            markeredgewidth = 0,
+            markersize = 10,
+            linewidth = 0,
+            label="p <= 0.05")]
+    panellg.legend(title="Linkage Group\nColors", handles=legend_elements,
+                   fontsize = 10, loc='center left')
+
+    [s.set_visible(False) for s in panellg.spines.values()]
+    [t.set_visible(False) for t in panellg.get_xticklines()]
+    [t.set_visible(False) for t in panellg.get_yticklines()]
+
+    color_list = [h2r(x) for x in plotdf["color"]]
+    #print(color_list)
     alpha_list = [[0.25] if x > 0.05 else [1.0] for x in plotdf["break_FET"]]
     composite_color = [color_list[i] + alpha_list[i] for i in range(len(color_list))]
 
@@ -1000,8 +994,9 @@ def synteny_plot(df_file, plotdf_file, synplot,
     panel2.set_xlim([0, pos_xmax])
     panel2.set_ylim([0, pos_ymax])
 
-    print("xsample", xsample)
-    print("ysample", ysample)
+    # now that we've plotted everything, save the dataframe
+    plotdf.to_csv(plotdf_file, sep ="\t", header = None, index = None)
+
     # plot vertical x lines
     xlabelpos   = [] # x scaf name positions
     xlabels     = [] # x scaf labels
@@ -1192,6 +1187,7 @@ def synteny_plot(df_file, plotdf_file, synplot,
                 align = "center", lw=0, color="blue", zorder = 2)
     panelxd.set_xlim([0,xmax])
     panelxd.set_ylabel('Dx', fontsize=10)
+
     # now by position
     plotdf = plotdf.sort_values(by=["{}_plotpos".format(xsample)]).reset_index()
     plotdf["{}_Dwidths".format(xsample)] = plotdf["{}_plotpos".format(xsample)].diff().fillna(0)
@@ -1210,16 +1206,18 @@ def synteny_plot(df_file, plotdf_file, synplot,
                 align = "center", lw=0, color="blue", zorder = 2)
     panelyd.set_ylim([0,ymax])
     panelyd.set_xlabel('Dy', fontsize=10)
+
     # now by position
     plotdf = plotdf.sort_values(by=["{}_plotpos".format(ysample)]).reset_index()
     plotdf["{}_Dwidths".format(ysample)] = plotdf["{}_plotpos".format(ysample)].diff().fillna(0)
+
     pospanelyd.barh(y = plotdf["{}_plotpos".format(ysample)],
                 width=plotdf["{}_D".format(ysample)],
                 height = plotdf["{}_Dwidths".format(ysample)],
                 align = "center", lw=0, color="blue", zorder = 2)
+
     pospanelyd.set_ylim([0,pos_ymax])
     pospanelyd.set_xlabel('Dy', fontsize=10)
-
 
     # TABLE OF THE CHROMOSOME PIECES and significance
     pd.set_option('display.float_format', '{:.2E}'.format)
@@ -1235,7 +1233,6 @@ def synteny_plot(df_file, plotdf_file, synplot,
     table_spacing = 0.4
     cde_h_offset = 0.15
     cde_v_offset = 0.1
-
 
     gb =  plotdf.loc[plotdf["break_FET"] <= cutoff, ].groupby(by=["{}_breakchrom".format(xsample), "{}_breakchrom".format(ysample), "break_FET"]).size().reset_index()
     gb.columns = ["{} scaf".format(xsample), "{} scaf".format(ysample), "p (FET)", "Count"]
@@ -1322,9 +1319,36 @@ def synteny_plot(df_file, plotdf_file, synplot,
                    fontsize = 20, ha = "left")
     gb3 = plotdf.loc[plotdf["whole_FET"] <= 1, ].groupby(by=["{}_scaf".format(xsample), "{}_scaf".format(ysample),"whole_FET", "gene_group"]).size().reset_index()
     gb3.columns = ["{} scaf".format(xsample), "{} scaf".format(ysample), "p (FET)", "Group", "Count"]
-    gb3["Color"] = "#None"
+
+    if prot_to_color_mode:
+        # if we have color mappings from the gene group we're using, use those colors
+        gb3["Color"] = gb3["Group"].map(LG.group_to_color)
+    else:
+        # otherwise, generate the group to color just for this block from our plotting df
+        tempgroup_to_color_df = plotdf.groupby(
+                 by=["gene_group"])["color"].value_counts(
+                 ascending = False).rename("Counts").reset_index(
+                 ).drop_duplicates("gene_group")
+        tempgroup_to_color = dict(zip(tempgroup_to_color_df["gene_group"],
+                                      tempgroup_to_color_df["color"]))
+        gb3["Color"] = gb3["Group"].map(tempgroup_to_color)
+
     gb3 = gb3.sort_values(by=["p (FET)"], ascending = True).reset_index(drop=True)
     gb3["p (FET)"] = gb3["p (FET)"].apply(lambda x: "{:.2e}".format(x))
+    # swap the columns
+    gb3 = gb3[["{} scaf".format(xsample), "{} scaf".format(ysample), "p (FET)", "Count", "Group", "Color"]]
+
+    color_matrix = []
+    for index, row in gb3.iterrows():
+        # example from
+        #  https://stackoverflow.com/questions/46663911
+        # the_table[(1, 0)].set_facecolor("#56b5fd")
+        base = ["w"] * len(gb3.columns)
+        base[-1] = row["Color"]
+        base[-2] = row["Color"]
+        color_matrix.append(base)
+
+    #print(color_matrix)
 
     tableheight = rowheight*(len(gb3)+1)
     colortable = plt.axes([table_left_margin/figWidth, #left
@@ -1339,12 +1363,19 @@ def synteny_plot(df_file, plotdf_file, synplot,
     thistab_color = colortable.table(
                        rowLabels=["{}".format(x) for x in gb3.index],
                        cellText=gb3.values,
+                       cellColours=color_matrix,
                        colLabels=gb3.columns,
                        cellLoc = "left",
                        colLoc  = "left",
-                       edges = "horizontal",
+                       #edges = "horizontal", #bug where this doesn't work with cell colors https://stackoverflow.com/questions/67890401/
                        bbox = [0,0,1,1])
     thistab_color.auto_set_column_width(col=list(range(len(gb3.columns))))
+    #print(thistab_color._cells)
+    for rowi in range(1,len(gb3)+1):
+        for coli in [len(gb3.columns)-2, len(gb3.columns)-1]:
+            inv = inverse_color(gb3.loc[rowi-1, "Color"])
+            if inv == "#ffffff":
+                thistab_color._cells[(rowi, coli)]._text.set_color(inv)
 
 
     for this_tab in [thistab_chrompiece, thistab_chromwhole, thistab_color]:
@@ -1425,13 +1456,13 @@ def synteny_plot(df_file, plotdf_file, synplot,
 """
 This makes the synteny plot without doing any special coloring of the dots
 """
-rule plot_synteny:
+rule plot_synteny_nocolor:
     input:
         rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh"
     output:
         rbh = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_xy_reciprocal_best_hits.plotted.rbh",
         xy  = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_xy_synteny.pdf",
-        #yx  = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_yx_synteny.pdf"
+        yx  = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_yx_synteny.pdf"
     threads:
         1
     params:
@@ -1445,10 +1476,22 @@ rule plot_synteny:
         xbreaks = config["species"][xsample]["manual_breaks"] if "manual_breaks" in config["species"][xsample] else []
         ybreaks = config["species"][ysample]["manual_breaks"] if "manual_breaks" in config["species"][ysample] else []
 
-        synteny_plot(input.rbh, output.rbh, output.xy,
+        # figure out how to sort the scaffolds
+        sort_y_by_x = False
+        if "sort_by_x_coord_blast" in config["species"][ysample]:
+            sort_y_by_x = config["species"][ysample]["sort_by_x_coord_blast"]
+        synteny_plot_sheet(input.rbh, output.rbh, output.xy,
                      xsample, ysample,
                      xorder, yorder,
                      xbreaks, ybreaks,
                      params.orthology_method,
-                     sort_y_by_x = False,
-                     index_or_absolute = "index")
+                     sort_y_by_x = sort_y_by_x)
+        # check again for sort
+        if "sort_by_x_coord_blast" in config["species"][xsample]:
+            sort_y_by_x = config["species"][xsample]["sort_by_x_coord_blast"]
+        synteny_plot_sheet(input.rbh, output.rbh, output.yx,
+                     ysample, xsample,
+                     yorder, xorder,
+                     ybreaks, xbreaks,
+                     params.orthology_method,
+                     sort_y_by_x = sort_y_by_x)
