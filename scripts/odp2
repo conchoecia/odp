@@ -5,35 +5,6 @@ This script performs mutual-best protein diamond BLAST searches,
 Author: Darrin Schultz
 Email : dts@ucsc.edu
 
-#autobreak_files,
-#fisher_files,
-#prot_color_files,
-#OdpF.expand_avoid_matching("synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_manualbreaks.pdf",
-#        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
-##expand_avoid_matching_x_and_y_kwargs("synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
-##        xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
-#OdpF.expand_avoid_matching("synteny_analysis/blastp_results/xsamp_to_all/{xsample}_to_all_recip.tsv",
-#                                     xsample = config["xaxisspecies"]),
-## working on plotting for color
-#expand("synteny_analysis/prot_to_color/{colorby}_prottocolor.tsv",
-#       colorby = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]),
-## now make a config file for other odp plotting functions
-#"synteny_analysis/odp_plotting_configs/odp_plotting_configs.yaml",
-## These need to be rewritten such that x and y do not match
-#OdpF.expand_avoid_matching_all_third(
-#    "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
-#    xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-#    third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-#    ),
-#OdpF.expand_avoid_matching_all_third(
-#    "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{third}_synteny_manualbreaks.pdf",
-#    xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-#    third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-#    ),
-## make protein similarity plots
-#OdpF.expand_avoid_matching(
-#    "synteny_analysis/plots/sample_similarity/{xsample}_and_{ysample}_peridentity_length.pdf",
-#     xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
 """
 
 from Bio import SeqIO
@@ -134,34 +105,6 @@ if "ignore_autobreaks" in config:
 else:
     pass
 
-#if make_autobreaks:
-#    # uncolored autobreaks
-#    outfiles = OdpF.expand_avoid_matching(
-#        "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_autobreaks.pdf",
-#        xsample = config["xaxisspecies"],
-#        ysample = config["yaxisspecies"])
-#    autobreak_files.append(list(outfiles))
-#    # coloredby autobreaks - needs to be rewritten
-#    #outfiles = OdpF.expand_avoid_matching(
-#    #    "synteny_analysis/plots/synteny_colored_by/{xsample}_and_{ysample}_coloredby_{third}_synteny_autobreaks.pdf",
-#    #    xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-#    #    third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-#    #    )
-#    autobreak_files.append(list(outfiles))
-#    # coloredby autobreaks - no missing - needs to be rewritten
-#    #outfiles = OdpF.expand_avoid_matching(
-#    #    "synteny_analysis/plots/synteny_colored_by_no_missing/{xsample}_and_{ysample}_coloredby_{third}_synteny_autobreaks.pdf",
-#    #    xsample = config["xaxisspecies"], ysample = config["yaxisspecies"],
-#    #    third = [x for x in config["xaxisspecies"] if "chrom_to_color" in config["xaxisspecies"][x]]
-#    #    )
-#    autobreak_files.append(list(outfiles))
-#    # significance plots
-#    outfiles = OdpF.expand_avoid_matching(
-#        "synteny_analysis/plots/significance/breaks/{xsample}_and_{ysample}_fisher_autobreaks.pdf",
-#             xsample = config["xaxisspecies"], ysample = config["yaxisspecies"])
-#    autobreak_files.append(list(outfiles))
-#    autobreak_files = OdpF.flatten(autobreak_files)
-#
 
 ignore_Fisher = False
 if "ignore_Fisher" in config:
@@ -172,68 +115,17 @@ if "ignore_Fisher" in config:
 else:
     pass
 
-#fisher_files = []
-#if not ignore_Fisher:
-#    #make the correlation plots - whole chromosomes
-#    outfiles = OdpF.expand_avoid_matching(
-#        "synteny_analysis/plots/significance/wholechr/{xsample}_and_{ysample}_fisher_wholechr.pdf",
-#         xsample = config["xaxisspecies"], ysample = config["yaxisspecies"])
-#    fisher_files.append(list(outfiles))
-#    outfiles = OdpF.expand_avoid_matching(
-#        "synteny_analysis/plots/significance/wholechr_colors/{xsample}_and_{ysample}_fisher_chromcolor.pdf",
-#         xsample = config["xaxisspecies"], ysample = config["yaxisspecies"])
-#    fisher_files.append(list(outfiles))
-#    # this currently doesn't work - need to trace back where the errors are from
-#    outfiles = OdpF.expand_avoid_matching(
-#    "synteny_analysis/plots/significance/breaks/{xsample}_and_{ysample}_fisher_manualbreaks.pdf",
-#         xsample = config["xaxisspecies"], ysample = config["yaxisspecies"])
-#    fisher_files.append(list(outfiles))
-#    fisher_files = OdpF.flatten(fisher_files)
-
 # check if prot_to_color in config
 if "prot_to_color" not in config:
     config["prot_to_color"] = {}
 
-prot_color_files = []
-if len(config["prot_to_color"]) != 0:
-    """
-    fields in the prot_to_color file are:
-    <1> species
-    <2> chrom
-    <3> position
-    <4> gene
-    <5> color
-    <6> gene_group
-    <7> rbh
-    """
-    for entry in config["prot_to_color"]:
-        if not os.path.exists(config["prot_to_color"][entry]):
-            raise IOError("{} does not exist.".format(config["prot_to_color"][entry]))
-        else:
-            # the file exists, we can add some colors
-            config["prot_to_color"][entry] = {"file": config["prot_to_color"][entry] }
-            config["prot_to_color"][entry]["prot_to_color_dict"] = {}
-            config["prot_to_color"][entry]["group_to_color_dict"] = {}
-            with open(config["prot_to_color"][entry]["file"], "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        fields = line.split("\t")
-                        species    = fields[0]
-                        chrom      = fields[1]
-                        position   = int(fields[2])
-                        gene       = fields[3]
-                        color      = fields[4]
-                        gene_group = fields[5]
-                        rbh        = fields[6]
-                        config["prot_to_color"][entry]["prot_to_color_dict"][gene] = color
-                        config["prot_to_color"][entry]["group_to_color_dict"][gene_group] = color
-            # now we tell odp to make plots coloring with prot_to_color_dict
-            outfiles = odpf.expand_avoid_matching(
-                "synteny_analysis/plots/synteny_colored_by_{colorscheme}/{xsample}_and_{ysample}_coloredby_{colorscheme}.pdf",
-                xsample = config["species"], ysample = config["species"], colorscheme = [entry])
-            prot_color_files.append(list(outfiles))
-    prot_color_files = odpf.flatten(prot_color_files)
+# add the prot_to_color entries from the install directory
+filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+colors_path=os.path.join(filepath, "../LG_db/")
+color_directories = [ os.path.abspath(f.path) for f in os.scandir(colors_path) if f.is_dir() ]
+for thisdir in color_directories:
+    trim = os.path.split(thisdir)[1]
+    config["prot_to_color"][trim] = thisdir
 
 # come up with a list of blast/diamond jobs
 # we must have every combination that is in the analyses_list
@@ -274,7 +166,19 @@ rule all:
         [config["tool"] + "/step2-figures/synteny_nocolor/{}_xy_synteny.pdf".format(x)
          for x in config["analysispairs"]],
         [config["tool"] + "/step2-figures/synteny_nocolor/{}_yx_synteny.pdf".format(x)
-         for x in config["analysispairs"]]
+         for x in config["analysispairs"]],
+
+        [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(hmm, sp)
+         for sp in config["analysisspecies"] for hmm in config["prot_to_color"]],
+        # color by the things in the prot_to_loc settings
+        [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
+         for x in config["analysispairs"] for y in config["prot_to_color"]],
+        [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
+         for x in config["analysispairs"] for y in config["prot_to_color"]],
+        [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
+         for x in config["analysispairs"] for y in config["prot_to_color"]]
+
+
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     """
@@ -714,7 +618,8 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                  orthology_method,
                  sort_y_by_x = True,
                  prot_to_color_name = None,
-                 prot_to_color_dir  = None):
+                 prot_to_color_dir  = None,
+                 prot_to_color_hmm_results = None):
     """
     If the user provided a plot order, then we should not skip any scaffolds.
 
@@ -920,7 +825,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     legend_elements = []
     if prot_to_color_mode:
         # parse the colorset
-        LG = oc.LG_db("test", "colordir")
+        LG = oc.LG_db("test", "colordir", prot_to_color_hmm_results)
         plotdf = LG.color_dataframe(plotdf)
         # handle the legend now
         legend_elements += [
@@ -1399,12 +1304,15 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                         top=False, labeltop=False)
 
     # top text
-    plt.gcf().text(0.1/figHeight,
-                   (figHeight-0.1)/figHeight,
-                   "{}: {} orthologs on {} {} scaffolds and {} {} scaffolds".format(
+    top_text = "{}: {} orthologs on {} {} scaffolds and {} {} scaffolds.".format(
                        orthology_method, len(plotdf),
                        len(plotdf["{}_scaf".format(xsample)].unique()), xsample,
-                       len(plotdf["{}_scaf".format(ysample)].unique()), ysample),
+                       len(plotdf["{}_scaf".format(ysample)].unique()), ysample)
+    if prot_to_color_mode:
+        top_text += " Colored by {}.".format(LG.color_method)
+    plt.gcf().text(0.1/figHeight,
+                   (figHeight-0.1)/figHeight,
+                   top_text,
                    weight = "bold",
                    fontsize = 13, ha = "left", va="top")
     # caption
@@ -1495,3 +1403,130 @@ rule plot_synteny_nocolor:
                      ybreaks, xbreaks,
                      params.orthology_method,
                      sort_y_by_x = sort_y_by_x)
+
+rule hmm_against_prots:
+    input:
+        hmm = lambda wildcards: os.path.join(
+            config["prot_to_color"][wildcards.coloredby],
+            [x for x in list(os.listdir(
+            config["prot_to_color"][wildcards.coloredby]))
+                                      if x.endswith(".hmm")][0]),
+        proteins = config["tool"] + "/db/{sample}_prots.pep"
+    output:
+        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"
+    threads: min(10, int(workflow.cores/4))
+    shell:
+        """
+        hmmsearch --incE 1E-5 \
+          --tblout {output.hmm} \
+          --cpu {threads} \
+          --noali \
+          --notextw \
+          {input.hmm} \
+          {input.proteins} > /dev/null
+        """
+
+rule filter_each_hmm_result:
+    """
+    The header fields are:
+    # target name        accession  query name                         accession    E-value  score  bias   E-value  score  bias   exp reg clu  ov env dom rep inc description of target
+
+    the headers for blastp outfmt 6 are:
+      qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
+
+    gets the top five hits for each hmm and converts them to blastp outfmt 6 format
+    """
+    input:
+        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"
+    output:
+        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp"
+    threads: 1
+    run:
+        top_hits = 5
+        outhandle = open(output.hmm, "w")
+        with open(input.hmm, "r") as f:
+            counter = 0
+            prev = ""
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    fields = line.split()
+                    qseqid = fields[2].replace(".aligned", "")
+                    sseqid = fields[0]
+                    pident = 50.0
+                    length = 50.0
+                    mismatch = 0
+                    gapopen = 0
+                    qstart = 0
+                    qend = 0
+                    sstart = 0
+                    send = 0
+                    evalue = float(fields[4])
+                    bitscore = float(fields[5])
+                    entry = [qseqid, sseqid, pident, length, mismatch, gapopen,
+                             qstart, qend, sstart, send, evalue, bitscore]
+                    counter += 1
+                    if qseqid == prev:
+                        if counter >= top_hits:
+                            pass # don't do anything
+                        else:
+                            print("\t".join([str(x) for x in entry]), file = outhandle)
+                    else:
+                        print("\t".join([str(x) for x in entry]), file = outhandle)
+                        counter = 0
+                    prev = qseqid
+        outhandle.close()
+
+"""
+This makes the synteny plots with the pre-installed color groups
+"""
+rule plot_synteny_coloredby:
+    input:
+        rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh",
+        colordir = lambda wildcards: config["prot_to_color"][wildcards.coloredby],
+        hmm_results = lambda wildcards: [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(
+            wildcards.coloredby, x) for x in wildcards.analysis.split("_")]
+    output:
+        rbh = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_xy_reciprocal_best_hits.coloredby_{coloredby}.plotted.rbh",
+        xy  = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_xy_synteny_coloredby_{coloredby}.pdf",
+        yx  = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_yx_synteny_coloredby_{coloredby}.pdf",
+    threads:
+        1
+    params:
+        analysis = lambda wildcards: wildcards.analysis,
+        orthology_method = config["diamond_or_blastp"],
+        coloredby = lambda wildcards: wildcards.coloredby,
+        coloredbydir = lambda wildcards: config["prot_to_color"][wildcards.coloredby]
+    run:
+        xsample = params.analysis.split("_")[0]
+        ysample = params.analysis.split("_")[1]
+        xorder  = config["species"][xsample]["plotorder"] if "plotorder" in config["species"][xsample] else []
+        yorder  = config["species"][ysample]["plotorder"] if "plotorder" in config["species"][ysample] else []
+        xbreaks = config["species"][xsample]["manual_breaks"] if "manual_breaks" in config["species"][xsample] else []
+        ybreaks = config["species"][ysample]["manual_breaks"] if "manual_breaks" in config["species"][ysample] else []
+
+        # figure out how to sort the scaffolds
+        sort_y_by_x = False
+        if "sort_by_x_coord_blast" in config["species"][ysample]:
+            sort_y_by_x = config["species"][ysample]["sort_by_x_coord_blast"]
+        synteny_plot_sheet(input.rbh, output.rbh, output.xy,
+                     xsample, ysample,
+                     xorder, yorder,
+                     xbreaks, ybreaks,
+                     params.orthology_method,
+                     sort_y_by_x = sort_y_by_x,
+                     prot_to_color_name = params.coloredby,
+                     prot_to_color_dir  = params.coloredbydir,
+                     prot_to_color_hmm_results = input.hmm_results)
+        # check again for sort
+        if "sort_by_x_coord_blast" in config["species"][xsample]:
+            sort_y_by_x = config["species"][xsample]["sort_by_x_coord_blast"]
+        synteny_plot_sheet(input.rbh, output.rbh, output.yx,
+                     ysample, xsample,
+                     yorder, xorder,
+                     ybreaks, xbreaks,
+                     params.orthology_method,
+                     sort_y_by_x = sort_y_by_x,
+                     prot_to_color_name = params.coloredby,
+                     prot_to_color_dir  = params.coloredbydir,
+                     prot_to_color_hmm_results = input.hmm_results)
