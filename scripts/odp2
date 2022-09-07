@@ -1245,6 +1245,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                    fontsize = 20, ha = "left")
     gb3 = plotdf.loc[plotdf["whole_FET"] <= 1, ].groupby(by=["{}_scaf".format(xsample), "{}_scaf".format(ysample),"whole_FET", "gene_group"]).size().reset_index()
     gb3.columns = ["{} scaf".format(xsample), "{} scaf".format(ysample), "p (FET)", "Group", "Count"]
+    gb3 = gb3.loc[gb3["Count"] >= 5, ]
 
     if prot_to_color_mode:
         # if we have color mappings from the gene group we're using, use those colors
@@ -1297,13 +1298,13 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                        #edges = "horizontal", #bug where this doesn't work with cell colors https://stackoverflow.com/questions/67890401/
                        bbox = [0,0,1,1])
     thistab_color.auto_set_column_width(col=list(range(len(gb3.columns))))
+
     #print(thistab_color._cells)
     for rowi in range(1,len(gb3)+1):
         for coli in [len(gb3.columns)-2, len(gb3.columns)-1]:
             inv = inverse_color(gb3.loc[rowi-1, "Color"])
             if inv == "#ffffff":
                 thistab_color._cells[(rowi, coli)]._text.set_color(inv)
-
 
     for this_tab in [thistab_chrompiece, thistab_chromwhole, thistab_color]:
         this_tab.auto_set_font_size(False)
