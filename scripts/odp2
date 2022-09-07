@@ -153,7 +153,7 @@ wildcard_constraints:
     #qval="[0-9]+",
     #telodir="[fr]"
 
-print(config["analysispairs"])
+
 rule all:
     input:
         #blast_jobs
@@ -602,9 +602,14 @@ def inverse_color(hexcolor):
     """
     Takes in a hex color and determines if the text should be black or white
 
+    This is used for determining the color of text in the cells
+
     taken from: https://stackoverflow.com/questions/3942878
     """
     red,green,blue = [x*255 for x in h2r(hexcolor)]
+
+    if hexcolor == "#000000":
+        return "#000000"
 
     if (red*0.299 + green*0.587 + blue*0.114) > 186:
         return "#000000"
@@ -673,13 +678,23 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     ydf = False
     ysorter = yorder
     if sort_y_by_x:
-        ygb = df.groupby(by=["{}_scaf".format(ysample), "{}_scaf".format(xsample)], dropna=False)
-        #print(ygb.size().sort_values(ascending=False))
-        sortseries = ygb.size().sort_values().groupby(level=0).tail(1).reset_index().set_index("{}_scaf".format(xsample))
-        sortseries = sortseries.loc[[x for x in xsorter if x in sortseries.index]].reset_index()
-        sortseries.columns = ["{}_scaf".format(xsample), "{}_scaf".format(ysample), "count"]
-        sortseries = sortseries.groupby(by = ["{}_scaf".format(xsample)]).apply(lambda x: x.sort_values(by=["count"], ascending=False)).reset_index(drop = True)
-        ysorter = list(sortseries["{}_scaf".format(ysample)])
+        ygb = df.groupby(by=["{}_scaf".format(ysample),
+                             "{}_scaf".format(xsample),
+                             "whole_FET"], dropna=False).size().reset_index()
+        ygb.columns = ["{}_scaf".format(ysample), "{}_scaf".format(xsample),
+                       "whole_FET", "Count"]
+        ygb = ygb.sort_values(by = ["{}_scaf".format(ysample), "whole_FET"],
+                              ascending = [True, True]
+                              ).drop_duplicates(subset=["{}_scaf".format(ysample)]
+                              ).reset_index(drop=True)
+        xscafs = list(set(ygb["{}_scaf".format(xsample)]))
+        ygb = ygb.groupby(by = ["{}_scaf".format(xsample)])
+
+        ydf = pd.concat([ygb.get_group(x).sort_values(
+            by = ["Count"], ascending=False).reset_index(drop=True)
+                               for x in xsorter if x in xscafs]
+                        ).reset_index(drop=True)
+        ysorter = list(ydf["{}_scaf".format(ysample)])
     else:
         if len(yorder) == 0:
             # sort by largest to smallest
@@ -814,18 +829,14 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                    fontsize = 15, ha = "center")
 
 
-    # first the index section
-    x = plotdf["{}_plotindex".format(xsample)]
-    y = plotdf["{}_plotindex".format(ysample)]
-    xmax = max(plotdf["{}_plotindex".format(xsample)])
-    ymax = max(plotdf["{}_plotindex".format(ysample)])
 
     color_list = []
     alpha_list = []
     legend_elements = []
     if prot_to_color_mode:
         # parse the colorset
-        LG = oc.LG_db("test", "colordir", prot_to_color_hmm_results)
+        LG = oc.LG_db(prot_to_color_name, prot_to_color_dir,
+                      prot_to_color_hmm_results)
         plotdf = LG.color_dataframe(plotdf)
         # handle the legend now
         legend_elements += [
@@ -873,13 +884,20 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     [t.set_visible(False) for t in panellg.get_xticklines()]
     [t.set_visible(False) for t in panellg.get_yticklines()]
 
+    # first the index section
+    x = np.array(plotdf["{}_plotindex".format(xsample)])
+    y = np.array(plotdf["{}_plotindex".format(ysample)])
+    xmax = max(plotdf["{}_plotindex".format(xsample)])
+    ymax = max(plotdf["{}_plotindex".format(ysample)])
+
     color_list = [h2r(x) for x in plotdf["color"]]
     #print(color_list)
     alpha_list = [[0.25] if x > 0.05 else [1.0] for x in plotdf["break_FET"]]
-    composite_color = [color_list[i] + alpha_list[i] for i in range(len(color_list))]
+    composite_color = np.array([color_list[i] + alpha_list[i]
+                                for i in range(len(color_list))])
 
-    posx = plotdf["{}_plotpos".format(xsample)]
-    posy = plotdf["{}_plotpos".format(ysample)]
+    posx = np.array(plotdf["{}_plotpos".format(xsample)])
+    posy = np.array(plotdf["{}_plotpos".format(ysample)])
 
     pos_xmax = sum([s2c2s[xsample][x] for x in
                 plotdf["{}_scaf".format(xsample)].unique()
@@ -887,10 +905,13 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     pos_ymax = sum([s2c2s[ysample][x] for x in
                 plotdf["{}_scaf".format(ysample)].unique()
                 if x in s2c2s[ysample]])
+    # sort so the colors are on top
+    zorder = [-999 if c == "#000000" else 1 for c in color_list]
+    order = np.argsort(zorder)
 
-    panel1.scatter(x, y, color = composite_color,
+    panel1.scatter(x[order], y[order], color = composite_color[order],
                    ec = None, s=6, linewidths = 0)
-    panel2.scatter(posx, posy, color = composite_color,
+    panel2.scatter(posx[order], posy[order], color = composite_color[order],
                    ec = None, s=6, linewidths = 0)
     # set mins and max for index-panel
     panel1.set_xlim([0, xmax])
@@ -1249,8 +1270,9 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
         #  https://stackoverflow.com/questions/46663911
         # the_table[(1, 0)].set_facecolor("#56b5fd")
         base = ["w"] * len(gb3.columns)
-        base[-1] = row["Color"]
-        base[-2] = row["Color"]
+        thiscolor = row["Color"] if row["Color"] != "#000000" else "w"
+        base[-1] = thiscolor
+        base[-2] = thiscolor
         color_matrix.append(base)
 
     #print(color_matrix)
@@ -1385,7 +1407,7 @@ rule plot_synteny_nocolor:
         ybreaks = config["species"][ysample]["manual_breaks"] if "manual_breaks" in config["species"][ysample] else []
 
         # figure out how to sort the scaffolds
-        sort_y_by_x = False
+        sort_y_by_x = True
         if "sort_by_x_coord_blast" in config["species"][ysample]:
             sort_y_by_x = config["species"][ysample]["sort_by_x_coord_blast"]
         synteny_plot_sheet(input.rbh, output.rbh, output.xy,
@@ -1506,7 +1528,7 @@ rule plot_synteny_coloredby:
         ybreaks = config["species"][ysample]["manual_breaks"] if "manual_breaks" in config["species"][ysample] else []
 
         # figure out how to sort the scaffolds
-        sort_y_by_x = False
+        sort_y_by_x = True
         if "sort_by_x_coord_blast" in config["species"][ysample]:
             sort_y_by_x = config["species"][ysample]["sort_by_x_coord_blast"]
         synteny_plot_sheet(input.rbh, output.rbh, output.xy,

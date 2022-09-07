@@ -225,7 +225,7 @@ class LG_db:
                         if ("#" in thiscolor) and (thiscolor != "#000000"):
                             color = thiscolor
                     if plotgene in self.sp_to_gene_to_group[othersp]:
-                        group = self.sp_to_gene_to_group[othersp][plotgene]
+                        thisgroup = self.sp_to_gene_to_group[othersp][plotgene]
                         if thisgroup != "None":
                             group = thisgroup
                 plotdf.loc[index,"color"] = color
