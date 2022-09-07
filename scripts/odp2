@@ -595,7 +595,7 @@ def h2r(h):
     """
     converts hex to rgb
     """
-    h = h.strip("#").upper()
+    h = h.replace("#","").upper()
     return [x/255 for x in list(int(h[i:i+2], 16) for i in (0, 2, 4))]
 
 def inverse_color(hexcolor):
@@ -833,6 +833,8 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     color_list = []
     alpha_list = []
     legend_elements = []
+    print("this is plotdf")
+    print(plotdf)
     if prot_to_color_mode:
         # parse the colorset
         LG = oc.LG_db(prot_to_color_name, prot_to_color_dir,

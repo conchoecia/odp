@@ -51,7 +51,7 @@ class LG_db:
 
         # now open the rbh file and build appropriate data structures
         self.rbhdf = pd.read_csv(self.rbhfile, sep = "\t")
-        self.rbhspecies = [x.strip("_scaf") for x in self.rbhdf.columns if x.endswith("_scaf")]
+        self.rbhspecies = [x.replace("_scaf","") for x in self.rbhdf.columns if x.endswith("_scaf")]
 
         # check that the requisite columns are in the rbh file
         for thiscol in ["rbh", "gene_group", "color"]:
@@ -201,10 +201,12 @@ class LG_db:
         """
         # First step, determine if the species in the plotdf are the same
         #  as in the LG database
-        all_species = [x.strip("_scaf") for x in plotdf.columns if x.endswith("_scaf")]
+        all_species = [x.replace("_scaf", "") for x in plotdf.columns if x.endswith("_scaf")]
 
         # check which species in plotdf correspond with which species in
         species_to_LG_species = {}
+        print(plotdf.columns)
+        print(all_species)
         for thissp in all_species:
             temp = self._sp_matches_which_db_species(plotdf["{}_gene".format(thissp)])
             if temp: # if not None
