@@ -1260,7 +1260,8 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                                       tempgroup_to_color_df["color"]))
         gb3["Color"] = gb3["Group"].map(tempgroup_to_color)
 
-    gb3 = gb3.sort_values(by=["p (FET)"], ascending = True).reset_index(drop=True)
+    gb3 = gb3.sort_values(by=["{} scaf".format(xsample), "{} scaf".format(ysample), "p (FET)", "Count"],
+                          ascending = [True, True, True, False]).reset_index(drop=True)
     gb3["p (FET)"] = gb3["p (FET)"].apply(lambda x: "{:.2e}".format(x))
     # swap the columns
     gb3 = gb3[["{} scaf".format(xsample), "{} scaf".format(ysample), "p (FET)", "Count", "Group", "Color"]]
