@@ -33,12 +33,10 @@ configfile: "config.yaml"
 
 # check for legal config entries. Useful for finding misspelled entries
 legal = ["proteins", "chrom", "genome", "minscafsize",
-         "manual_breaks", "chrom_to_color", "plotorder", "sort_by_x_coord_blast",
+         "manual_breaks", "plotorder", "sort_by_x_coord_blast",
          "noylines", "noxlines", "genus", "species"]
 
 config["tool"] = "odp"
-
-odpf.check_legality(config)
 
 # check diamond_or_blastp
 if "diamond_or_blastp" not in config:
@@ -1193,14 +1191,15 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                         left=False, labelleft=False,
                         right=False, labelright=False,
                         top=False, labeltop=False)
-    thistab_chrompiece = chrompiecetable.table(rowLabels=["{}".format(x) for x in gb.index],
-                   cellText=gb.values,
-                   colLabels=gb.columns,
-                   cellLoc = "left",
-                   colLoc  = "left",
-                   edges = "horizontal",
-                   bbox = [0,0,1,1])
-    thistab_chrompiece.auto_set_column_width(col=list(range(len(gb.columns))))
+    if len(gb.values) > 0:
+        thistab_chrompiece = chrompiecetable.table(rowLabels=["{}".format(x) for x in gb.index],
+                       cellText=gb.values,
+                       colLabels=gb.columns,
+                       cellLoc = "left",
+                       colLoc  = "left",
+                       edges = "horizontal",
+                       bbox = [0,0,1,1])
+        thistab_chrompiece.auto_set_column_width(col=list(range(len(gb.columns))))
 
     # TABLE OF WHOLE CHROMOSOME SIGNIFICANCE
     plt.gcf().text((table_left_margin + left_table_width + table_spacing + (middle_table_width*0.5))/figWidth,
@@ -1226,15 +1225,16 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                         left=False, labelleft=False,
                         right=False, labelright=False,
                         top=False, labeltop=False)
-    thistab_chromwhole = chromwholetable.table(
-                            rowLabels=["{}".format(x) for x in gb2.index],
-                            cellText=gb2.values,
-                            colLabels=gb2.columns,
-                            cellLoc = "left",
-                            colLoc  = "left",
-                            edges = "horizontal",
-                            bbox = [0,0,1,1])
-    thistab_chromwhole.auto_set_column_width(col=list(range(len(gb2.columns))))
+    if len(gb2.values) > 0:
+        thistab_chromwhole = chromwholetable.table(
+                                rowLabels=["{}".format(x) for x in gb2.index],
+                                cellText=gb2.values,
+                                colLabels=gb2.columns,
+                                cellLoc = "left",
+                                colLoc  = "left",
+                                edges = "horizontal",
+                                bbox = [0,0,1,1])
+        thistab_chromwhole.auto_set_column_width(col=list(range(len(gb2.columns))))
 
     # TABLE OF COLOR GROUP RESULTS
     plt.gcf().text((table_left_margin + (left_table_width/2))/figWidth,
@@ -1291,16 +1291,17 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                         left=False, labelleft=False,
                         right=False, labelright=False,
                         top=False, labeltop=False)
-    thistab_color = colortable.table(
-                       rowLabels=["{}".format(x) for x in gb3.index],
-                       cellText=gb3.values,
-                       cellColours=color_matrix,
-                       colLabels=gb3.columns,
-                       cellLoc = "left",
-                       colLoc  = "left",
-                       #edges = "horizontal", #bug where this doesn't work with cell colors https://stackoverflow.com/questions/67890401/
-                       bbox = [0,0,1,1])
-    thistab_color.auto_set_column_width(col=list(range(len(gb3.columns))))
+    if len(gb3.values) > 0:
+        thistab_color = colortable.table(
+                           rowLabels=["{}".format(x) for x in gb3.index],
+                           cellText=gb3.values,
+                           cellColours=color_matrix,
+                           colLabels=gb3.columns,
+                           cellLoc = "left",
+                           colLoc  = "left",
+                           #edges = "horizontal", #bug where this doesn't work with cell colors https://stackoverflow.com/questions/67890401/
+                           bbox = [0,0,1,1])
+        thistab_color.auto_set_column_width(col=list(range(len(gb3.columns))))
 
     #print(thistab_color._cells)
     for rowi in range(1,len(gb3)+1):
