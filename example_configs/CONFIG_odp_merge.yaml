@@ -1,0 +1,10 @@
+# Merge the odp files depending on their
+rbh_files:
+  - /path/to/rbh/files/for/example/BFL_EMU_RES.unwrapped.rbh
+  - /path/to/rbh/files/for/example/EMU_HVU_RES.unwrapped.rbh
+  - /path/to/rbh/files/for/example/EMU_PYE_RES.unwrapped.rbh
+
+# set up the anchor species that will be used for merging
+anchor_species:
+  - HCA
+  - RES
