@@ -1,0 +1,159 @@
+"""
+This script takes a rbh file, builds a MSA of the proteins,
+ builds an HMM of the protein alignment, and puts everything
+ into a folder for later use by other programs.
+"""
+
+import ast
+from Bio import SeqIO
+from Bio import SeqRecord
+from Bio import Seq
+from itertools import groupby
+from itertools import product
+import math
+import numpy as np
+import odp_functions as OdpF
+from operator import itemgetter
+import pandas as pd
+import statistics
+import time
+
+configfile: "config.yaml"
+
+OdpF.check_legality(config)
+
+if not "rbh_file" in config:
+    raise IOError("You must specify 'rbh_file' in config.")
+
+if not "species" in config:
+    raise IOError("You must specify all of the species that will be involved in this analysis in the config.yaml file.")
+
+# come up with the species in the rbh
+testdf = pd.read_csv(config["rbh_file"], sep = "\t", index_col = None)
+rbh_species = [x.replace("_scaf", "") for x in testdf.columns
+               if x.endswith("_scaf")]
+species_string = "_".join(sorted(rbh_species))
+
+config["tool"] = "odp_LGs_from_{}".format(species_string)
+
+for this_species in rbh_species:
+    if this_species not in config["species"]:
+        raise IOError("Species {} is not in the config file.".format(this_species))
+
+if len(rbh_species) < 2:
+    raise IOError("There must be at least two species in the rbh file.")
+
+config["nways"] = len(rbh_species)
+
+rbhdf = pd.read_csv(config["rbh_file"], index_col = None, sep = "\t")
+rbh_entries = list(set(list(rbhdf["rbh"])))
+
+# come up with number of rbhs
+rule all:
+    input:
+        expand(config["tool"] + "/aligned/{rbh}.fasta",
+               rbh = rbh_entries),
+
+        expand(config["tool"] + "/hmms/{rbh}.hmm",
+               rbh = rbh_entries),
+        ##expand(config["tool"] + "/hmm/searches/{other_species}/{rbh}_against_{other_species}.tsv",
+        ##       other_species = other_species, rbh = rbh_entries),
+        #expand(config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.sorted.tsv",
+        #       other_species = other_species, rbh = rbh_entries),
+        ##expand("hmm/searches_agg_best/{species}_hmm_best.tsv",
+        ##       species = config["yaxisspecies"]),
+        #config["tool"] + "/output/" + species_string + "_rbhhmm_plus_other_species.rbh"
+
+rule generate_fasta_of_each_rbh:
+    input:
+        rbh = config["rbh_file"],
+        proteins = lambda wildcards: [config["species"][x]["proteins"]
+                    for x in rbh_species]
+    output:
+        MBH_fasta = expand(config["tool"] + "/unaligned/{rbh}.fasta",
+                           rbh = rbh_entries)
+    params:
+        fasta_dir = config["tool"] + "/unaligned"
+    threads: 1
+    run:
+        print(" - Reading the dataframe of rbhs.")
+        df = pd.read_csv(input.rbh, index_col = None, sep = "\t")
+        print(df)
+
+        # make a dict of gene_to_rbh
+        print(" - Making a dict of gene_to_rbh")
+        species_to_gene_to_rbh = {}
+        for index, row in df.iterrows():
+            thisrbh = row["rbh"]
+            for this_species in rbh_species:
+                if this_species not in species_to_gene_to_rbh:
+                    species_to_gene_to_rbh[this_species] = {}
+                genecol = "{}_gene".format(this_species)
+                species_to_gene_to_rbh[this_species][row[genecol]] = thisrbh
+
+        # now make a dict of rbh_to_fasta_records
+        print(" - Making a dict of rbh_to_fasta_records.")
+        rbh_to_records = {}
+        for this_species in rbh_species:
+            inhandle = open(config["species"][this_species]["proteins"], "r")
+            for record in SeqIO.parse(inhandle, "fasta"):
+                if record.id in species_to_gene_to_rbh[this_species]:
+                    thisrbh = species_to_gene_to_rbh[this_species][record.id]
+                    record.name = record.id
+                    newid = "{}_{}".format(thisrbh, this_species)
+                    record.id = newid
+                    if thisrbh not in rbh_to_records:
+                        rbh_to_records[thisrbh] = []
+                    rbh_to_records[thisrbh].append(record)
+
+        # make sure that all entries have as many sequences as species
+        print(" - Verifying that the records are all complete.")
+        for index, row in df.iterrows():
+            thisrbh = row["rbh"]
+            row_genes = [row[x] for x in row.index if x.endswith("_gene")
+                         if not pd.isna(row[x])]
+            if len(rbh_to_records[thisrbh]) != len(row_genes):
+                print("{} only has {} genes but should have {}".format(
+                    thisrbh, len(rbh_to_records[thisrbh]), len(row_genes)))
+                print("should have", row_genes)
+                print("has ", [x.id for x in rbh_to_records[thisrbh]])
+                raise IOError("{} only has {} genes but should have {}".format(
+                    thisrbh, len(rbh_to_records[thisrbh]), len(row_genes)))
+
+        # print out all of the records to fasta files
+        print(" - Printing out the FASTA records.")
+        for thisrbh in rbh_to_records:
+            outfile = "{}/{}.fasta".format(params.fasta_dir, thisrbh)
+            with open(outfile, "w") as output_handle:
+                for thisrec in rbh_to_records[thisrbh]:
+                    SeqIO.write(thisrec, output_handle, "fasta")
+
+rule align_fasta_of_each_group:
+    input:
+        MBH_fasta = config["tool"] + "/unaligned/{rbh}.fasta"
+    output:
+        aligned =   config["tool"] + "/aligned/{rbh}.fasta"
+    threads: 1
+    shell:
+        """
+        mafft --localpair --anysymbol --maxiterate 1000 {input.MBH_fasta} > {output.aligned}
+        """
+
+rule make_hmm:
+    input:
+        aligned = config["tool"] + "/aligned/{rbh}.aligned.fasta"
+    output:
+        hmm     = config["tool"] + "/hmms/{rbh}.hmm"
+    threads: 1
+    shell:
+        """
+        hmmbuild {output.hmm} {input.aligned}
+        """
+
+rule make_final_db:
+    """
+    make the final hmm db that can be used later
+    """
+    input:
+        hmm     = expand(config["tool"] + "/hmms/{rbh}.hmm",
+                         rbh = rbh_entries),
