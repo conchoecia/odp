@@ -117,8 +117,8 @@ rule generate_fasta_of_each_rbh:
                     thisrbh, len(rbh_to_records[thisrbh]), len(row_genes)))
                 print("should have", row_genes)
                 print("has ", [x.id for x in rbh_to_records[thisrbh]])
-                raise IOError("{} only has {} genes but should have {}".format(
-                    thisrbh, len(rbh_to_records[thisrbh]), len(row_genes)))
+                #raise IOError("{} only has {} genes but should have {}".format(
+                #    thisrbh, len(rbh_to_records[thisrbh]), len(row_genes)))
 
         # print out all of the records to fasta files
         print(" - Printing out the FASTA records.")
@@ -141,7 +141,7 @@ rule align_fasta_of_each_group:
 
 rule make_hmm:
     input:
-        aligned = config["tool"] + "/aligned/{rbh}.aligned.fasta"
+        aligned = config["tool"] + "/aligned/{rbh}.fasta"
     output:
         hmm     = config["tool"] + "/hmms/{rbh}.hmm"
     threads: 1
