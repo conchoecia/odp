@@ -892,7 +892,10 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     color_list = [h2r(x) for x in plotdf["color"]]
     #print(color_list)
-    alpha_list = [[0.25] if x > 0.05 else [1.0] for x in plotdf["break_FET"]]
+    alpha_list = [[0.25] if x > 0.05 else [0.9] for x in plotdf["break_FET"]]
+    # make the black dots a little lighter
+    alpha_list = [[0.75] if (plotdf["break_FET"][i] <= 0.05 and plotdf["color"][i] == "#000000") else alpha_list[i] \
+                  for i in range(len(alpha_list))]
     composite_color = np.array([color_list[i] + alpha_list[i]
                                 for i in range(len(color_list))])
 
@@ -906,7 +909,8 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                 plotdf["{}_scaf".format(ysample)].unique()
                 if x in s2c2s[ysample]])
     # sort so the colors are on top
-    zorder = [-999 if c == "#000000" else 1 for c in color_list]
+    # make two sets of values to use to make sure colors are on top
+    zorder = [-999     if c == "#000000" else 1 for c in list(plotdf["color"])]
     order = np.argsort(zorder)
 
     panel1.scatter(x[order], y[order], color = composite_color[order],
@@ -1200,6 +1204,9 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                        edges = "horizontal",
                        bbox = [0,0,1,1])
         thistab_chrompiece.auto_set_column_width(col=list(range(len(gb.columns))))
+        thistab_chrompiece.auto_set_font_size(False)
+        thistab_chrompiece.set_fontsize(7)
+
 
     # TABLE OF WHOLE CHROMOSOME SIGNIFICANCE
     plt.gcf().text((table_left_margin + left_table_width + table_spacing + (middle_table_width*0.5))/figWidth,
@@ -1235,6 +1242,9 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                                 edges = "horizontal",
                                 bbox = [0,0,1,1])
         thistab_chromwhole.auto_set_column_width(col=list(range(len(gb2.columns))))
+        thistab_chromwhole.auto_set_font_size(False)
+        thistab_chromwhole.set_fontsize(7)
+
 
     # TABLE OF COLOR GROUP RESULTS
     plt.gcf().text((table_left_margin + (left_table_width/2))/figWidth,
@@ -1302,6 +1312,9 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                            #edges = "horizontal", #bug where this doesn't work with cell colors https://stackoverflow.com/questions/67890401/
                            bbox = [0,0,1,1])
         thistab_color.auto_set_column_width(col=list(range(len(gb3.columns))))
+        thistab_color.auto_set_font_size(False)
+        thistab_color.set_fontsize(7)
+
 
     #print(thistab_color._cells)
     for rowi in range(1,len(gb3)+1):
@@ -1309,10 +1322,6 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
             inv = inverse_color(gb3.loc[rowi-1, "Color"])
             if inv == "#ffffff":
                 thistab_color._cells[(rowi, coli)]._text.set_color(inv)
-
-    for this_tab in [thistab_chrompiece, thistab_chromwhole, thistab_color]:
-        this_tab.auto_set_font_size(False)
-        this_tab.set_fontsize(7)
 
     print(gb)
     print()
