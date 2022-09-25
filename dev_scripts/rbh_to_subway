@@ -1,0 +1,400 @@
+"""
+This script takes a list of species as a plotting order,
+ and a list of rbh files from those species,
+ and makes a synteny subway plot.
+"""
+from Bio import SeqIO
+import pandas as pd
+import sys
+
+#plotting imports
+import seaborn as sns; sns.set()
+import matplotlib
+import matplotlib.pyplot as plt
+from matplotlib.path import Path
+import matplotlib.path as mpath
+import matplotlib.patches as patches
+
+configfile: "config.yaml"
+
+rule all:
+    input:
+        "output.pdf"
+
+def plot_bezier_lines(panel, topxL, bottomxL, colors, topy, bottomy):
+    """
+    Plot bezier curves between chromosome coordinates of different species.
+    - Returns the panel, but with the lines now
+    """
+    indent = 1.0
+    # plot the indices
+    for i in range(len(topxL)):
+        topx     = topxL[i]
+        bottomx  = bottomxL[i]
+        diff = abs(topx - bottomx)
+        middlex = min([topx, bottomx]) + (diff/2)
+        leftx  = middlex - ((diff/2)*indent)
+        rightx = middlex + ((diff/2)*indent)
+        second = (-1,-1)
+        third  = (-1,-1)
+        if topx <= bottomx:
+            second = (leftx,  topy+0.5)
+            third  = (rightx, topy+0.5)
+        else:
+            second = (rightx, topy+0.5)
+            third  = (leftx,  topy+0.5)
+        path_data = [
+            (Path.MOVETO, (topx, topy)),
+            (Path.CURVE4, second),
+            (Path.CURVE4, third),
+            (Path.CURVE4, (bottomx, bottomy)),
+            ]
+        codes, verts = zip(*path_data)
+        path  = mpath.Path(verts, codes)
+        if colors[i] == "#000000":
+            zord = -50
+        else:
+            zord = 1
+        patch = patches.PathPatch(path, fill = False,
+                                  facecolor=[0,0,0,0], lw = 0.25,
+                                  alpha=0.8, edgecolor = colors[i],
+                                  zorder = zord)
+        panel.add_patch(patch)
+    return panel
+
+def subway_plot(species_order, rbh_filelist, sp_to_chr_to_size, outfile,
+                sp_to_gene_order = None):
+    """
+    Takes in a list of species as the plotting order,
+     a list of rbh files, and a dict of species_to_chr_to_sizes
+
+    In the future for the rbh file parse the headers
+    """
+
+    # make a list of the dataframes to open for these analyses
+    rbh_df_list = [pd.read_csv(x, sep = "\t", header = "infer") for x in rbh_filelist]
+
+
+    sp_to_genesdfs = {}
+    # make composite gene index dataframe for each species
+    #  we will use this later to plot by gene index
+    #  rather than the chromosome index
+
+    for thisrbh in rbh_df_list:
+        thesesp = [x.split("_")[0] for x in thisrbh.columns if "_scaf" in x]
+        for thissp in thesesp:
+            if thissp not in sp_to_genesdfs:
+                sp_to_genesdfs[thissp] = []
+                sp_to_genesdfs[thissp].append(thisrbh[[x for x in thisrbh.columns if thissp in x]])
+    # we now concat and deduplicate the gene index dfs
+    for thissp in sp_to_genesdfs:
+        sp_to_genesdfs[thissp] = pd.concat(sp_to_genesdfs[thissp]
+                                  ).sort_values(by=["{}_gene".format(thissp)]
+                                  ).drop_duplicates(subset=["{}_gene".format(thissp)]
+                                  ).sort_values(by=["{}_scaf".format(thissp),
+                                                    "{}_pos".format(thissp)],
+                                                ascending=[True, True]
+                                  ).reset_index(drop=True)
+        sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp][["{}_gene".format(thissp),
+                                                         "{}_scaf".format(thissp),
+                                                         "{}_pos".format(thissp)]]
+        sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp].groupby(
+                                   by=["{}_scaf".format(thissp)], as_index=False
+                                   ).apply(lambda x: x.reset_index(drop=True)
+                                   )
+        sp_to_genesdfs[thissp].index.names = ["{}_delete".format(thissp),"{}_chromIx".format(thissp)]
+        sp_to_genesdfs[thissp].reset_index(inplace =True)
+        sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp][[x for x
+                                  in sp_to_genesdfs[thissp] if "delete" not in x]]
+        #print(sp_to_genesdfs[thissp])
+
+    sp_to_chrom_to_order = {}
+    sp_to_chromorder     = {}
+    sp_to_chromdf        = {} # this is for plotting by chromosome or gene ix coordinates
+
+    # now construct dataframes describing how to plot the chromosomes based on
+    #  gene index or on chromosome coordinate
+    for i in range(len(species_order) - 1):
+        thissp = species_order[i]
+        nextsp = species_order[i+1]
+        # make a sp_to_chromorder dict entry
+        for sp in [thissp, nextsp]:
+            if sp not in sp_to_chromorder:
+                # templist is how we're determining the chromorder since we
+                #  have no input currently
+                templist = []
+                if not sp_to_gene_order:
+                    templist = sorted(list(rbh_df_list[i]["{}_scaf".format(sp)].unique()))
+                else:
+                    templist = sp_to_gene_order[sp]
+                sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
+
+                ########################################
+                # MAGIC NUMBERS
+                ########################################
+                space_between_chrom = 0.0175
+                percent_chrom_as_spaces = space_between_chrom * (len(sp_to_chromorder[sp]) - 1)
+                percent_chrom_as_chroms = 1 - percent_chrom_as_spaces
+
+                ######################################################
+                # THIS SECTION IS FOR ABSOLUTE CHROMOSOME COORDINATES
+                ######################################################
+                # we make a special dataframe to figure out how to plot the chroms
+                # figure out what percent of the horizontal line will be occupied by gaps
+                # this number space_between_chrom is a value between 0-1.
+                chromdf = pd.DataFrame([k for k,v in sorted(sp_to_chromorder[sp].items(),
+                                                  key=lambda item: item[1])],
+                                       columns=['chrom'])
+                chromdf["chromix"] = chromdf["chrom"].map(sp_to_chromorder[sp])
+                chromdf["chrsize"] = chromdf["chrom"].map(sp_to_chr_to_size[sp])
+                total_chrom_len = sum(chromdf["chrsize"])
+                chromdf["chrPlotPercent"] = (chromdf["chrsize"]/total_chrom_len
+                                             ) * percent_chrom_as_chroms
+                chromdf["chrPlotOffset"] = chromdf["chrPlotPercent"].cumsum(
+                                           ).shift(1).fillna(0) + \
+                                           (space_between_chrom * chromdf["chromix"])
+                ######################################################
+                # THIS SECTION IS FOR RELATIVE CHROMOSOME COORDINATES
+                ######################################################
+                chromdf["ixSize"] = chromdf["chrom"].map(
+                    sp_to_genesdfs[sp].groupby("{}_scaf".format(sp)).size().to_dict())
+                totalIxSize = sum(chromdf["ixSize"])
+                chromdf["ixPlotPercent"] = (chromdf["ixSize"]/totalIxSize) * percent_chrom_as_chroms
+                chromdf["ixPlotOffset"] = chromdf["ixPlotPercent"].cumsum(
+                                           ).shift(1).fillna(0) + \
+                                           (space_between_chrom * chromdf["chromix"])
+                sp_to_chromdf[sp] = chromdf
+
+    # set some parameters to make the font helvetica, and the output
+    # more easily editable in illustrator or inkscape
+    #sns.set(rc={'text.usetex' : True})
+    sns.set_style("ticks", {'font.family': ['sans-serif'],
+                                'font.sans-serif': ['Helvetica'],
+                                'grid.color': '.95'})
+    # Preserve the vertical order of embedded images:
+    matplotlib.rcParams['image.composite_image'] = False
+    # text as font in pdf
+    matplotlib.rcParams['pdf.fonttype'] = 42
+    matplotlib.rcParams['ps.fonttype'] = 42
+
+    # first we need to figure out the dimensions of the figure.
+    #  Just make it the number of samples times the space, plus the buffer
+    interspeciesHeight = 0.5
+    panelHeight = interspeciesHeight * len(species_order)
+    panelWidth = 7.15
+
+    #           two panels        top, bottom, middle
+    bufferHeight = 1.5
+    figHeight = (panelHeight*2) + (bufferHeight * 3)
+    figWidth = 8
+
+    fig = plt.figure(figsize=(figWidth,figHeight))
+
+    #set the panel dimensions
+    leftStart = (figWidth - panelWidth)/1.25
+    bottomMargin = bufferHeight
+    # pChr will host the chrom coordinate plots
+    plt.gcf().text((leftStart + (figWidth/2))/figWidth,
+                   (bottomMargin+panelHeight+0.25)/figHeight,
+                   "p<=0.05 RBH results (Chr-coords)",
+                   fontsize = 12, ha = "center", va = "bottom")
+    pChr = plt.axes([leftStart/figWidth, #left
+                   bottomMargin/figHeight,    #bottom
+                   panelWidth/figWidth,   #width
+                   panelHeight/figHeight])     #height
+    pChr.tick_params(axis='both',which='both',
+                   bottom=False, labelbottom=False,
+                   left=False, labelleft=True,
+                   right=False, labelright=False,
+                   top=False, labeltop=False)
+    # pChr will host the chrom coordinate plots
+    plt.gcf().text((leftStart + (figWidth/2))/figWidth,
+                   ((bottomMargin*2)+(panelHeight*2)+0.25)/figHeight,
+                   "p<=0.05 RBH results (RBH-gene-coords)",
+                   fontsize = 12, ha = "center", va = "bottom")
+    pIx = plt.axes([leftStart/figWidth, #left
+                   ((bottomMargin*2)+panelHeight)/figHeight,    #bottom
+                   panelWidth/figWidth,   #width
+                   panelHeight/figHeight])     #height
+    pIx.tick_params(axis='both',which='both',
+                   bottom=False, labelbottom=False,
+                   left=False, labelleft=True,
+                   right=False, labelright=False,
+                   top=False, labeltop=False)
+
+    # plot all the lines
+    for i in range(len(species_order)-1):
+        thissp = species_order[i]
+        nextsp = species_order[i+1]
+        thisspChrom = sp_to_chromdf[thissp]
+        nextspChrom = sp_to_chromdf[nextsp]
+        thisspGenes = sp_to_genesdfs[thissp]
+        nextspGenes = sp_to_genesdfs[nextsp]
+
+        tr = rbh_df_list[i]
+        tr = tr.loc[tr["break_FET"] <= 0.05, ]
+        tr = tr[["{}_gene".format(thissp),
+                 "{}_scaf".format(thissp),
+                  "{}_pos".format(thissp),
+                 "{}_gene".format(nextsp),
+                 "{}_scaf".format(nextsp),
+                  "{}_pos".format(nextsp),
+                 "color"]]
+        # handle the index plotting info
+        print(thisspChrom)
+        print()
+        # get the index plot position for the top
+        chrom_to_ixSize = dict(zip(thisspChrom["chrom"], thisspChrom["ixSize"]))
+        chrom_to_ixPercent = dict(zip(thisspChrom["chrom"], thisspChrom["ixPlotPercent"]))
+        chrom_to_ixOffset = dict(zip(thisspChrom["chrom"], thisspChrom["ixPlotOffset"]))
+        gene_to_ix = dict(zip(thisspGenes["{}_gene".format(thissp)],
+                              thisspGenes["{}_chromIx".format(thissp)]))
+        tr["topIx"] = tr["{}_gene".format(thissp)].map(gene_to_ix)
+        tr["topIx_ChromSize"] = tr["{}_scaf".format(thissp)].map(chrom_to_ixSize)
+        tr["topIx_ChromPercent"] = tr["{}_scaf".format(thissp)].map(chrom_to_ixPercent)
+        tr["topIx_geneOffset"]   = (tr["topIx"]/tr["topIx_ChromSize"]) * tr["topIx_ChromPercent"]
+        tr["topIx_ChromOffset"] = tr["{}_scaf".format(thissp)].map(chrom_to_ixOffset)
+        tr["topIx_finalOffset"] = tr["topIx_ChromOffset"] + tr["topIx_geneOffset"]
+        delete = ["topIx", "topIx_ChromSize", "topIx_ChromPercent",
+                       "topIx_geneOffset","topIx_ChromOffset"]
+        tr = tr[[x for x in tr.columns if x not in delete]]
+        tr = tr.sort_values(by=["topIx_finalOffset"]).reset_index(drop=True)
+
+        # get the index plot position for the bottom
+        chrom_to_ixSize = dict(zip(nextspChrom["chrom"], nextspChrom["ixSize"]))
+        chrom_to_ixPercent = dict(zip(nextspChrom["chrom"], nextspChrom["ixPlotPercent"]))
+        chrom_to_ixOffset = dict(zip(nextspChrom["chrom"], nextspChrom["ixPlotOffset"]))
+        gene_to_ix = dict(zip(nextspGenes["{}_gene".format(nextsp)],
+                              nextspGenes["{}_chromIx".format(nextsp)]))
+        tr["bottomIx"] = tr["{}_gene".format(nextsp)].map(gene_to_ix)
+        tr["bottomIx_ChromSize"] = tr["{}_scaf".format(nextsp)].map(chrom_to_ixSize)
+        tr["bottomIx_ChromPercent"] = tr["{}_scaf".format(nextsp)].map(chrom_to_ixPercent)
+        tr["bottomIx_geneOffset"]   = (tr["bottomIx"]/tr["bottomIx_ChromSize"]) * tr["bottomIx_ChromPercent"]
+        tr["bottomIx_ChromOffset"] = tr["{}_scaf".format(nextsp)].map(chrom_to_ixOffset)
+        tr["bottomIx_finalOffset"] = tr["bottomIx_ChromOffset"] + tr["bottomIx_geneOffset"]
+        delete = ["bottomIx", "bottomIx_ChromSize", "bottomIx_ChromPercent",
+                       "bottomIx_geneOffset","bottomIx_ChromOffset"]
+        tr = tr[[x for x in tr.columns if x not in delete]]
+        tr = tr.sort_values(by=["bottomIx_finalOffset"]).reset_index(drop=True)
+
+        # get the chrom plot position for the top
+        chrom_to_chrSize =    dict(zip(thisspChrom["chrom"], thisspChrom["chrsize"]))
+        chrom_to_chrPercent = dict(zip(thisspChrom["chrom"], thisspChrom["chrPlotPercent"]))
+        chrom_to_chrOffset =  dict(zip(thisspChrom["chrom"], thisspChrom["chrPlotOffset"]))
+        tr["topChr_ChromSize"] = tr["{}_scaf".format(thissp)].map(chrom_to_chrSize)
+        tr["topChr_ChromPercent"] = tr["{}_scaf".format(thissp)].map(chrom_to_chrPercent)
+        tr["topChr_geneOffset"]   = (tr["{}_pos".format(thissp)
+                                        ]/tr["topChr_ChromSize"]) * tr["topChr_ChromPercent"]
+        tr["topChr_ChromOffset"] = tr["{}_scaf".format(thissp)].map(chrom_to_chrOffset)
+        tr["topChr_finalOffset"] = tr["topChr_ChromOffset"] + tr["topChr_geneOffset"]
+        delete = ["topChr", "topChr_ChromSize", "topChr_ChromPercent",
+                       "topChr_geneOffset","topChr_ChromOffset"]
+        tr = tr[[x for x in tr.columns if x not in delete]]
+        tr = tr.sort_values(by=["topChr_finalOffset"]).reset_index(drop=True)
+
+        # get the chrom plot position for the bottom
+        chrom_to_chrSize =    dict(zip(nextspChrom["chrom"], nextspChrom["chrsize"]))
+        chrom_to_chrPercent = dict(zip(nextspChrom["chrom"], nextspChrom["chrPlotPercent"]))
+        chrom_to_chrOffset =  dict(zip(nextspChrom["chrom"], nextspChrom["chrPlotOffset"]))
+        tr["bottomChr_ChromSize"] = tr["{}_scaf".format(nextsp)].map(chrom_to_chrSize)
+        tr["bottomChr_ChromPercent"] = tr["{}_scaf".format(nextsp)].map(chrom_to_chrPercent)
+        tr["bottomChr_geneOffset"]   = (tr["{}_pos".format(nextsp)
+                                        ]/tr["bottomChr_ChromSize"]) * tr["bottomChr_ChromPercent"]
+        tr["bottomChr_ChromOffset"] = tr["{}_scaf".format(nextsp)].map(chrom_to_chrOffset)
+        tr["bottomChr_finalOffset"] = tr["bottomChr_ChromOffset"] + tr["bottomChr_geneOffset"]
+        delete = ["bottomChr", "bottomChr_ChromSize", "bottomChr_ChromPercent",
+                       "bottomChr_geneOffset","bottomChr_ChromOffset"]
+        tr = tr[[x for x in tr.columns if x not in delete]]
+        tr = tr.sort_values(by=["bottomChr_finalOffset"]).reset_index(drop=True)
+
+        # plot the indices
+        pIx = plot_bezier_lines(pIx,
+                         tr["topIx_finalOffset"],
+                         tr["bottomIx_finalOffset"],
+                         tr["color"],
+                         i, i+1)
+
+        pChr = plot_bezier_lines(pChr,
+                         tr["topChr_finalOffset"],
+                         tr["bottomChr_finalOffset"],
+                         tr["color"],
+                         i, i+1)
+
+    # Now we plot all the chroms
+    for i in range(len(species_order)):
+        sp = species_order[i]
+        for index, row in sp_to_chromdf[sp].iterrows():
+            # plot the line and the text
+            x1 = row["chrPlotOffset"]
+            x2 = row["chrPlotOffset"] + row["chrPlotPercent"]
+            pChr.plot([x1,x2],[i,i],'k-')
+            pChr.text(x1, i-0.03, row["chrom"],  ha="left", va = "bottom", fontsize =5)
+
+            # plot the line and text for the index plot
+            x1 = row["ixPlotOffset"]
+            x2 = row["ixPlotOffset"] + row["ixPlotPercent"]
+            pIx.plot([x1,x2],[i,i],'k-')
+            pIx.text(x1, i-0.03, row["chrom"], ha="left", va = "bottom", fontsize = 4)
+
+    # flip the y axes
+    for p in [pChr, pIx]:
+        # remove some spines
+        for side in ["top", "right", "bottom", "left"]:
+            p.spines[side].set_visible(False)
+        # set the limits
+        p.set_xlim([-0.02,1.02])
+        p.set_ylim([-0.03,len(species_order)-1+0.03])
+        # flip the axes
+        p.set_ylim(p.get_ylim()[::-1])
+        # set the axis labels
+        p.set_yticks(list(range(len(species_order))))
+        p.set_yticklabels(species_order)
+
+
+    plt.savefig(outfile)
+
+rule sp_to_chr_to_len:
+    output:
+        outfile = "sp_to_chr_to_size.tsv"
+    params:
+        sp_order = config["species_order"]
+    threads: 1
+    run:
+        sp_to_chr_to_size = {}
+        outfile = open(output.outfile, "w")
+        # for this test just get the species's chromosome sizes
+        for thissp in params.sp_order:
+            if thissp not in sp_to_chr_to_size:
+                sp_to_chr_to_size[thissp] = {}
+                for record in SeqIO.parse(config["species"][thissp]["genome"], "fasta"):
+                    print("{}\t{}\t{}".format(thissp, record.id, len(record.seq)), file = outfile)
+        outfile.close()
+
+rule make_plot:
+    input:
+        rbh_filelist = config["rbh_files_in_order"],
+        tsv = "sp_to_chr_to_size.tsv"
+    output:
+        pdf = "output.pdf"
+    params:
+        sp_order = config["species_order"]
+    threads: 1
+    run:
+        sp_to_chr_to_size = {}
+        # read in the TSV that we already made since it is faster
+        with open(input.tsv, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    fields = line.split("\t")
+                    sp     = fields[0]
+                    chrom  = fields[1]
+                    chrlen = fields[2]
+                    if sp not in sp_to_chr_to_size:
+                        sp_to_chr_to_size[sp] = {}
+                    if chrom not in sp_to_chr_to_size[sp]:
+                        sp_to_chr_to_size[sp][chrom] = int(chrlen)
+
+        subway_plot(params.sp_order, input.rbh_filelist,
+                    sp_to_chr_to_size, output.pdf,
+                    config["chromorder"])
