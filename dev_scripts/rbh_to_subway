@@ -62,8 +62,9 @@ def plot_bezier_lines(panel, topxL, bottomxL, colors, topy, bottomy):
         panel.add_patch(patch)
     return panel
 
-def subway_plot(species_order, rbh_filelist, sp_to_chr_to_size, outfile,
-                sp_to_gene_order = None):
+def subway_plot(species_order, rbh_filelist,
+                sp_to_chr_to_size,  outfile,
+                sp_to_gene_order     = None):
     """
     Takes in a list of species as the plotting order,
      a list of rbh files, and a dict of species_to_chr_to_sizes
@@ -127,6 +128,14 @@ def subway_plot(species_order, rbh_filelist, sp_to_chr_to_size, outfile,
                     templist = sorted(list(rbh_df_list[i]["{}_scaf".format(sp)].unique()))
                 else:
                     templist = sp_to_gene_order[sp]
+                # check here to make sure that there aren't duplicate entries
+                if len(templist) != len(set(templist)):
+                    raise IOError("There are some duplicate chromosome entries for {}: {}.".format(sp, templist))
+                # Make sure that all the chromosomes in the chromorder are actually in the fasta file
+                checklist = [x for x in templist if x not in sp_to_chr_to_size[sp]]
+                if len(checklist) > 0:
+                    raise IOError("These chromosomes in the chromosome order list for sp {} were not in the fasta file: {}".format(
+                        sp, checklist))
                 sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
 
                 ########################################
