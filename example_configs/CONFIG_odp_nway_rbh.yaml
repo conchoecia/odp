@@ -1,0 +1,47 @@
+#
+# author: dts
+# github: @conchoecia
+# repository: @conchoecia/odp
+#   date: 2022
+#
+# This is the example config file for odp_nway_rbh
+#  - it is basically the sample config file as for odp2,
+#     but I think currently instead of a .chrom field there
+#     is a prot_to_loc field
+#
+# For each run you can only pick n-way comparisons.
+# In this example file, we can only specify 3-species
+#  comparisons because we specified the option nways: 3
+# You can pick as many species as you want as long as n >= 2
+#
+# The field num_permutations is the number of times the genomes
+#  are shuffled to calculate the false discovery rate. Keep it to at least
+#  1000000 permutations, but it is likely that doing many more than that
+#  isn't useful.
+#
+#
+
+species:
+  SP1:
+    proteins:    "/path/to/SP1.pep"
+    prot_to_loc: "/path/to/SP1.chrom"
+    genome:      "/path/to/SP1.fasta"
+    minscafsize: 900000
+
+  SP2:
+    proteins:    "/path/to/SP2.pep"
+    prot_to_loc: "/path/to/SP2.chrom"
+    genome:      "/path/to/SP2.fasta"
+    minscafsize: 1200000
+
+  SP3:
+    proteins:    "/path/to/SP3.pep"
+    prot_to_loc: "/path/to/SP3.chrom"
+    genome:      "/path/to/SP3.fasta"
+    minscafsize: 800000
+
+  SP4:
+    proteins:    "/path/to/SP4.pep"
+    prot_to_loc: "/path/to/SP4.chrom"
+    genome:      "/path/to/SP4.fasta"
+    minscafsize: 2000000
