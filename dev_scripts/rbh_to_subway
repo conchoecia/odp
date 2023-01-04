@@ -17,6 +17,14 @@ import matplotlib.patches as patches
 
 configfile: "config.yaml"
 
+# add min
+
+if "chr_sort_order" not in config:
+    sys.exit("ERROR: chr_sort_order not in config file. Please add this to the config file and see the available options in the example config.")
+else:
+    if config["chr_sort_order"] not in ["custom", "optimal-top", "optimal-size", "optimal-random"]:
+        sys.exit("ERROR: chr_sort_order must be selected from < custom | optimal-top | optimal-size | optimal-random >. You provided {}.".format(config["chr_sort_order"]))
+
 rule all:
     input:
         "output.pdf"
@@ -63,18 +71,27 @@ def plot_bezier_lines(panel, topxL, bottomxL, colors, topy, bottomy):
     return panel
 
 def subway_plot(species_order, rbh_filelist,
-                sp_to_chr_to_size,  outfile,
-                sp_to_gene_order     = None):
+                sp_to_chr_to_size,
+                sp_min_chr_size, outfile,
+                sp_to_gene_order     = None,
+                chr_sort_order = "custom"):
     """
     Takes in a list of species as the plotting order,
      a list of rbh files, and a dict of species_to_chr_to_sizes
 
-    In the future for the rbh file parse the headers
+    In the future for the rbh file parse the headers.
+
+    There are several ways that the chromosomes can be sorted.
+      chr_sort_order < custom | optimal-top | optimal-size | optimal-random >
+        custom         - use the custom sorting order for EVERY species in chromorder
+        optimal-top    - use the custom order for the topmost species, then optimizes everything else
+        optimal-size   - sort the top species' chromosomes by number of genes, optimize everything else
+        optimal-random - randomly sort the chromosomes of the top species, optimize everything else
     """
+    import random
 
     # make a list of the dataframes to open for these analyses
     rbh_df_list = [pd.read_csv(x, sep = "\t", header = "infer") for x in rbh_filelist]
-
 
     sp_to_genesdfs = {}
     # make composite gene index dataframe for each species
@@ -109,70 +126,129 @@ def subway_plot(species_order, rbh_filelist,
                                   in sp_to_genesdfs[thissp] if "delete" not in x]]
         #print(sp_to_genesdfs[thissp])
 
-    sp_to_chrom_to_order = {}
+    # we need a block strictly for determining the chromosome order
     sp_to_chromorder     = {}
-    sp_to_chromdf        = {} # this is for plotting by chromosome or gene ix coordinates
+    for i in range(0, len(species_order)):
+        sp = species_order[i]
+        print(sp)
+
+        templist = []
+        if i == 0:
+            # This is the first species, there is a special case for it
+            #      chr_sort_order < custom | optimal-top | optimal-size | optimal-random >
+            if chr_sort_order in ["custom", "optimal-top"]:
+                # in this case we use the custom order or take the order from the file
+                if not sp_to_gene_order or (sp not in sp_to_gene_order):
+                    templist = sorted(list(rbh_df_list[i]["{}_scaf".format(sp)].unique()))
+                else:
+                    templist = sp_to_gene_order[sp]
+            elif chr_sort_order in ["optimal-size", "optimal-random"]:
+                # make a sort of descending size of genes on the pairwise comparisons
+                templist = list(rbh_df_list[i]["{}_scaf".format(sp)].value_counts().index)
+                if sp in sp_to_gene_order:
+                    # append the chromosomes that are in the config file but not in the rbh file
+                    for x in sp_to_gene_order[sp]:
+                        if x not in templist:
+                            templist.append(x)
+                if chr_sort_order == "optimal-random":
+                    random.shuffle(templist)
+        else:
+            # this is the second or later species, change sort order depending on what was there
+            if chr_sort_order == "custom":
+                # in this case we use the custom order or take the order from the file
+                if not sp_to_gene_order or (sp not in sp_to_gene_order):
+                    templist = sorted(list(rbh_df_list[i]["{}_scaf".format(sp)].unique()))
+                else:
+                    templist = sp_to_gene_order[sp]
+            else:
+                # we optimize every other case
+                prevsp = species_order[i-1]
+                # get the significance of the interactions
+                tempdf = rbh_df_list[i - 1].copy()
+                tempdf = tempdf[["{}_scaf".format(x) for x in [sp, prevsp]] + ["whole_FET"]]
+                countsdf = tempdf.groupby(by=["{}_scaf".format(sp), "{}_scaf".format(prevsp)]).count().reset_index()
+                countsdf.columns = ["{}_scaf".format(sp), "{}_scaf".format(prevsp), "count"]
+                countsdf = countsdf.sort_values(by=["count"], ascending=False).reset_index(drop=True)
+                tempdf = tempdf.drop_duplicates().reset_index(drop=True)
+                tempdf = tempdf.merge(countsdf, on=["{}_scaf".format(sp), "{}_scaf".format(prevsp)])
+                # get rid of scaffolds that weren't in the custom list, if the custom list exists
+                if sp in sp_to_gene_order:
+                    tempdf = tempdf.loc[tempdf["{}_scaf".format(prevsp)].isin(sp_to_chromorder[prevsp])]
+                # put the scaffold in the best place based on what is above it
+                tempdf["sort_index"] = tempdf["{}_scaf".format(prevsp)].map(sp_to_chromorder[prevsp])
+                tempdf.dropna(subset=["sort_index"], inplace=True)
+                tempdf = tempdf.sort_values(by=["{}_scaf".format(sp), "whole_FET"], ascending=[True, True])
+                tempdf.drop_duplicates(subset=["{}_scaf".format(sp)], inplace=True)
+                tempdf.sort_values(by=["sort_index", "whole_FET"], ascending=[True, True], inplace=True)
+                tempdf.reset_index(drop=True, inplace=True)
+                templist = tempdf["{}_scaf".format(sp)].tolist()
+        # Now we perform some checks on the list of chromosomes and add them to the dict
+        # check here to make sure that there aren't duplicate entries in the chromosomes
+        if len(templist) != len(set(templist)):
+            raise IOError("There are some duplicate chromosome entries for {}: {}.".format(sp, templist))
+        # Make sure that all the chromosomes in the chromorder are actually in the fasta file
+        checklist = [x for x in templist if x not in sp_to_chr_to_size[sp]]
+        if len(checklist) > 0:
+            raise IOError("These chromosomes in the chromosome order list for sp {} were not in the fasta file: {}".format(
+                sp, checklist))
+        # if we included a list of chromosomes below, remove those 
+        if sp in sp_to_gene_order:
+            templist2 = [x for x in templist if x in sp_to_gene_order[sp]]
+            templist = templist2
+        else:
+            # remove things smaller than the minimum size
+            templist2 = [x for x in templist if (x in sp_to_chr_to_size[sp]) and (sp_to_chr_to_size[sp][x] >= sp_min_chr_size[sp])]
+            templist = templist2
+        sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
+        print(sp, sp_to_chromorder)
 
     # now construct dataframes describing how to plot the chromosomes based on
     #  gene index or on chromosome coordinate
+    sp_to_chrom_to_order = {}
+    sp_to_chromdf        = {} # this is for plotting by chromosome or gene ix coordinates
     for i in range(len(species_order) - 1):
         thissp = species_order[i]
         nextsp = species_order[i+1]
         # make a sp_to_chromorder dict entry
         for sp in [thissp, nextsp]:
-            if sp not in sp_to_chromorder:
-                # templist is how we're determining the chromorder since we
-                #  have no input currently
-                templist = []
-                if not sp_to_gene_order:
-                    templist = sorted(list(rbh_df_list[i]["{}_scaf".format(sp)].unique()))
-                else:
-                    templist = sp_to_gene_order[sp]
-                # check here to make sure that there aren't duplicate entries
-                if len(templist) != len(set(templist)):
-                    raise IOError("There are some duplicate chromosome entries for {}: {}.".format(sp, templist))
-                # Make sure that all the chromosomes in the chromorder are actually in the fasta file
-                checklist = [x for x in templist if x not in sp_to_chr_to_size[sp]]
-                if len(checklist) > 0:
-                    raise IOError("These chromosomes in the chromosome order list for sp {} were not in the fasta file: {}".format(
-                        sp, checklist))
-                sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
+            ########################################
+            # MAGIC NUMBERS
+            ########################################
+            space_between_chrom = 0.0175
+            percent_chrom_as_spaces = space_between_chrom * (len(sp_to_chromorder[sp]) - 1)
+            percent_chrom_as_chroms = 1 - percent_chrom_as_spaces
 
-                ########################################
-                # MAGIC NUMBERS
-                ########################################
-                space_between_chrom = 0.0175
-                percent_chrom_as_spaces = space_between_chrom * (len(sp_to_chromorder[sp]) - 1)
-                percent_chrom_as_chroms = 1 - percent_chrom_as_spaces
-
-                ######################################################
-                # THIS SECTION IS FOR ABSOLUTE CHROMOSOME COORDINATES
-                ######################################################
-                # we make a special dataframe to figure out how to plot the chroms
-                # figure out what percent of the horizontal line will be occupied by gaps
-                # this number space_between_chrom is a value between 0-1.
-                chromdf = pd.DataFrame([k for k,v in sorted(sp_to_chromorder[sp].items(),
-                                                  key=lambda item: item[1])],
-                                       columns=['chrom'])
-                chromdf["chromix"] = chromdf["chrom"].map(sp_to_chromorder[sp])
-                chromdf["chrsize"] = chromdf["chrom"].map(sp_to_chr_to_size[sp])
-                total_chrom_len = sum(chromdf["chrsize"])
-                chromdf["chrPlotPercent"] = (chromdf["chrsize"]/total_chrom_len
-                                             ) * percent_chrom_as_chroms
-                chromdf["chrPlotOffset"] = chromdf["chrPlotPercent"].cumsum(
-                                           ).shift(1).fillna(0) + \
-                                           (space_between_chrom * chromdf["chromix"])
-                ######################################################
-                # THIS SECTION IS FOR RELATIVE CHROMOSOME COORDINATES
-                ######################################################
-                chromdf["ixSize"] = chromdf["chrom"].map(
-                    sp_to_genesdfs[sp].groupby("{}_scaf".format(sp)).size().to_dict())
-                totalIxSize = sum(chromdf["ixSize"])
-                chromdf["ixPlotPercent"] = (chromdf["ixSize"]/totalIxSize) * percent_chrom_as_chroms
-                chromdf["ixPlotOffset"] = chromdf["ixPlotPercent"].cumsum(
-                                           ).shift(1).fillna(0) + \
-                                           (space_between_chrom * chromdf["chromix"])
-                sp_to_chromdf[sp] = chromdf
+            ######################################################
+            # THIS SECTION IS FOR ABSOLUTE CHROMOSOME COORDINATES
+            ######################################################
+            # We make a special dataframe to figure out how to plot the chromosomes in absolute basepair coordinates.
+            #  We determine what percent of the horizontal line will be occupied by gaps.
+            #  This number space_between_chrom is a value between 0-1.
+            chromdf = pd.DataFrame([k for k,v in sorted(sp_to_chromorder[sp].items(),
+                                              key=lambda item: item[1])],
+                                   columns=['chrom'])
+            chromdf["chromix"] = chromdf["chrom"].map(sp_to_chromorder[sp])
+            chromdf["chrsize"] = chromdf["chrom"].map(sp_to_chr_to_size[sp])
+            total_chrom_len = sum(chromdf["chrsize"])
+            chromdf["chrPlotPercent"] = (chromdf["chrsize"]/total_chrom_len
+                                         ) * percent_chrom_as_chroms
+            chromdf["chrPlotOffset"] = chromdf["chrPlotPercent"].cumsum(
+                                       ).shift(1).fillna(0) + \
+                                       (space_between_chrom * chromdf["chromix"])
+            ######################################################
+            # THIS SECTION IS FOR RELATIVE CHROMOSOME COORDINATES
+            ######################################################
+            # This section does the same thing as above, but it plots the
+            #  chromosomes as relative coordinates based on number of genes.
+            chromdf["ixSize"] = chromdf["chrom"].map(
+                sp_to_genesdfs[sp].groupby("{}_scaf".format(sp)).size().to_dict()).fillna(0)
+            totalIxSize = sum(chromdf["ixSize"])
+            chromdf["ixPlotPercent"] = (chromdf["ixSize"]/totalIxSize) * percent_chrom_as_chroms
+            chromdf["ixPlotOffset"] = chromdf["ixPlotPercent"].cumsum(
+                                       ).shift(1).fillna(0) + \
+                                       (space_between_chrom * chromdf["chromix"])
+            print(chromdf)
+            sp_to_chromdf[sp] = chromdf
 
     # set some parameters to make the font helvetica, and the output
     # more easily editable in illustrator or inkscape
@@ -230,6 +306,41 @@ def subway_plot(species_order, rbh_filelist,
                    left=False, labelleft=True,
                    right=False, labelright=False,
                    top=False, labeltop=False)
+    # make a panel for the legend, too
+    panellg = plt.axes([ 0/figWidth, #left
+                         0/figHeight,    #bottom
+                         figWidth/figWidth,   #width
+                         (bottomMargin*0.75)/figHeight])     #height
+    panellg.tick_params(axis='both',which='both',
+                        bottom=False, labelbottom=False,
+                        left=False, labelleft=False,
+                        right=False, labelright=False,
+                        top=False, labeltop=False)
+
+    # Get a dataframe of group to color based on frequency
+    colordf = pd.concat(rbh_df_list)[["gene_group", "color"]
+               ].groupby(["gene_group", "color"]
+               ).size(
+               ).reset_index(name='Freq'
+               ).sort_values(by = ["Freq"], ascending = False
+               ).drop_duplicates(subset = "gene_group"
+               ).sort_values(by = ["gene_group"], ascending = True
+               ).reset_index(drop=True)
+    color_colors = colordf["color"]
+    color_labels = colordf["gene_group"]
+
+    # make a legend
+    # set a legend if it is prot_to_color_mode
+    legend_elements = []
+    for ii in range(len(color_labels)):
+        legend_elements.append(
+            patches.Patch(facecolor=color_colors[ii],
+            edgecolor='black', lw = 0,
+            label=color_labels[ii])
+           )
+    panellg.legend(handles=legend_elements,
+                   ncol = 10,
+                   fontsize = 8, loc='center left')
 
     # plot all the lines
     for i in range(len(species_order)-1):
@@ -252,6 +363,7 @@ def subway_plot(species_order, rbh_filelist,
         # handle the index plotting info
         print(thisspChrom)
         print()
+
         # get the index plot position for the top
         chrom_to_ixSize = dict(zip(thisspChrom["chrom"], thisspChrom["ixSize"]))
         chrom_to_ixPercent = dict(zip(thisspChrom["chrom"], thisspChrom["ixPlotPercent"]))
@@ -359,8 +471,8 @@ def subway_plot(species_order, rbh_filelist,
         p.set_yticks(list(range(len(species_order))))
         p.set_yticklabels(species_order)
 
-
     plt.savefig(outfile)
+    return sp_to_chromorder
 
 rule sp_to_chr_to_len:
     output:
@@ -404,6 +516,12 @@ rule make_plot:
                     if chrom not in sp_to_chr_to_size[sp]:
                         sp_to_chr_to_size[sp][chrom] = int(chrlen)
 
+        min_chr_size = {}
+        for sp in params.sp_order:
+            if "minscafsize" in config["species"][sp]:
+                min_chr_size[sp] = config["species"][sp]["minscafsize"]
+            else:
+                min_chr_size[sp] = 0
         subway_plot(params.sp_order, input.rbh_filelist,
-                    sp_to_chr_to_size, output.pdf,
-                    config["chromorder"])
+                    sp_to_chr_to_size, min_chr_size, output.pdf,
+                    config["chromorder"], config["chr_sort_order"])
