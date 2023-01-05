@@ -22,12 +22,67 @@ configfile: "config.yaml"
 if "chr_sort_order" not in config:
     sys.exit("ERROR: chr_sort_order not in config file. Please add this to the config file and see the available options in the example config.")
 else:
-    if config["chr_sort_order"] not in ["custom", "optimal-top", "optimal-size", "optimal-random"]:
-        sys.exit("ERROR: chr_sort_order must be selected from < custom | optimal-top | optimal-size | optimal-random >. You provided {}.".format(config["chr_sort_order"]))
+    if config["chr_sort_order"] not in ["custom", "optimal-top", "optimal-size", "optimal-chr-or", "optimal-random"]:
+        sys.exit("ERROR: chr_sort_order must be selected from < custom | optimal-top | optimal-size | optimal-chr-or | optimal-random >. You provided {}.".format(config["chr_sort_order"]))
 
 rule all:
     input:
         "output.pdf"
+
+def _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size, sp_to_gene_order, sp_min_chr_size):
+    """
+    We perform some quality checks on the list of chromosomes to make sure that they are all valid.
+
+    templist is the temporary list of scaffold IDs
+    """
+    # Now we perform some checks on the list of chromosomes and add them to the dict
+    # check here to make sure that there aren't duplicate entries in the chromosomes
+    if len(templist) != len(set(templist)):
+        raise IOError("There are some duplicate chromosome entries for {}: {}.".format(sp, templist))
+    # Make sure that all the chromosomes in the chromorder are actually in the fasta file
+    checklist = [x for x in templist if x not in sp_to_chr_to_size[sp]]
+    if len(checklist) > 0:
+        raise IOError("These chromosomes in the chromosome order list for sp {} were not in the fasta file: {}".format(
+            sp, checklist))
+    # if we included a list of chromosomes below, remove those 
+    if sp in sp_to_gene_order:
+        templist2 = [x for x in templist if x in sp_to_gene_order[sp]]
+        templist = templist2
+    else:
+        # remove things smaller than the minimum size
+        templist2 = [x for x in templist if (x in sp_to_chr_to_size[sp]) and (sp_to_chr_to_size[sp][x] >= sp_min_chr_size[sp])]
+        templist = templist2
+    return templist
+ 
+
+def _optimize_spA_based_on_rbh(sp, prevsp, rbhdf, sp_to_chromorder, sp_to_gene_order):
+    """
+    Takes in a species, and optimizes the order of the chromosomes based on the rbh file and the order of the other species' chromosomes.
+
+    sp is the species for which we want to optimize the order
+    prevsp is the other species in the rbh dataframe
+
+    Returns the optimized order of this species' chromosomes
+    """
+    # get the significance of the interactions
+    rbhdf = rbhdf.copy()
+    rbhdf = rbhdf[["{}_scaf".format(x) for x in [sp, prevsp]] + ["whole_FET"]]
+    countsdf = rbhdf.groupby(by=["{}_scaf".format(sp), "{}_scaf".format(prevsp)]).count().reset_index()
+    countsdf.columns = ["{}_scaf".format(sp), "{}_scaf".format(prevsp), "count"]
+    countsdf = countsdf.sort_values(by=["count"], ascending=False).reset_index(drop=True)
+    rbhdf = rbhdf.drop_duplicates().reset_index(drop=True)
+    rbhdf = rbhdf.merge(countsdf, on=["{}_scaf".format(sp), "{}_scaf".format(prevsp)])
+    # get rid of scaffolds that weren't in the custom list, if the custom list exists
+    if sp in sp_to_gene_order:
+        rbhdf = rbhdf.loc[rbhdf["{}_scaf".format(prevsp)].isin(sp_to_chromorder[prevsp])]
+    # put the scaffold in the best place based on what is above it
+    rbhdf["sort_index"] = rbhdf["{}_scaf".format(prevsp)].map(sp_to_chromorder[prevsp])
+    rbhdf.dropna(subset=["sort_index"], inplace=True)
+    rbhdf = rbhdf.sort_values(by=["{}_scaf".format(sp), "whole_FET"], ascending=[True, True])
+    rbhdf.drop_duplicates(subset=["{}_scaf".format(sp)], inplace=True)
+    rbhdf.sort_values(by=["sort_index", "whole_FET"], ascending=[True, True], inplace=True)
+    rbhdf.reset_index(drop=True, inplace=True)
+    return rbhdf["{}_scaf".format(sp)].tolist()
 
 def plot_bezier_lines(panel, topxL, bottomxL, colors, topy, bottomy):
     """
@@ -73,8 +128,8 @@ def plot_bezier_lines(panel, topxL, bottomxL, colors, topy, bottomy):
 def subway_plot(species_order, rbh_filelist,
                 sp_to_chr_to_size,
                 sp_min_chr_size, outfile,
-                sp_to_gene_order     = None,
-                chr_sort_order = "custom"):
+                sp_to_gene_order = None,
+                chr_sort_order   = "custom"):
     """
     Takes in a list of species as the plotting order,
      a list of rbh files, and a dict of species_to_chr_to_sizes
@@ -86,6 +141,7 @@ def subway_plot(species_order, rbh_filelist,
         custom         - use the custom sorting order for EVERY species in chromorder
         optimal-top    - use the custom order for the topmost species, then optimizes everything else
         optimal-size   - sort the top species' chromosomes by number of genes, optimize everything else
+        optimal-chr-or - use `chromorder` when possible, optimize everything else
         optimal-random - randomly sort the chromosomes of the top species, optimize everything else
     """
     import random
@@ -130,13 +186,12 @@ def subway_plot(species_order, rbh_filelist,
     sp_to_chromorder     = {}
     for i in range(0, len(species_order)):
         sp = species_order[i]
-        print(sp)
 
         templist = []
         if i == 0:
             # This is the first species, there is a special case for it
             #      chr_sort_order < custom | optimal-top | optimal-size | optimal-random >
-            if chr_sort_order in ["custom", "optimal-top"]:
+            if chr_sort_order in ["custom", "optimal-top", "optimal-chr-or"]:
                 # in this case we use the custom order or take the order from the file
                 if not sp_to_gene_order or (sp not in sp_to_gene_order):
                     templist = sorted(list(rbh_df_list[i]["{}_scaf".format(sp)].unique()))
@@ -160,47 +215,35 @@ def subway_plot(species_order, rbh_filelist,
                     templist = sorted(list(rbh_df_list[i]["{}_scaf".format(sp)].unique()))
                 else:
                     templist = sp_to_gene_order[sp]
+            elif (chr_sort_order == "optimal-chr-or") and (sp in sp_to_gene_order):
+                    templist = sp_to_gene_order[sp]
             else:
                 # we optimize every other case
                 prevsp = species_order[i-1]
-                # get the significance of the interactions
-                tempdf = rbh_df_list[i - 1].copy()
-                tempdf = tempdf[["{}_scaf".format(x) for x in [sp, prevsp]] + ["whole_FET"]]
-                countsdf = tempdf.groupby(by=["{}_scaf".format(sp), "{}_scaf".format(prevsp)]).count().reset_index()
-                countsdf.columns = ["{}_scaf".format(sp), "{}_scaf".format(prevsp), "count"]
-                countsdf = countsdf.sort_values(by=["count"], ascending=False).reset_index(drop=True)
-                tempdf = tempdf.drop_duplicates().reset_index(drop=True)
-                tempdf = tempdf.merge(countsdf, on=["{}_scaf".format(sp), "{}_scaf".format(prevsp)])
-                # get rid of scaffolds that weren't in the custom list, if the custom list exists
-                if sp in sp_to_gene_order:
-                    tempdf = tempdf.loc[tempdf["{}_scaf".format(prevsp)].isin(sp_to_chromorder[prevsp])]
-                # put the scaffold in the best place based on what is above it
-                tempdf["sort_index"] = tempdf["{}_scaf".format(prevsp)].map(sp_to_chromorder[prevsp])
-                tempdf.dropna(subset=["sort_index"], inplace=True)
-                tempdf = tempdf.sort_values(by=["{}_scaf".format(sp), "whole_FET"], ascending=[True, True])
-                tempdf.drop_duplicates(subset=["{}_scaf".format(sp)], inplace=True)
-                tempdf.sort_values(by=["sort_index", "whole_FET"], ascending=[True, True], inplace=True)
-                tempdf.reset_index(drop=True, inplace=True)
-                templist = tempdf["{}_scaf".format(sp)].tolist()
+                templist = _optimize_spA_based_on_rbh(sp, prevsp, rbh_df_list[i - 1], sp_to_chromorder, sp_to_gene_order)
         # Now we perform some checks on the list of chromosomes and add them to the dict
         # check here to make sure that there aren't duplicate entries in the chromosomes
-        if len(templist) != len(set(templist)):
-            raise IOError("There are some duplicate chromosome entries for {}: {}.".format(sp, templist))
-        # Make sure that all the chromosomes in the chromorder are actually in the fasta file
-        checklist = [x for x in templist if x not in sp_to_chr_to_size[sp]]
-        if len(checklist) > 0:
-            raise IOError("These chromosomes in the chromosome order list for sp {} were not in the fasta file: {}".format(
-                sp, checklist))
-        # if we included a list of chromosomes below, remove those 
-        if sp in sp_to_gene_order:
-            templist2 = [x for x in templist if x in sp_to_gene_order[sp]]
-            templist = templist2
-        else:
-            # remove things smaller than the minimum size
-            templist2 = [x for x in templist if (x in sp_to_chr_to_size[sp]) and (sp_to_chr_to_size[sp][x] >= sp_min_chr_size[sp])]
-            templist = templist2
+        templist = _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size, sp_to_gene_order, sp_min_chr_size)
         sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
         print(sp, sp_to_chromorder)
+
+    # There is an edge case where, if we used option "optimal-chr-or", but the 0th through nth species weren't
+    #  in the chromosome order, we need to optimize the species in reverse order
+    if chr_sort_order == "optimal-chr-or":
+        first_optimized = 99999999
+        for i in range(len(species_order)):
+            sp = species_order[i]
+            if sp in sp_to_gene_order:
+                first_optimized = i
+                break
+        while first_optimized != 0:
+            sp = species_order[first_optimized - 1]
+            prevsp = species_order[first_optimized]
+            # optimize the chromosome order
+            templist = _optimize_spA_based_on_rbh(sp, prevsp, rbh_df_list[first_optimized - 1], sp_to_chromorder, sp_to_gene_order)
+            templist = _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size, sp_to_gene_order, sp_min_chr_size)
+            sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
+            first_optimized -= 1
 
     # now construct dataframes describing how to plot the chromosomes based on
     #  gene index or on chromosome coordinate
