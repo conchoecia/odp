@@ -220,9 +220,12 @@ rule make_diamond_and_blast_db:
     output:
         dmnd = config["tool"] + "/db/dmnd/{sample}_prots.dmnd",
         pdb  = config["tool"] + "/db/{sample}_prots.pep.pdb"
+    params:
+        outdir = config["tool"] + "/db/dmnd"
     threads: workflow.cores - 1
     shell:
         """
+        mkdir -p {params.outdir}
         diamond makedb --in {input.pep} --db {output.dmnd}
         makeblastdb -in {input.pep} -dbtype prot
         """
@@ -1512,6 +1515,22 @@ rule filter_each_hmm_result:
                         counter = 0
                     prev = qseqid
         outhandle.close()
+
+#rule filter_each_hmm_result:
+#    """
+#    The header fields are:
+#    # target name        accession  query name                         accession    E-value  score  bias   E-value  score  bias   exp reg clu  ov env dom rep inc description of target
+#
+#    the headers for blastp outfmt 6 are:
+#      qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
+#
+#    gets the top five hits for each hmm and converts them to blastp outfmt 6 format
+#    """
+#    input:
+#        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp"
+#    output:
+#        rbh = config["tool"] + "/step1-rbh-ALGs/{analysis}_reciprocal_best_hits.rbh"
+
 
 """
 This makes the synteny plots with the pre-installed color groups
