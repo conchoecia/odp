@@ -151,7 +151,6 @@ wildcard_constraints:
     #qval="[0-9]+",
     #telodir="[fr]"
 
-
 rule all:
     input:
         #blast_jobs
@@ -175,8 +174,6 @@ rule all:
          for x in config["analysispairs"] for y in config["prot_to_color"]],
         [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
          for x in config["analysispairs"] for y in config["prot_to_color"]]
-
-
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     """
@@ -332,6 +329,7 @@ rule n_ways_reciprocal_best:
     threads: 1
     run:
         # prot to group
+        # January 9 2023 - I think this block of code is no longer relevant
         prot_to_group = {}
         if "prot_to_group" in config:
             if os.path.exists(config["prot_to_group"]):
@@ -362,6 +360,9 @@ rule n_ways_reciprocal_best:
             chrom_dicts[thisspecies].columns = ["prot",
                 "scaf", "direction", "start", "stop"]
 
+        #DELETE
+        print(chrom_dicts["CTE"])
+        sys.exit()
         # initialize the graph
         G = nx.Graph()
         checked_names = set()
