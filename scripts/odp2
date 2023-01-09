@@ -361,8 +361,10 @@ rule n_ways_reciprocal_best:
                 "scaf", "direction", "start", "stop"]
 
         #DELETE
+        # This is working, we don't need it anymore
         print(chrom_dicts["CTE"])
-        sys.exit()
+        #sys.exit()
+
         # initialize the graph
         G = nx.Graph()
         checked_names = set()
@@ -451,6 +453,10 @@ rule n_ways_reciprocal_best:
             CCs.append(ccdict)
         genesdf = pd.DataFrame(CCs)
         genesdf["gene_group"] = "None"
+
+        #DELETE
+        print(genesdf)
+        sys.exit()
 
         # now add the other info
         column_add = []
