@@ -362,11 +362,6 @@ rule n_ways_reciprocal_best:
             # we must convert the prot ID to type string in case the protein IDs are just numbers
             chrom_dicts[thisspecies]["prot"] = chrom_dicts[thisspecies]["prot"].astype(str)
 
-        #DELETE
-        # This is working, we don't need it anymore
-        print(chrom_dicts["CTE"])
-        #sys.exit()
-
         # initialize the graph
         G = nx.Graph()
         checked_names = set()
@@ -455,6 +450,11 @@ rule n_ways_reciprocal_best:
             CCs.append(ccdict)
         genesdf = pd.DataFrame(CCs)
         genesdf["gene_group"] = "None"
+        # Convert the gene names to strings in case they are not yet.
+        #  Sometimes they are numbers, and this will cause problems.
+        for thisspecies in sorted(all_species):
+            genesdf["{}_gene".format(thisspecies)] = genesdf[
+                "{}_gene".format(thisspecies)].astype(str)
 
         # now add the other info
         column_add = []
@@ -470,10 +470,6 @@ rule n_ways_reciprocal_best:
             column_add = column_add + ["{}_gene".format(thisspecies),
                                        "{}_scaf".format(thisspecies),
                                        "{}_pos".format(thisspecies)]
-
-        #DELETE
-        print(genesdf)
-        sys.exit()
 
         # add the gene_group info
         for index, row in genesdf.iterrows():
