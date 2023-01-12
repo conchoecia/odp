@@ -185,11 +185,13 @@ def subway_plot(species_order, rbh_filelist,
 
     for thisrbh in rbh_df_list:
         thesesp = [x.split("_")[0] for x in thisrbh.columns if "_scaf" in x]
+        print("thisrbh: {}".format(thisrbh))
         print("sp_pair: {}".format(thesesp))
         for thissp in thesesp:
             if thissp not in sp_to_genesdfs:
                 sp_to_genesdfs[thissp] = []
                 sp_to_genesdfs[thissp].append(thisrbh[[x for x in thisrbh.columns if thissp in x]])
+
     # we now concat and deduplicate the gene index dfs
     for thissp in sp_to_genesdfs:
         print("about to break")
