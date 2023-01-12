@@ -47,10 +47,6 @@ if ("rbh_directory" in config) and ("rbh_files_in_order" not in config):
         files_list_in_order.append(absfile)
     config["rbh_files_in_order"] = files_list_in_order
 
-print(config["species_order"])
-print(config["rbh_files_in_order"])
-sys.exit()
-
 if "chr_sort_order" not in config:
     sys.exit("ERROR: chr_sort_order not in config file. Please add this to the config file and see the available options in the example config.")
 else:
