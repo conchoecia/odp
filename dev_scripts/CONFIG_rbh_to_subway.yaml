@@ -20,7 +20,7 @@ chr_sort_order: optimal-chr-or
 # - First type in the list of species to plot
 # - In this example we plot the relationships between
 #   three species with the codes "EMU", "RES", and "HCA".
-#   These three species must also be present in the "species" 
+#   These three species must also be present in the "species"
 #   entry of the config file below.
 species_order:
   - EMU
@@ -47,7 +47,7 @@ chromorder:
 #   plotted.
 # - The number of files will always be the number of species minus one.
 # - Currently, only relationships that are significant with Fisher's exact
-#   test will be plotted here. 
+#   test will be plotted here.
 rbh_files_in_order:
   - /path/to/EMU_RES_xy_reciprocal_best_hits.coloredby_BCnS_LGs.plotted.rbh
   - /path/to/HCA_RES_xy_reciprocal_best_hits.coloredby_BCnS_LGs.plotted.rbh
