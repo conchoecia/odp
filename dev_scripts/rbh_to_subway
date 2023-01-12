@@ -17,7 +17,38 @@ import matplotlib.patches as patches
 
 configfile: "config.yaml"
 
-# add min
+# first we check to see that one, and only one, of
+#  rbh_files_in_order or rbh_directory were specified in the config
+checklist = ["rbh_files_in_order", "rbh_directory"]
+in_config = []
+for entry in checklist:
+    if entry in config:
+        in_config.append(entry)
+if len(in_config) != 1:
+    raise IOError("You must specify one, and only one, of the options 'rbh_files_in_order' or 'rbh_directory' in the config. Please comment out one of them to proceed, or add one if you have not yet.")
+
+# If the user specified "rbh_directory", we need to get a list of the files
+#  in that directory, and find the files in the order that they appear in
+#  config["species_order"], then save that new list to
+#  config["rbh_files_in_order"]
+
+if "rbh_directory" in config:
+    # get the list of files from the directory
+    fileslist = [x for x in os.listdir(config["rbh_directory"])
+                 if x.endswith(".rbh")]
+    files_list_in_order = []
+    for i in range(len(config["species_order"])-1):
+        sp =     config["species_order"][i]
+        nextsp = config["species_order"][i+1]
+        sortstring = "_".join(sorted([sp, nextsp]))
+        # this gets the first file with the sortstring in it
+        thisfile = [x for x in fileslist if x.startswith(sortstring) in x][0]
+        files_list_in_order.append(thisfile)
+    config["rbh_files_in_order"] = files_list_in_order
+
+print(config["species_order"])
+print(config["rbh_files_in_order"])
+sys.exit()
 
 if "chr_sort_order" not in config:
     sys.exit("ERROR: chr_sort_order not in config file. Please add this to the config file and see the available options in the example config.")
@@ -53,7 +84,6 @@ def _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size, sp_to_gene_o
         templist2 = [x for x in templist if (x in sp_to_chr_to_size[sp]) and (sp_to_chr_to_size[sp][x] >= sp_min_chr_size[sp])]
         templist = templist2
     return templist
- 
 
 def _optimize_spA_based_on_rbh(sp, prevsp, rbhdf, sp_to_chromorder, sp_to_gene_order):
     """

@@ -42,15 +42,28 @@ chromorder:
     - EMU2
     - EMU3
 
+# NOTE : YOU CAN ONLY SPECIFY ONE OF THE FOLLOWING:
+#  - rbh_files_in_order
+#  - rbh_directory
+
 # - This is the list of RBH files output from odp2 or another source.
 # - Each RBH file contains the orthologs between species that should be
 #   plotted.
 # - The number of files will always be the number of species minus one.
 # - Currently, only relationships that are significant with Fisher's exact
 #   test will be plotted here.
+# - See the above note about only using one of the two entries
 rbh_files_in_order:
   - /path/to/EMU_RES_xy_reciprocal_best_hits.coloredby_BCnS_LGs.plotted.rbh
   - /path/to/HCA_RES_xy_reciprocal_best_hits.coloredby_BCnS_LGs.plotted.rbh
+
+# If you generated the rbh files using odp2, and the config file here
+#  uses the same species prefixes that you used in that run, then
+#  you have the option of providing a path to the directory containing
+#  the rbh files. The software will determine which files to use based
+#  on the species order you provided above.
+# - See the above note about only using one of the two entries
+rbh_directory: /path/to/directory/containing/rbh/files/
 
 # - All of the species that are in "species_order" above should be here
 # - This information is important for calculating some stats that are used
