@@ -304,25 +304,17 @@ def subway_plot(species_order, rbh_filelist,
             # - I am finding that it helps to use different percents depending on how many chromosomes there are.
             #   This is an awkward block of code, but it is readable and is easy to change.
             num_chroms = len(sp_to_chromorder[sp])
-            if num_chroms < 10:
-                percent_chrom_as_spaces = 0.15
-            elif num_chroms < 15:
-                percent_chrom_as_spaces = 0.16
-            elif num_chroms < 20:
-                percent_chrom_as_spaces = 0.17
-            elif num_chroms < 25:
-                percent_chrom_as_spaces = 0.18
-            elif num_chroms < 30:
-                percent_chrom_as_spaces = 0.19
-            elif num_chroms < 35:
-                percent_chrom_as_spaces = 0.20
-            elif num_chroms < 40:
-                percent_chrom_as_spaces = 0.21
-            elif num_chroms < 40:
-                percent_chrom_as_spaces = 0.22
+            min_chr_size = 10
+            max_chr_size = 50
+            min_gap_percent = 0.12
+            max_gap_percent = 0.25
+            if num_chroms < min_chr_size:
+                percent_chrom_as_spaces = min_gap_percent
+            elif num_chroms > max_chr_size:
+                percent_chrom_as_spaces = max_gap_percent
             else:
-                percent_chrom_as_spaces = 0.23
-
+                # scale the percent_chrom_as_spaces between min_gap_percent and max_gap_percent based on the number of chromosomes
+                percent_chrom_as_spaces = min_gap_percent + (max_gap_percent - min_gap_percent) * (num_chroms - min_chr_size) / (max_chr_size - min_chr_size)
             percent_chrom_as_chroms = 1 - percent_chrom_as_spaces
             space_between_chrom = percent_chrom_as_spaces / (len(sp_to_chromorder[sp]) - 1)
 
