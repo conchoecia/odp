@@ -18,6 +18,13 @@ import matplotlib.patches as patches
 
 configfile: "config.yaml"
 
+# plot_all has to be in the config file
+if "plot_all" not in config:
+    sys.exit("ERROR: plot_all not in config file. Please add this to the config file and see the available options in the example config.")
+else:
+    if config["plot_all"] not in [True, False]:
+        sys.exit("ERROR: plot_all must be selected from < True | False >. You provided {}.".format(config["plot_all"]))
+
 # first we check to see that one, and only one, of
 #  rbh_files_in_order or rbh_directory were specified in the config
 checklist = ["rbh_files_in_order", "rbh_directory"]
@@ -114,7 +121,7 @@ def _optimize_spA_based_on_rbh(sp, prevsp, rbhdf, sp_to_chromorder, sp_to_gene_o
     rbhdf.reset_index(drop=True, inplace=True)
     return rbhdf["{}_scaf".format(sp)].tolist()
 
-def plot_bezier_lines(panel, topxL, bottomxL, colors, topy, bottomy):
+def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy):
     """
     Plot bezier curves between chromosome coordinates of different species.
     - Returns the panel, but with the lines now
@@ -146,11 +153,13 @@ def plot_bezier_lines(panel, topxL, bottomxL, colors, topy, bottomy):
         path  = mpath.Path(verts, codes)
         if colors[i] == "#000000":
             zord = -50
+        elif alpha[i] < 0.5:
+            zord = -99
         else:
             zord = 1
         patch = patches.PathPatch(path, fill = False,
                                   facecolor=[0,0,0,0], lw = 0.25,
-                                  alpha=0.8, edgecolor = colors[i],
+                                  alpha=alpha[i], edgecolor = colors[i],
                                   zorder = zord)
         panel.add_patch(patch)
     return panel
@@ -159,7 +168,8 @@ def subway_plot(species_order, rbh_filelist,
                 sp_to_chr_to_size,
                 sp_min_chr_size, outfile,
                 sp_to_gene_order = None,
-                chr_sort_order   = "custom"):
+                chr_sort_order   = "custom",
+                plot_all = False):
     """
     Takes in a list of species as the plotting order,
      a list of rbh files, and a dict of species_to_chr_to_sizes
@@ -453,15 +463,16 @@ def subway_plot(species_order, rbh_filelist,
         nextspGenes = sp_to_genesdfs[nextsp]
 
         tr = rbh_df_list[i]
-        print(tr)
-        sys.exit()
-        tr = tr.loc[tr["break_FET"] <= 0.05, ]
+        if not plot_all:
+            tr = tr.loc[tr["break_FET"] <= 0.05, ]
+        tr["alpha"] = tr.apply(lambda x: 0.8 if x["break_FET"] <= 0.05 else 0.1, axis = 1)
         tr = tr[["{}_gene".format(thissp),
                  "{}_scaf".format(thissp),
                   "{}_pos".format(thissp),
                  "{}_gene".format(nextsp),
                  "{}_scaf".format(nextsp),
                   "{}_pos".format(nextsp),
+                  "alpha",
                  "color"]]
         # handle the index plotting info
         #print(thisspChrom)
@@ -536,12 +547,14 @@ def subway_plot(species_order, rbh_filelist,
                          tr["topIx_finalOffset"],
                          tr["bottomIx_finalOffset"],
                          tr["color"],
+                         tr["alpha"],
                          i, i+1)
 
         pChr = plot_bezier_lines(pChr,
                          tr["topChr_finalOffset"],
                          tr["bottomChr_finalOffset"],
                          tr["color"],
+                         tr["alpha"],
                          i, i+1)
 
     # Now we plot all the chroms
@@ -627,4 +640,6 @@ rule make_plot:
                 min_chr_size[sp] = 0
         subway_plot(params.sp_order, input.rbh_filelist,
                     sp_to_chr_to_size, min_chr_size, output.pdf,
-                    config["chromorder"], config["chr_sort_order"])
+                    config["chromorder"],
+                    config["chr_sort_order"],
+                    config["plot_all"])

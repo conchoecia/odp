@@ -17,6 +17,12 @@
 #    optimal-random - randomly sort the chromosomes of the top species, optimize everything else
 chr_sort_order: optimal-chr-or
 
+# - If you only want to plot the significant relationships, set to False
+#   - the significant lines will be 0.8
+# - If you want to plot everything, set to True
+#   - the significant lines will be 0.8, the faint lines will be 0.15
+plot_all: False
+
 # - First type in the list of species to plot
 # - In this example we plot the relationships between
 #   three species with the codes "EMU", "RES", and "HCA".
