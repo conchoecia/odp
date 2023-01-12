@@ -294,6 +294,9 @@ def subway_plot(species_order, rbh_filelist,
             #space_between_chrom = 0.0175
             #percent_chrom_as_spaces = space_between_chrom * (len(sp_to_chromorder[sp]) - 1)
             # This doesn't work well for large numbers of chromosomes, so use a specific percent
+            print(sp_to_chromdf[thissp])
+            print("Look at this df to see if num chroms is here")
+            sys.exit()
             percent_chrom_as_spaces = 0.15
             percent_chrom_as_chroms = 1 - percent_chrom_as_spaces
 
