@@ -31,7 +31,6 @@ if len(in_config) != 1:
 #  in that directory, and find the files in the order that they appear in
 #  config["species_order"], then save that new list to
 #  config["rbh_files_in_order"]
-
 if ("rbh_directory" in config) and ("rbh_files_in_order" not in config):
     # get the list of files from the directory
     fileslist = [x for x in os.listdir(config["rbh_directory"])
@@ -52,6 +51,9 @@ if "chr_sort_order" not in config:
 else:
     if config["chr_sort_order"] not in ["custom", "optimal-top", "optimal-size", "optimal-chr-or", "optimal-random"]:
         sys.exit("ERROR: chr_sort_order must be selected from < custom | optimal-top | optimal-size | optimal-chr-or | optimal-random >. You provided {}.".format(config["chr_sort_order"]))
+
+if "chromorder" not in config:
+    config["chromorder"] = {}
 
 rule all:
     input:
