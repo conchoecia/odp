@@ -308,7 +308,7 @@ def subway_plot(species_order, rbh_filelist,
             min_chr_size = 10
             max_chr_size = 50
             min_gap_percent = 0.12
-            max_gap_percent = 0.4
+            max_gap_percent = 0.5
             if num_chroms < min_chr_size:
                 percent_chrom_as_spaces = min_gap_percent
             elif num_chroms > max_chr_size:
@@ -334,6 +334,7 @@ def subway_plot(species_order, rbh_filelist,
             chromdf["chrPlotOffset"] = chromdf["chrPlotPercent"].cumsum(
                                        ).shift(1).fillna(0) + \
                                        (space_between_chrom * chromdf["chromix"])
+
             ######################################################
             # THIS SECTION IS FOR RELATIVE CHROMOSOME COORDINATES
             ######################################################
@@ -452,6 +453,8 @@ def subway_plot(species_order, rbh_filelist,
         nextspGenes = sp_to_genesdfs[nextsp]
 
         tr = rbh_df_list[i]
+        print(tr)
+        sys.exit()
         tr = tr.loc[tr["break_FET"] <= 0.05, ]
         tr = tr[["{}_gene".format(thissp),
                  "{}_scaf".format(thissp),
