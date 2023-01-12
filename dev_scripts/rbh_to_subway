@@ -290,8 +290,11 @@ def subway_plot(species_order, rbh_filelist,
             ########################################
             # MAGIC NUMBERS
             ########################################
-            space_between_chrom = 0.0175
-            percent_chrom_as_spaces = space_between_chrom * (len(sp_to_chromorder[sp]) - 1)
+            ## We make a special dataframe to figure out how to plot the chromosomes in percent of chroms
+            #space_between_chrom = 0.0175
+            #percent_chrom_as_spaces = space_between_chrom * (len(sp_to_chromorder[sp]) - 1)
+            # This doesn't work well for large numbers of chromosomes, so use a specific percent
+            percent_chrom_as_spaces = 0.15
             percent_chrom_as_chroms = 1 - percent_chrom_as_spaces
 
             ######################################################
@@ -441,9 +444,9 @@ def subway_plot(species_order, rbh_filelist,
         #print()
 
         # get the index plot position for the top
-        chrom_to_ixSize = dict(zip(thisspChrom["chrom"], thisspChrom["ixSize"]))
+        chrom_to_ixSize    = dict(zip(thisspChrom["chrom"], thisspChrom["ixSize"]))
         chrom_to_ixPercent = dict(zip(thisspChrom["chrom"], thisspChrom["ixPlotPercent"]))
-        chrom_to_ixOffset = dict(zip(thisspChrom["chrom"], thisspChrom["ixPlotOffset"]))
+        chrom_to_ixOffset  = dict(zip(thisspChrom["chrom"], thisspChrom["ixPlotOffset"]))
         gene_to_ix = dict(zip(thisspGenes["{}_gene".format(thissp)],
                               thisspGenes["{}_chromIx".format(thissp)]))
         tr["topIx"] = tr["{}_gene".format(thissp)].map(gene_to_ix)
