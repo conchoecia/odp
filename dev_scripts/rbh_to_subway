@@ -315,6 +315,7 @@ def subway_plot(species_order, rbh_filelist,
             else:
                 # scale the percent_chrom_as_spaces between min_gap_percent and max_gap_percent based on the number of chromosomes
                 percent_chrom_as_spaces = min_gap_percent + (max_gap_percent - min_gap_percent) * (num_chroms - min_chr_size) / (max_chr_size - min_chr_size)
+            print("sp: {}, num_chroms: {}, percent_chrom_as_spaces: {}".format(sp, num_chroms, percent_chrom_as_spaces))
             percent_chrom_as_chroms = 1 - percent_chrom_as_spaces
             space_between_chrom = percent_chrom_as_spaces / (len(sp_to_chromorder[sp]) - 1)
 
@@ -353,6 +354,7 @@ def subway_plot(species_order, rbh_filelist,
     sns.set_style("ticks", {'font.family': ['sans-serif'],
                                 'font.sans-serif': ['Helvetica'],
                                 'grid.color': '.95'})
+    logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
     # Preserve the vertical order of embedded images:
     matplotlib.rcParams['image.composite_image'] = False
     # text as font in pdf
