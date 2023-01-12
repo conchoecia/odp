@@ -176,7 +176,7 @@ def subway_plot(species_order, rbh_filelist,
     import random
 
     # make a list of the dataframes to open for these analyses
-    rbh_df_list = [pd.read_csv(x, sep = "\t", header = 0) for x in rbh_filelist]
+    rbh_df_list = [pd.read_csv(x, sep = "\t", header = "infer") for x in rbh_filelist]
 
     sp_to_genesdfs = {}
     # make composite gene index dataframe for each species
@@ -194,9 +194,11 @@ def subway_plot(species_order, rbh_filelist,
 
     # we now concat and deduplicate the gene index dfs
     for thissp in sp_to_genesdfs:
+        print()
         print("about to break")
         print(thissp)
         print(sp_to_genesdfs[thissp])
+        print()
         sp_to_genesdfs[thissp] = pd.concat(sp_to_genesdfs[thissp]
                                   ).sort_values(by=["{}_gene".format(thissp)]
                                   ).drop_duplicates(subset=["{}_gene".format(thissp)]
