@@ -300,8 +300,29 @@ def subway_plot(species_order, rbh_filelist,
             ## We make a special dataframe to figure out how to plot the chromosomes in percent of chroms
             #space_between_chrom = 0.0175
             #percent_chrom_as_spaces = space_between_chrom * (len(sp_to_chromorder[sp]) - 1)
-            # This doesn't work well for large numbers of chromosomes, so use a specific percent
-            percent_chrom_as_spaces = 0.15
+            # This doesn't work well for large numbers of chromosomes, so use a specific percent.
+            # - I am finding that it helps to use different percents depending on how many chromosomes there are.
+            #   This is an awkward block of code, but it is readable and is easy to change.
+            num_chroms = len(sp_to_chromorder[sp])
+            if num_chroms < 10:
+                percent_chrom_as_spaces = 0.15
+            elif num_chroms < 15:
+                percent_chrom_as_spaces = 0.16
+            elif num_chroms < 20:
+                percent_chrom_as_spaces = 0.17
+            elif num_chroms < 25:
+                percent_chrom_as_spaces = 0.18
+            elif num_chroms < 30:
+                percent_chrom_as_spaces = 0.19
+            elif num_chroms < 35:
+                percent_chrom_as_spaces = 0.20
+            elif num_chroms < 40:
+                percent_chrom_as_spaces = 0.21
+            elif num_chroms < 40:
+                percent_chrom_as_spaces = 0.22
+            else:
+                percent_chrom_as_spaces = 0.23
+
             percent_chrom_as_chroms = 1 - percent_chrom_as_spaces
             space_between_chrom = percent_chrom_as_spaces / (len(sp_to_chromorder[sp]) - 1)
 
