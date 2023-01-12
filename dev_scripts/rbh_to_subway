@@ -191,6 +191,7 @@ def subway_plot(species_order, rbh_filelist,
                 sp_to_genesdfs[thissp].append(thisrbh[[x for x in thisrbh.columns if thissp in x]])
     # we now concat and deduplicate the gene index dfs
     for thissp in sp_to_genesdfs:
+        print(sp_to_genesdfs[thissp])
         sp_to_genesdfs[thissp] = pd.concat(sp_to_genesdfs[thissp]
                                   ).sort_values(by=["{}_gene".format(thissp)]
                                   ).drop_duplicates(subset=["{}_gene".format(thissp)]
