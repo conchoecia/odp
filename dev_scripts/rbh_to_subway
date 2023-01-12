@@ -288,6 +288,13 @@ def subway_plot(species_order, rbh_filelist,
         # make a sp_to_chromorder dict entry
         for sp in [thissp, nextsp]:
             ########################################
+            # START THE DATAFRAME FOR THIS SPECIES
+            ########################################
+            chromdf = pd.DataFrame([k for k,v in sorted(sp_to_chromorder[sp].items(),
+                                              key=lambda item: item[1])],
+                                   columns=['chrom'])
+
+            ########################################
             # MAGIC NUMBERS
             ########################################
             ## We make a special dataframe to figure out how to plot the chromosomes in percent of chroms
@@ -296,6 +303,7 @@ def subway_plot(species_order, rbh_filelist,
             # This doesn't work well for large numbers of chromosomes, so use a specific percent
             percent_chrom_as_spaces = 0.15
             percent_chrom_as_chroms = 1 - percent_chrom_as_spaces
+            space_between_chrom = percent_chrom_as_spaces / (len(sp_to_chromorder[sp]) - 1)
 
             ######################################################
             # THIS SECTION IS FOR ABSOLUTE CHROMOSOME COORDINATES
@@ -303,14 +311,6 @@ def subway_plot(species_order, rbh_filelist,
             # We make a special dataframe to figure out how to plot the chromosomes in absolute basepair coordinates.
             #  We determine what percent of the horizontal line will be occupied by gaps.
             #  This number space_between_chrom is a value between 0-1.
-            chromdf = pd.DataFrame([k for k,v in sorted(sp_to_chromorder[sp].items(),
-                                              key=lambda item: item[1])],
-                                   columns=['chrom'])
-            print(sp)
-            print(chromdf)
-            print("Look at this df to see if num chroms is here")
-            sys.exit()
-
             chromdf["chromix"] = chromdf["chrom"].map(sp_to_chromorder[sp])
             chromdf["chrsize"] = chromdf["chrom"].map(sp_to_chr_to_size[sp])
             total_chrom_len = sum(chromdf["chrsize"])
