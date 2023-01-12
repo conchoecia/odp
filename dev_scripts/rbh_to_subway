@@ -176,7 +176,7 @@ def subway_plot(species_order, rbh_filelist,
     import random
 
     # make a list of the dataframes to open for these analyses
-    rbh_df_list = [pd.read_csv(x, sep = "\t", header = "infer") for x in rbh_filelist]
+    rbh_df_list = [pd.read_csv(x, sep = "\t", header = "infer", index =None) for x in rbh_filelist]
 
     sp_to_genesdfs = {}
     # make composite gene index dataframe for each species
