@@ -937,7 +937,8 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     panel2.set_ylim([0, pos_ymax])
 
     # now that we've plotted everything, save the dataframe
-    plotdf.to_csv(plotdf_file, sep ="\t", header = None, index = None)
+    # Header needs to be True, otherwise it will not be read in correctly for other tools
+    plotdf.to_csv(plotdf_file, sep ="\t", header = True, index = None)
 
     # plot vertical x lines
     xlabelpos   = [] # x scaf name positions
@@ -1485,7 +1486,7 @@ rule filter_each_hmm_result:
     gets the top five hits for each hmm and converts them to blastp outfmt 6 format
     """
     input:
-        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"
+        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch",
     output:
         hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp"
     threads: 1
@@ -1525,20 +1526,84 @@ rule filter_each_hmm_result:
                     prev = qseqid
         outhandle.close()
 
-#rule filter_each_hmm_result:
-#    """
-#    The header fields are:
-#    # target name        accession  query name                         accession    E-value  score  bias   E-value  score  bias   exp reg clu  ov env dom rep inc description of target
-#
-#    the headers for blastp outfmt 6 are:
-#      qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
-#
-#    gets the top five hits for each hmm and converts them to blastp outfmt 6 format
-#    """
-#    input:
-#        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp"
-#    output:
-#        rbh = config["tool"] + "/step1-rbh-ALGs/{analysis}_reciprocal_best_hits.rbh"
+rule hmm_search_to_rbh:
+    """
+    converts a hmmsearch output to a reciprocal best hit file
+    """
+    input:
+        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp",
+        sample_chrom  = lambda wildcards: config["species"][wildcards.sample]["chrom"],
+        coloredby_rbh = lambda wildcards: os.path.join(colors_path, "{}.rbh".format(wildcards.coloredby))
+    output:
+        rbh = config["tool"] + "/step1-rbh/{coloredby}_{sample}_reciprocal_best_hits.hmm.rbh"
+    threads: 1
+    run:
+        # final columns must be
+        columns = ["rbh", "gene_group",
+                   "{}_gene".format(wildcards.coloredby),
+                   "{}_scaf".format(wildcards.coloredby),
+                   "{}_pos".format( wildcards.coloredby),
+                   "{}_gene".format(wildcards.sample),
+                   "{}_scaf".format(wildcards.sample),
+                   "{}_pos".format( wildcards.sample),
+                   "{}_breakchrom".format( wildcards.coloredby),
+                   "{}_breakchrom".format( wildcards.sample),
+                   "{}_ix".format( wildcards.coloredby),
+                   "{}_ix".format( wildcards.sample),
+                   "{}_break_ix".format( wildcards.coloredby),
+                   "{}_break_ix".format( wildcards.sample)]
+
+        # read in a tsv of the input blastp file
+        df = pd.read_csv(input.hmm, sep = "\t", header = None)
+        df.columns = ["qseqid", "sseqid", "pident", "length", "mismatch", "gapopen",
+                      "qstart", "qend",   "sstart", "send",   "evalue",   "bitscore"]
+        # sort by sseqid, evalue, and bitscore. Then drop duplicates and keep only the best hit for each sseqid
+        df = df.sort_values(by = ["sseqid", "evalue", "bitscore"], ascending = [True, True, False])
+        df = df.drop_duplicates(subset = "sseqid", keep = "first") 
+        # sort by qseqid, evalue, and bitscore. Then, drop duplicates and keep only the best hit for each qseqid
+        df = df.sort_values(by = ["qseqid", "evalue", "bitscore"], ascending = [True, True, False])
+        df = df.drop_duplicates(subset = "qseqid", keep = "first")
+        # now just keep the relevant columns
+        df = df[["qseqid", "sseqid"]]
+        df.columns = ["{}_gene".format(wildcards.coloredby), "{}_gene".format(wildcards.sample)]
+
+
+
+        entries = []
+        linecounter = 0
+        with open(output.rbh, "w") as outhandle:
+            with open(input.hmm, "r") as f:
+                entry = {k: "" for k in columns} 
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        fields = line.split()
+                        qseqid = fields[0]
+                        sseqid = fields[1]
+                        print("\t".join([qseqid, sseqid]), file = outhandle)
+
+# mer_BFL_EMU_HVU_PYE_RES_2626    27724   50.0    50.0    0       0       0       0       0       0       1.5e-48 165.6
+# mer_BFL_EMU_HVU_PYE_RES_2626    153089  50.0    50.0    0       0       0       0       0       0       4e-32   111.2
+# mer_BFL_EMU_HVU_PYE_RES_2626    87351   50.0    50.0    0       0       0       0       0       0       4.4e-26 91.1
+# mer_BFL_EMU_HVU_PYE_RES_2626    149137  50.0    50.0    0       0       0       0       0       0       9.6e-26 90.0
+# mer_BFL_EMU_HVU_PYE_RES_2626    110027  50.0    50.0    0       0       0       0       0       0       2e-24   85.7
+# mer_BFL_EMU_HVU_PYE_RES_1350    105924  50.0    50.0    0       0       0       0       0       0       4.6e-47 161.3
+# mer_BFL_EMU_HVU_PYE_RES_1350    180035  50.0    50.0    0       0       0       0       0       0       1.4e-37 129.9
+# mer_BFL_EMU_HVU_PYE_RES_1350    170935  50.0    50.0    0       0       0       0       0       0       2.9e-37 128.8
+# mer_BFL_EMU_HVU_PYE_RES_1350    176611  50.0    50.0    0       0       0       0       0       0       1.5e-31 109.9
+# mer_BFL_EMU_HVU_PYE_RES_1350    224536  50.0    50.0    0       0       0       0       0       0       3.1e-31 108.9
+# mer_BFL_EMU_HVU_PYE_RES_2493    227654  50.0    50.0    0       0       0       0       0       0       1.1e-225        752.2
+# mer_BFL_EMU_HVU_PYE_RES_125     149861  50.0    50.0    0       0       0       0       0       0       1.7e-236        785.8
+# mer_BFL_EMU_HVU_PYE_RES_125     31909   50.0    50.0    0       0       0       0       0       0       1.4e-23 84.0
+# mer_BFL_EMU_HVU_PYE_RES_1014    158712  50.0    50.0    0       0       0       0       0       0       9e-91   305.3
+
+# rbh     CTE_gene        LGI_gene        gene_group      CTE_scaf        CTE_pos LGI_scaf        LGI_pos CTE_breakchrom  LGI_breakchrom  CTE_ix  CTE_break_ix    LGI_ix  LGI_break_ix
+# rbh2way_CTE_LGI_758     99454   102840  None    scaffold_1057   38715   sca_1   17673   scaffold_1057:0-end     sca_1:0-end     1       1       0       0
+# rbh2way_CTE_LGI_5617    182031  202951  None    scaffold_12     462177  sca_1   27971   scaffold_12:0-end       sca_1:0-end     17      17      1       1
+# rbh2way_CTE_LGI_5953    106237  208014  None    scaffold_586    50104   sca_1   73150   scaffold_586:0-end      sca_1:0-end     0       0       2       2
+# rbh2way_CTE_LGI_772     226302  103055  None    scaffold_346    31657   sca_1   306387  scaffold_346:0-end      sca_1:0-end     0       0       3       3
+# rbh2way_CTE_LGI_87      227767  56504   None    scaffold_722    60567   sca_1   415633  scaffold_722:0-end      sca_1:0-end     0       0       4       4
+# rbh2way_CTE_LGI_5954    18454   208023  None    scaffold_24     290037  sca_1   417288  scaffold_24:0-end       sca_1:0-end     9       9       5       5
 
 
 """
