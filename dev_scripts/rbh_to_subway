@@ -259,23 +259,24 @@ def subway_plot(species_order, rbh_filelist,
 
     # There is an edge case where, if we used option "optimal-chr-or", but the 0th through nth species weren't
     #  in the chromosome order, we need to optimize the species in reverse order
-    print("this is sp_to_gene_order")
-    print(sp_to_gene_order)
     if chr_sort_order == "optimal-chr-or":
-        first_optimized = 99999999
-        for i in range(len(species_order)):
-            sp = species_order[i]
-            if sp in sp_to_gene_order:
-                first_optimized = i
-                break
-        while first_optimized != 0:
-            sp = species_order[first_optimized - 1]
-            prevsp = species_order[first_optimized]
-            # optimize the chromosome order
-            templist = _optimize_spA_based_on_rbh(sp, prevsp, rbh_df_list[first_optimized - 1], sp_to_chromorder, sp_to_gene_order)
-            templist = _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size, sp_to_gene_order, sp_min_chr_size)
-            sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
-            first_optimized -= 1
+        # If someone uses this option when there is no chromosome order
+        #  we just skip this step
+        if len(sp_to_gene_order) > 0:
+            first_optimized = 99999999
+            for i in range(len(species_order)):
+                sp = species_order[i]
+                if sp in sp_to_gene_order:
+                    first_optimized = i
+                    break
+            while first_optimized != 0:
+                sp = species_order[first_optimized - 1]
+                prevsp = species_order[first_optimized]
+                # optimize the chromosome order
+                templist = _optimize_spA_based_on_rbh(sp, prevsp, rbh_df_list[first_optimized - 1], sp_to_chromorder, sp_to_gene_order)
+                templist = _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size, sp_to_gene_order, sp_min_chr_size)
+                sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
+                first_optimized -= 1
 
     # now construct dataframes describing how to plot the chromosomes based on
     #  gene index or on chromosome coordinate
