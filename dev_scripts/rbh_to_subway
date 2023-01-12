@@ -4,6 +4,7 @@ This script takes a list of species as a plotting order,
  and makes a synteny subway plot.
 """
 from Bio import SeqIO
+import logging
 import pandas as pd
 import sys
 
