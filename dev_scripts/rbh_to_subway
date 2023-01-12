@@ -259,6 +259,8 @@ def subway_plot(species_order, rbh_filelist,
 
     # There is an edge case where, if we used option "optimal-chr-or", but the 0th through nth species weren't
     #  in the chromosome order, we need to optimize the species in reverse order
+    print("this is sp_to_gene_order")
+    print(sp_to_gene_order)
     if chr_sort_order == "optimal-chr-or":
         first_optimized = 99999999
         for i in range(len(species_order)):
