@@ -308,7 +308,7 @@ def subway_plot(species_order, rbh_filelist,
             min_chr_size = 10
             max_chr_size = 50
             min_gap_percent = 0.12
-            max_gap_percent = 0.35
+            max_gap_percent = 0.4
             if num_chroms < min_chr_size:
                 percent_chrom_as_spaces = min_gap_percent
             elif num_chroms > max_chr_size:
