@@ -32,7 +32,7 @@ if len(in_config) != 1:
 #  config["species_order"], then save that new list to
 #  config["rbh_files_in_order"]
 
-if "rbh_directory" in config:
+if ("rbh_directory" in config) and ("rbh_files_in_order" not in config):
     # get the list of files from the directory
     fileslist = [x for x in os.listdir(config["rbh_directory"])
                  if x.endswith(".rbh")]
@@ -42,9 +42,9 @@ if "rbh_directory" in config:
         nextsp = config["species_order"][i+1]
         sortstring = "_".join(sorted([sp, nextsp]))
         # this gets the first file with the sortstring in it
-        print(fileslist)
-        #thisfile = [x for x in fileslist if x.startswith(sortstring) in x][0]
-        #files_list_in_order.append(thisfile)
+        thisfile = [x for x in fileslist if x.startswith(sortstring)][0]
+        absfile = os.path.join(config["rbh_directory"], thisfile)
+        files_list_in_order.append(absfile)
     config["rbh_files_in_order"] = files_list_in_order
 
 print(config["species_order"])
