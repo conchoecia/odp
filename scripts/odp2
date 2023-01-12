@@ -73,7 +73,6 @@ if len(illegal) > 0:
     print("The keys that we found that are not allowed/in the list above are:")
     for key in illegal:
         print("  - {}".format(key))
-    sys.exit()
 
 # check diamond_or_blastp
 if "diamond_or_blastp" not in config:
