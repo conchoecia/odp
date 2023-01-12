@@ -255,7 +255,7 @@ def subway_plot(species_order, rbh_filelist,
         # check here to make sure that there aren't duplicate entries in the chromosomes
         templist = _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size, sp_to_gene_order, sp_min_chr_size)
         sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
-        print(sp, sp_to_chromorder)
+        #print(sp, sp_to_chromorder)
 
     # There is an edge case where, if we used option "optimal-chr-or", but the 0th through nth species weren't
     #  in the chromosome order, we need to optimize the species in reverse order
@@ -323,7 +323,7 @@ def subway_plot(species_order, rbh_filelist,
             chromdf["ixPlotOffset"] = chromdf["ixPlotPercent"].cumsum(
                                        ).shift(1).fillna(0) + \
                                        (space_between_chrom * chromdf["chromix"])
-            print(chromdf)
+            #print(chromdf)
             sp_to_chromdf[sp] = chromdf
 
     # set some parameters to make the font helvetica, and the output
@@ -437,8 +437,8 @@ def subway_plot(species_order, rbh_filelist,
                   "{}_pos".format(nextsp),
                  "color"]]
         # handle the index plotting info
-        print(thisspChrom)
-        print()
+        #print(thisspChrom)
+        #print()
 
         # get the index plot position for the top
         chrom_to_ixSize = dict(zip(thisspChrom["chrom"], thisspChrom["ixSize"]))
