@@ -49,7 +49,6 @@ if ("rbh_directory" in config) and ("rbh_files_in_order" not in config):
         nextsp = config["species_order"][i+1]
         sortstring = "_".join(sorted([sp, nextsp]))
         # this gets the first file with the sortstring in it
-        print(sortstring)
         thisfile = [x for x in fileslist if x.startswith(sortstring)][0]
         absfile = os.path.join(config["rbh_directory"], thisfile)
         files_list_in_order.append(absfile)

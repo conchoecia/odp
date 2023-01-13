@@ -12,6 +12,7 @@ from Bio import SeqIO
 #from itertools import product
 from itertools import permutations
 from itertools import combinations
+import logging
 #import matplotlib
 from matplotlib.patches import Patch
 from matplotlib.lines   import Line2D
@@ -725,6 +726,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     # Options for plotting
     #sns.set(rc={'text.usetex' : True})
+    logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
     sns.set_style("ticks", {'font.family': ['sans-serif'],
                                 'font.sans-serif': ['Helvetica'],
                                 'grid.color': '.95'})
