@@ -462,7 +462,7 @@ def subway_plot(species_order, rbh_filelist,
         thisspGenes = sp_to_genesdfs[thissp]
         nextspGenes = sp_to_genesdfs[nextsp]
 
-        tr = rbh_df_list[i]
+        tr = rbh_df_list[i].copy()
         if not plot_all:
             tr = tr.loc[tr["break_FET"] <= 0.05, ]
         tr["alpha"] = tr.apply(lambda x: 0.8 if x["break_FET"] <= 0.05 else 0.1, axis = 1)
