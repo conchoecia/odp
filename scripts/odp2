@@ -8,8 +8,6 @@ Email : dts@ucsc.edu
 """
 
 from Bio import SeqIO
-#from itertools import groupby
-#from itertools import product
 from itertools import permutations
 from itertools import combinations
 import logging
@@ -19,16 +17,12 @@ from matplotlib.lines   import Line2D
 from matplotlib.font_manager import FontProperties
 
 #from matplotlib.lines import Line2D
-#import math
 import networkx as nx
 import numpy as np
-#from operator import itemgetter
 import odp_functions as odpf
 import odp_color_manager as oc
 import pandas as pd
 import scipy.stats as stats
-#import statistics
-#import sys
 
 configfile: "config.yaml"
 
@@ -102,7 +96,6 @@ if "ignore_autobreaks" in config:
         pass
 else:
     pass
-
 
 ignore_Fisher = False
 if "ignore_Fisher" in config:
@@ -967,7 +960,6 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     pos_ycountpos   = []
     pos_ycountlabel = []
 
-
     # first do this for the plot with the indices
     # X-AXIS LABELS AND VERTICAL LINES
     tempgb = plotdf.sort_values(by=["{}_plotindex".format(xsample)]).groupby(by=["{}_scaf".format(xsample)])
@@ -1041,7 +1033,6 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     tempydf = tempydf.loc[~tempydf["{}_breakchrom".format(ysample)].str.contains("end"), ]
     pos_ybreakpos = [y for y in list(tempydf["{}_plotindex".format(ysample)])
                  if ((y not in pos_ylinepos) and (y < pos_ymax))]
-
 
     linecolor="#8FA0B5"
     #plot vertical lines and breaks
@@ -1259,7 +1250,6 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
         thistab_chromwhole.auto_set_font_size(False)
         thistab_chromwhole.set_fontsize(7)
 
-
     # TABLE OF COLOR GROUP RESULTS
     plt.gcf().text((table_left_margin + (left_table_width/2))/figWidth,
                     (bottomMargin-1.25)/figHeight,
@@ -1303,8 +1293,6 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
         base[-2] = thiscolor
         color_matrix.append(base)
 
-    #print(color_matrix)
-
     tableheight = rowheight*(len(gb3)+1)
     colortable = plt.axes([table_left_margin/figWidth, #left
                          (bottomMargin - tableheight- 1.35)/figHeight,    #bottom
@@ -1336,12 +1324,6 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
             inv = inverse_color(gb3.loc[rowi-1, "Color"])
             if inv == "#ffffff":
                 thistab_color._cells[(rowi, coli)]._text.set_color(inv)
-
-    print(gb)
-    print()
-    print(gb2)
-    print()
-    print(gb3)
 
     captionax = plt.axes([1.0/figWidth, #left
                           1.0/figHeight,    #bottom
