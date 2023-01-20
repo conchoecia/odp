@@ -23,6 +23,7 @@ import odp_functions as odpf
 import odp_color_manager as oc
 import pandas as pd
 import scipy.stats as stats
+import sys
 
 configfile: "config.yaml"
 
@@ -87,36 +88,25 @@ def flatten(list_of_lists):
     """flatten a list of lists, unique only"""
     return list(set([item for sublist in list_of_lists for item in sublist]))
 
-autobreak_files = []
-make_autobreaks = True
-if "ignore_autobreaks" in config:
-    if config["ignore_autobreaks"]:
-        make_autobreaks = False
-    else:
-        pass
-else:
-    pass
+# check if these fields in config. If not, add to config.
+check_these = ["prot_to_color", "prot_to_color_rbh"]
+for this in check_these:
+    if this not in config:
+        config[this] = {}
 
-ignore_Fisher = False
-if "ignore_Fisher" in config:
-    if config["ignore_Fisher"]:
-        ignore_Fisher = True
-    else:
-        pass
-else:
-    pass
-
-# check if prot_to_color in config
-if "prot_to_color" not in config:
-    config["prot_to_color"] = {}
-
-# add the prot_to_color entries from the install directory
-filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
-colors_path=os.path.join(filepath, "../LG_db/")
-color_directories = [ os.path.abspath(f.path) for f in os.scandir(colors_path) if f.is_dir() ]
-for thisdir in color_directories:
-    trim = os.path.split(thisdir)[1]
-    config["prot_to_color"][trim] = thisdir
+# just run this block of code once
+if (config["prot_to_color"] == {}) and (config["prot_to_color_rbh"] == {}):
+    # add the prot_to_color entries from the install directory
+    filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
+    colors_path=os.path.join(filepath, "../LG_db/")
+    color_directories = [ os.path.abspath(f.path) for f in os.scandir(colors_path) if f.is_dir() ]
+    for thisdir in color_directories:
+        trim = os.path.split(thisdir)[1]
+        config["prot_to_color"][trim] = thisdir
+        # now find the .rbh file in the trim directory
+        for thisfile in os.listdir(thisdir):
+            if thisfile.endswith(".rbh"):
+                config["prot_to_color_rbh"][trim] = os.path.join(thisdir, thisfile) 
 
 # come up with a list of blast/diamond jobs
 # we must have every combination that is in the analyses_list
@@ -158,6 +148,7 @@ rule all:
         [config["tool"] + "/step2-figures/synteny_nocolor/{}_yx_synteny.pdf".format(x)
          for x in config["analysispairs"]],
 
+        # I don't think this next set of files needs to be specified, but I'm leaving it here for now.
         [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(hmm, sp)
          for sp in config["analysisspecies"] for hmm in config["prot_to_color"]],
         # color by the things in the prot_to_loc settings
@@ -166,7 +157,18 @@ rule all:
         [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
          for x in config["analysispairs"] for y in config["prot_to_color"]],
         [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
-         for x in config["analysispairs"] for y in config["prot_to_color"]]
+         for x in config["analysispairs"] for y in config["prot_to_color"]],
+
+        # We also want to plot the ALGs as if they were genomes, against the individual species
+        # This line specifically is for testing the RBH-as-a-species analysis
+        # the rbh file after setting up the plotting
+        expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_reciprocal_best_hits.plotted.rbh",
+               hmm = config["prot_to_color"], sp = config["species"]),
+        # and the pdfs we are plotting of these relationships
+        expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_synteny.pdf",
+               hmm = config["prot_to_color"], sp = config["species"]),
+        expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_yx_synteny.pdf",
+               hmm = config["prot_to_color"], sp = config["species"]),
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     """
@@ -282,6 +284,12 @@ def get_component_size_dict(G):
         component_size[len(thisentry)] += 1
     print(component_size)
 
+# TODO - this is very inefficient. This is called once every
+#  time that plot_synteny() is called. This means that all of the genome files are parsed hundreds of times
+#  when a large job is run, and the runtime for plot_synteny() blows up exponentially as more species are added.
+# When I have time to reimplement this, this should be called only one time, and should generate one file
+#  per species. Then it can be read in dynamically if needed before plot_synteny() and passed as a
+#  dictionary. 
 def species_to_chrom_to_size(conf):
     """
     lazy method to generate a dict of dicts:
@@ -302,11 +310,14 @@ rule n_ways_reciprocal_best:
     Gets reciprocal best hits from 3 or more samples
     For a protein to be retained, it must be a reciprocal-best hit in three samples.
 
-              A      B
+              A      B 
              / \    /|\
-            B___C  A-+-C , et cetera
+            B___C  A-+-C , --et cetera
                     \|/
                      D
+    
+    # Here I need to draw an ascii pentagram with lines connected to each element A, B, C, D, E
+
 
     The output of this rule is a yaml file with admissible proteins from each sample
     """
@@ -471,6 +482,7 @@ rule n_ways_reciprocal_best:
                 if this_gene in prot_to_group:
                     genesdf.loc[index, "gene_group"] = prot_to_group[this_gene]
 
+        # I copied this code to the place where I make the rbh files from the hmm results
         # now add the information about the splits
         for thisspecies in all_species:
             chrom_to_breaks = {}
@@ -654,9 +666,23 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     # first filter out the chroms by min size
     s2c2s = species_to_chrom_to_size(config)
+    # TODO - above is one of the lines of code that needs to be changed with
+    #  a smarter species_to_chrom_to_size function that only runs once max.
+    #  Right now this is run each time plot_synteny() is called.
+
+    # If the species isn't in this dataframe, then it is likely
+    #  one of the ALGs being plotted, and not a real genome.
+    # In this case we look in the dataframe and for each scaffold, just get the largest
+    #  gene pos and use that as the size. TODO - this should be done in a smarter
+    #  way at some point
+    for thissp in [xsample, ysample]:
+        if thissp not in s2c2s:
+            s2c2s[thissp] = {}
+            for thisscaf in df["{}_scaf".format(thissp)].unique():
+                s2c2s[thissp][thisscaf] = df.loc[df["{}_scaf".format(thissp)] == thisscaf, "{}_pos".format(thissp)].max()
     df = calculate_FET(df, s2c2s)
     df = calc_D_for_y_and_x(df, xsample, ysample)
-
+        
     # now make a separate df for x and y for plotting order
     xdf = False
     xsorter = xorder
@@ -670,7 +696,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
         by = ["{}_ix".format(xsample)], ascending=True).reset_index(drop=True)
                            for x in xsorter]).reset_index(drop=True)
     xdf["{}_plotindex".format(xsample)] = xdf.index
-    #print(xdf[[x for x in xdf.columns if xsample in x]])
+
     xsorter_to_cumsum = [0]
     for i in range(1,len(xsorter)):
         xsorter_to_cumsum.append( xsorter_to_cumsum[i-1] + s2c2s[xsample][xsorter[i-1]])
@@ -681,6 +707,9 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     ydf = False
     ysorter = yorder
     if sort_y_by_x:
+        # TODO - This needs to be reimplemented so that chromosomes that 
+        #  have significant matches with more than one other chromosome
+        #  are plotted next to one another.
         ygb = df.groupby(by=["{}_scaf".format(ysample),
                              "{}_scaf".format(xsample),
                              "whole_FET"], dropna=False).size().reset_index()
@@ -832,8 +861,6 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                    "{} vs {} synteny (chromosome coordinates)".format(xsample, ysample),
                    fontsize = 15, ha = "center")
 
-
-
     color_list = []
     alpha_list = []
     legend_elements = []
@@ -864,7 +891,6 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
         else:
             # there's already a column, so leave the groups alone
             pass
-
 
     legend_elements += [
       Line2D([], [],
@@ -1516,25 +1542,25 @@ rule hmm_search_to_rbh:
     input:
         hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp",
         sample_chrom  = lambda wildcards: config["species"][wildcards.sample]["chrom"],
-        coloredby_rbh = lambda wildcards: os.path.join(colors_path, "{}.rbh".format(wildcards.coloredby))
+        coloredby_rbh = lambda wildcards: config["prot_to_color_rbh"][wildcards.coloredby]
     output:
         rbh = config["tool"] + "/step1-rbh/{coloredby}_{sample}_reciprocal_best_hits.hmm.rbh"
     threads: 1
     run:
-        # final columns must be
-        columns = ["rbh", "gene_group",
-                   "{}_gene".format(wildcards.coloredby),
-                   "{}_scaf".format(wildcards.coloredby),
-                   "{}_pos".format( wildcards.coloredby),
-                   "{}_gene".format(wildcards.sample),
-                   "{}_scaf".format(wildcards.sample),
-                   "{}_pos".format( wildcards.sample),
-                   "{}_breakchrom".format( wildcards.coloredby),
-                   "{}_breakchrom".format( wildcards.sample),
-                   "{}_ix".format( wildcards.coloredby),
-                   "{}_ix".format( wildcards.sample),
-                   "{}_break_ix".format( wildcards.coloredby),
-                   "{}_break_ix".format( wildcards.sample)]
+        ## final columns must be
+        #columns = ["rbh", "gene_group",
+        #           "{}_gene".format(wildcards.coloredby),
+        #           "{}_scaf".format(wildcards.coloredby),
+        #           "{}_pos".format( wildcards.coloredby),
+        #           "{}_gene".format(wildcards.sample),
+        #           "{}_scaf".format(wildcards.sample),
+        #           "{}_pos".format( wildcards.sample),
+        #           "{}_breakchrom".format( wildcards.coloredby),
+        #           "{}_breakchrom".format( wildcards.sample),
+        #           "{}_ix".format( wildcards.coloredby),
+        #           "{}_ix".format( wildcards.sample),
+        #           "{}_break_ix".format( wildcards.coloredby),
+        #           "{}_break_ix".format( wildcards.sample)]
 
         # read in a tsv of the input blastp file
         df = pd.read_csv(input.hmm, sep = "\t", header = None)
@@ -1549,45 +1575,88 @@ rule hmm_search_to_rbh:
         # now just keep the relevant columns
         df = df[["qseqid", "sseqid"]]
         df.columns = ["{}_gene".format(wildcards.coloredby), "{}_gene".format(wildcards.sample)]
+        # at this point the df is just the reciprocal best hits
 
 
+        # now open the rbh file of the coloredby data and add the other columns
+        rbhdf = pd.read_csv(input.coloredby_rbh, sep = "\t")
+        rbhdf = rbhdf[["rbh", "gene_group", "color"]]
+        rbhdf["{}_gene".format(wildcards.coloredby)] = rbhdf["rbh"]
 
-        entries = []
-        linecounter = 0
-        with open(output.rbh, "w") as outhandle:
-            with open(input.hmm, "r") as f:
-                entry = {k: "" for k in columns} 
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        fields = line.split()
-                        qseqid = fields[0]
-                        sseqid = fields[1]
-                        print("\t".join([qseqid, sseqid]), file = outhandle)
+        # join df and rbhdf on the gene names
+        df = pd.merge(df, rbhdf, on = "{}_gene".format(wildcards.coloredby), how = "left")
+        df = df[['rbh', 'gene_group', 'color',
+                 '{}_gene'.format(wildcards.coloredby),
+                 '{}_gene'.format(wildcards.sample)]]
+        # sort by gene_group
+        df = df.sort_values(by = ["gene_group", "rbh"], ascending = [True, True]).reset_index(drop=True)
+        df["{}_scaf".format(wildcards.coloredby)] = df["gene_group"]
+        # add an artificial position for this "pseudogenome"
+        df["{}_pos".format(wildcards.coloredby)]  = df.groupby(["gene_group"]).cumcount()+1
 
-# mer_BFL_EMU_HVU_PYE_RES_2626    27724   50.0    50.0    0       0       0       0       0       0       1.5e-48 165.6
-# mer_BFL_EMU_HVU_PYE_RES_2626    153089  50.0    50.0    0       0       0       0       0       0       4e-32   111.2
-# mer_BFL_EMU_HVU_PYE_RES_2626    87351   50.0    50.0    0       0       0       0       0       0       4.4e-26 91.1
-# mer_BFL_EMU_HVU_PYE_RES_2626    149137  50.0    50.0    0       0       0       0       0       0       9.6e-26 90.0
-# mer_BFL_EMU_HVU_PYE_RES_2626    110027  50.0    50.0    0       0       0       0       0       0       2e-24   85.7
-# mer_BFL_EMU_HVU_PYE_RES_1350    105924  50.0    50.0    0       0       0       0       0       0       4.6e-47 161.3
-# mer_BFL_EMU_HVU_PYE_RES_1350    180035  50.0    50.0    0       0       0       0       0       0       1.4e-37 129.9
-# mer_BFL_EMU_HVU_PYE_RES_1350    170935  50.0    50.0    0       0       0       0       0       0       2.9e-37 128.8
-# mer_BFL_EMU_HVU_PYE_RES_1350    176611  50.0    50.0    0       0       0       0       0       0       1.5e-31 109.9
-# mer_BFL_EMU_HVU_PYE_RES_1350    224536  50.0    50.0    0       0       0       0       0       0       3.1e-31 108.9
-# mer_BFL_EMU_HVU_PYE_RES_2493    227654  50.0    50.0    0       0       0       0       0       0       1.1e-225        752.2
-# mer_BFL_EMU_HVU_PYE_RES_125     149861  50.0    50.0    0       0       0       0       0       0       1.7e-236        785.8
-# mer_BFL_EMU_HVU_PYE_RES_125     31909   50.0    50.0    0       0       0       0       0       0       1.4e-23 84.0
-# mer_BFL_EMU_HVU_PYE_RES_1014    158712  50.0    50.0    0       0       0       0       0       0       9e-91   305.3
+        # now open the rbh file of the sample data and add the other columns
+        rbhdf = pd.read_csv(input.sample_chrom, sep = "\t", header = None)
+        rbhdf.columns = ["{}_gene".format(wildcards.sample),
+                         "{}_scaf".format(wildcards.sample),
+                         "{}_dir".format(wildcards.sample),
+                         "{}_pos".format(wildcards.sample),
+                         "{}_stop".format(wildcards.sample)]
+        # now merge the dfs on the sample gene names
+        df = pd.merge(df, rbhdf, on = "{}_gene".format(wildcards.sample), how = "left")
+        genesdf = df[["rbh", "gene_group", "color",
+                      "{}_gene".format(wildcards.coloredby),
+                      "{}_scaf".format(wildcards.coloredby),
+                      "{}_pos".format( wildcards.coloredby),
+                      "{}_gene".format(wildcards.sample),
+                      "{}_scaf".format(wildcards.sample),
+                      "{}_pos".format( wildcards.sample)]]
+        # delete the old dfs to remove references
+        del df
+        del rbhdf
 
-# rbh     CTE_gene        LGI_gene        gene_group      CTE_scaf        CTE_pos LGI_scaf        LGI_pos CTE_breakchrom  LGI_breakchrom  CTE_ix  CTE_break_ix    LGI_ix  LGI_break_ix
-# rbh2way_CTE_LGI_758     99454   102840  None    scaffold_1057   38715   sca_1   17673   scaffold_1057:0-end     sca_1:0-end     1       1       0       0
-# rbh2way_CTE_LGI_5617    182031  202951  None    scaffold_12     462177  sca_1   27971   scaffold_12:0-end       sca_1:0-end     17      17      1       1
-# rbh2way_CTE_LGI_5953    106237  208014  None    scaffold_586    50104   sca_1   73150   scaffold_586:0-end      sca_1:0-end     0       0       2       2
-# rbh2way_CTE_LGI_772     226302  103055  None    scaffold_346    31657   sca_1   306387  scaffold_346:0-end      sca_1:0-end     0       0       3       3
-# rbh2way_CTE_LGI_87      227767  56504   None    scaffold_722    60567   sca_1   415633  scaffold_722:0-end      sca_1:0-end     0       0       4       4
-# rbh2way_CTE_LGI_5954    18454   208023  None    scaffold_24     290037  sca_1   417288  scaffold_24:0-end       sca_1:0-end     9       9       5       5
+        all_species = [wildcards.sample]
+        # now add the information about the splits. This is the same code that was in the RBH code block
+        for thisspecies in all_species:
+            chrom_to_breaks = {}
+            for entry in config["species"][thisspecies]["manual_breaks"]:
+                split = entry.split(":")
+                chrom = split[0]
+                chrombreak = int(split[1])
+                if chrom not in chrom_to_breaks:
+                    chrom_to_breaks[chrom] = [0, 9999999999]
+                chrom_to_breaks[chrom].append(chrombreak)
 
+            # now we modify the cells
+            genesdf["{}_breakchrom".format(thisspecies)] = ""
+            for index, row in genesdf.iterrows():
+                thisscaf = row["{}_scaf".format(thisspecies)]
+                thispos  = row["{}_pos".format(thisspecies)]
+                if thisscaf not in chrom_to_breaks:
+                    chrom_to_breaks[thisscaf] = [0, 9999999999]
+                breakpoints = sorted(chrom_to_breaks[thisscaf])
+                for i in range(len(breakpoints) - 1):
+                    if (breakpoints[i] <= thispos) and (thispos < breakpoints[i+1]):
+                        genesdf.loc[index, "{}_breakchrom".format(thisspecies)] = "{}:{}-{}".format(
+                            thisscaf, breakpoints[i], breakpoints[i+1]).replace("9999999999", "end")
+
+        # now add the indices of each gene, specific to this pairwise comparison
+        for thisspecies in all_species:
+            genesdf = genesdf.sort_values(["{}_scaf".format(thisspecies),
+                                           "{}_pos".format(thisspecies)],
+                                          ascending = True)
+            genesdf["{}_ix".format(thisspecies)] = genesdf.groupby(["{}_scaf".format(thisspecies)]).cumcount()
+            genesdf["{}_break_ix".format(thisspecies)] = genesdf.groupby(["{}_breakchrom".format(thisspecies)]).cumcount()
+
+        # we need to add the indices of the genes in the coloredby genome
+
+        genesdf.reset_index(drop = True, inplace = True)
+        genesdf2 = genesdf.copy()
+        genesdf2["{}_ix".format(wildcards.coloredby)]         = genesdf["{}_pos".format(wildcards.coloredby)] - 1
+        genesdf2["{}_break_ix".format(wildcards.coloredby)]   = genesdf["{}_pos".format(wildcards.coloredby)] - 1 
+        # for each row, we need to make the breakchrom value to be in the format contig:0-end using apply
+        genesdf2["{}_breakchrom".format(wildcards.coloredby)] = genesdf.apply(lambda x: "{}:0-end".format(
+                                                           x["{}_scaf".format(wildcards.coloredby)]), axis=1)
+        genesdf2.to_csv(output.rbh, sep ="\t", header = True, index = None)
 
 """
 This makes the synteny plots with the pre-installed color groups
@@ -1630,6 +1699,7 @@ rule plot_synteny_coloredby:
                      prot_to_color_name = params.coloredby,
                      prot_to_color_dir  = params.coloredbydir,
                      prot_to_color_hmm_results = input.hmm_results)
+
         # check again for sort
         if "sort_by_x_coord_blast" in config["species"][xsample]:
             sort_y_by_x = config["species"][xsample]["sort_by_x_coord_blast"]
@@ -1642,3 +1712,60 @@ rule plot_synteny_coloredby:
                      prot_to_color_name = params.coloredby,
                      prot_to_color_dir  = params.coloredbydir,
                      prot_to_color_hmm_results = input.hmm_results)
+
+"""
+This makes a synteny plot specifically with the ALG pseudo-genomes
+ and the species in the analysis.
+
+ For example the BCnS ALGs will be plotted on the x-axis as if they
+  are a genome assembly, and the real genome from the species being
+  analyzed will be plotted on the y-axis. This will be repeated, so the
+  ALGs and species will be on the y and x axes.
+
+In this case, we don't need to compare the plot to the hmm samples because
+  the rbh file we are using has already been treated to have the columns
+  "gene_group" and "color" from the ALG folder's information.
+"""
+rule plot_synteny_of_ALGs_plus_species:
+    input:
+        rbh = config["tool"] + "/step1-rbh/{hmm}_{sp}_reciprocal_best_hits.hmm.rbh"
+    output:
+        rbh = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_reciprocal_best_hits.plotted.rbh",
+        xy  = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_synteny.pdf",
+        yx  = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_yx_synteny.pdf"
+    threads:
+        1
+    params:
+        orthology_method = config["diamond_or_blastp"],
+        coloredby = lambda wildcards: wildcards.hmm,
+    run:
+        xsample = wildcards.hmm
+        ysample = wildcards.sp
+        xorder  = []
+        yorder  = config["species"][ysample]["plotorder"] if "plotorder" in config["species"][ysample] else []
+        xbreaks = []
+        ybreaks = config["species"][ysample]["manual_breaks"] if "manual_breaks" in config["species"][ysample] else []
+
+        # Always sort the y-axis by the x-axis
+        sort_y_by_x = True
+        # First we plot the ALGs on the x-axis and the species on the y-axis
+        synteny_plot_sheet(input.rbh, output.rbh, output.xy,
+                     xsample, ysample,
+                     xorder, yorder,
+                     xbreaks, ybreaks,
+                     params.orthology_method,
+                     sort_y_by_x = sort_y_by_x,
+                     prot_to_color_name = None,
+                     prot_to_color_dir  = None,
+                     prot_to_color_hmm_results = None)
+
+        # Now we plot the ALGs on the y-axis and the species on the x-axis
+        synteny_plot_sheet(input.rbh, output.rbh, output.yx,
+                     ysample, xsample,
+                     yorder, xorder,
+                     ybreaks, xbreaks,
+                     params.orthology_method,
+                     sort_y_by_x = sort_y_by_x,
+                     prot_to_color_name = None,
+                     prot_to_color_dir  = None,
+                     prot_to_color_hmm_results = None)
