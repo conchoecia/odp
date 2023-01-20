@@ -18,15 +18,17 @@ import os
 import pandas as pd
 import sys
 
-#def find_matching_species(spA_prot_list, LG_rbh_path):
-#    """
-#    """
-
 class LG_db:
     """
     This class ingests a directory of an odp linkage database,
      checks to see if the input is legal based on the LG db spec,
      and makes data structures to access the information later.
+    
+    One special thing that is done to process the linkage database is
+     to find if there are some cases where the same protein is in
+     multiple columns. This is likely due to one species' proteome
+     being used to annotate the genome of another species, then both
+     species being included in the orthology inference.
     """
     def __init__(self, LG_db_name, LG_db_directory,
                        hmm_results_paths):
@@ -51,6 +53,10 @@ class LG_db:
 
         # now open the rbh file and build appropriate data structures
         self.rbhdf = pd.read_csv(self.rbhfile, sep = "\t")
+        # We must do a subroutine to check that there are no columns of "{}_gene" that appear to be
+        #  identical. In this specific case we must remove some of the columns.
+        self.rbhdf = self._parse_rbhdf_and_remove_duplicate_columns(self.rbhdf)
+        # get a list of species that occur in the file
         self.rbhspecies = [x.replace("_scaf","") for x in self.rbhdf.columns if x.endswith("_scaf")]
 
         # check that the requisite columns are in the rbh file
@@ -97,6 +103,42 @@ class LG_db:
 
         # keep track of how we assigned colors, this is useful later
         self.color_method = ""
+
+    def _parse_rbhdf_and_remove_duplicate_columns(self, rbhdf):
+        """
+        This method does column-cleanup and duplicate-column removal processing.
+
+        The scenario that this method fixes is this:
+            - Say we have genomes of two species, A and B
+            - Species A and B are closely related
+            - We only have a genome annotation for species A
+            - We use the proteins of species A to annotate sp. B's genome
+            - The annotation of species B uses the same fasta headers as species A
+            - We use both species A and B in orthology inference, and make an RBH file
+            - The protein columns for the orthologs in species A and B are identical
+        
+        The solution that is implemented here is to see if there are any identical columns,
+         and to keep the alphebetically-sorted 0th species when considering which one to keep.
+        """ 
+        tempdf = rbhdf.copy()[[x for x in rbhdf.columns if x.endswith("_gene")]]
+        species = [x.replace("_gene", "") for x in tempdf.columns]
+        # We use a set because the species may be added to this several times in case
+        #  three or more columns are removed.
+        drop_these_species = set()
+        done = False
+        for i in range(len(tempdf.columns) - 1):
+            for j in range(i+1, len(tempdf.columns)):
+                if (tempdf.iloc[:,i] == tempdf.iloc[:,j]).all():
+                    print("Species {} and {} have identical protein id columns. Keeping {}.".format(
+                        species[i], species[j], sorted([species[i], species[j]])[0]))
+                    drop_these_species.add(sorted([species[i], species[j]])[1])
+        print("(Don't worry, it's a duplicate and won't affect your results.) Dropping these species: {}".format(dgrop_these_species), file = sys.stderr)
+        # now that we have a list of species to drop, drop them from a copy of rbhdf
+        del tempdf
+        tempdf = rbhdf.copy()
+        for thissp in drop_these_species:
+            tempdf = tempdf[[x for x in tempdf.columns if not x.startswith(thissp)]]
+        return tempdf
 
     def _gen_hmm_prot_to_rbh(self, hmm_results_paths):
         """
@@ -175,20 +217,30 @@ class LG_db:
 
         species_count = {key: species_count[key] for key in species_count
                          if species_count[key] != 0}
-
         # if there are no matches, then just return none
         if len(species_count) == 0:
             return None
         else:
             # there may be a match
             if len(species_count) == 1:
+                "There was only one good species match"
                 return [k for k in species_count][0]
+            # In some cases here if there are multiple matches, and if the proteins
+            # from one species were used to annotate another, then the matching protein
+            # IDs can create a scenario where it appears like two separate species are
+            # equally good matches. This is not the case of course, and we have written the function
+            # self._gen_sp_to_gene_to_color(self) above to deal with this.
+            # If this crashes after this function, then it must be a rare case
             else:
                 # get the largest
-                species_count_sorted_keys = [[k,v] for k, v in sorted(
-                    species_count, key=species_count.get, reverse=True).items()]
                 # if the first is at least 10 times larger than the second, return it
                 if species_count_sorted_keys[0][1] >= (species_count_sorted_keys[0][2] * 10):
+                    return species_count_sorted_keys[0][0]
+                # or if the top two are the same, return either
+                if species_count_sorted_keys[0][1] == species_count_sorted_keys[0][2]:
+                    print("There are two species with the same number of matches: {} and {}. Count: {}".format(
+                          species_count_sorted_keys[0][0], species_count_sorted_keys[1][0],
+                          species_count_sorted_keys[0][1]), file = sys.stderr) 
                     return species_count_sorted_keys[0][0]
                 else:
                     return None
