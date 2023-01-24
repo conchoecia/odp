@@ -284,27 +284,6 @@ def get_component_size_dict(G):
         component_size[len(thisentry)] += 1
     print(component_size)
 
-# TODO - this is very inefficient. This is called once every
-#  time that plot_synteny() is called. This means that all of the genome files are parsed hundreds of times
-#  when a large job is run, and the runtime for plot_synteny() blows up exponentially as more species are added.
-# When I have time to reimplement this, this should be called only one time, and should generate one file
-#  per species. Then it can be read in dynamically if needed before plot_synteny() and passed as a
-#  dictionary. 
-def species_to_chrom_to_size(conf):
-    """
-    lazy method to generate a dict of dicts:
-    {Species: {chrom1: size, chrom2: size}}
-    just uses the config file
-    """
-    s2c2s = {}
-    for thisspecies in conf["species"]:
-        s2c2s[thisspecies] = {}
-        for record in SeqIO.parse(conf["species"][thisspecies]["genome"], "fasta"):
-            clen = len(record.seq)
-            if clen >= int(conf["species"][thisspecies]["minscafsize"]):
-                s2c2s[thisspecies][record.id] = len(record.seq)
-    return s2c2s
-
 rule n_ways_reciprocal_best:
     """
     Gets reciprocal best hits from 3 or more samples
@@ -558,6 +537,8 @@ def calculate_FET(genesdf, scafdict):
     Takes in a rbh file and calculates the false discovery rate using
       Fisher's Exact Test.
 
+    Scaffolds that are not included in scafdict are removed from the analysis
+
     Inputs:
       - genesdf - a pandas dataframe of RBH
       - species_list - a list of species?? why is this here
@@ -631,8 +612,71 @@ def inverse_color(hexcolor):
     else:
         return "#ffffff"
 
+def FET_bfs(graph, start):
+    """
+    This code taken from this SO question: https://stackoverflow.com/questions/53573865
+     and this specific answer: https://stackoverflow.com/a/53574094/5843327
+     by SO user: https://stackoverflow.com/users/4001592/dani-mesejo
+    """
+    visited, queue = set(), [start]
+    while queue:
+        vertex = queue.pop(0)
+        if vertex not in visited:
+            visited.add(vertex)
+            queue.extend(graph[vertex] - visited)
+    return visited
+
+def FET_connected_components(G):
+    """
+    This code taken from this SO question: https://stackoverflow.com/questions/53573865
+     and this specific answer: https://stackoverflow.com/a/53574094/5843327
+     by SO user: https://stackoverflow.com/users/4001592/dani-mesejo
+    """
+    seen = set()
+    for v in G:
+        if v not in seen:
+            c = set(FET_bfs(G, v))
+            yield c
+            seen.update(c)
+
+def FET_graph(edge_list, G = None):
+    """
+    This code taken from this SO question: https://stackoverflow.com/questions/53573865
+     and this specific answer: https://stackoverflow.com/a/53574094/5843327
+     by SO user: https://stackoverflow.com/users/4001592/dani-mesejo
+
+    The parameters are set up so that a graph can be made from just a list of edges,
+        or a graph can be added to an existing graph.
+    """
+    result = {}
+    if G is not None:
+        result = G
+    for source, target in edge_list:
+        result.setdefault(source, set()).add(target)
+        result.setdefault(target, set()).add(source)
+    return result
+
+def FET_sample_to_chrom_to_CC(components, xsample, ysample, splitter):
+    """
+    Turns this into something we can use to assign connected components.
+    """
+    # convert components into a dictionary for the x or y-chroms lookup. We just want the CC, because we can filter on these later
+    sample_to_chrom_to_CC = {xsample: {}, ysample: {}}
+    cc_counter = 0
+    for CC in components:
+        for scaf in CC:
+            esample = scaf.split(splitter)[0]
+            echrom  = scaf.split(splitter)[1]
+            # check if we have seen this already, if so, raise an error
+            if sample_to_chrom_to_CC[esample].get(echrom, None) is not None:
+                raise ValueError("ERROR: we have seen this chrom before, but it is in a different CC. This should not happen. We saw {}.".format(echrom))
+            sample_to_chrom_to_CC[esample][echrom] = cc_counter
+        cc_counter += 1
+    return sample_to_chrom_to_CC 
+
 def synteny_plot_sheet(df_file, plotdf_file, synplot,
                  xsample, ysample,
+                 s2c2s,
                  xorder,  yorder,
                  xbreaks, ybreaks,
                  orthology_method,
@@ -643,7 +687,26 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     """
     If the user provided a plot order, then we should not skip any scaffolds.
 
-    This is the main plotting script for the synteny plot
+    This is the main plotting script for the synteny plot.
+    Parameters:
+      - df_file - the file with the rbh data
+      - plotdf_file - the file to which the final plotting data will be saved
+      - synplot - the name of the synteny plot that will be saved as a pdf
+      - xsample - the name of the x sample
+      - ysample - the name of the y sample
+      - s2c2s - species-to-chrom-to-size dictionary, map of the species, which chrom, and how big that chrom is
+      - xorder - the order in which the x scaffolds should be plotted, if the user has a preference.
+      - yorder - the order in which the y scaffolds should be plotted, if the user has a preference.
+      - xbreaks - the x breaks for the plot. Could be centromeres, breaks in synteny, et cetera.
+      - ybreaks - the y breaks for the plot. See above comment.
+      - orthology_method - the orthology method used to generate the rbh file. Diamond or blastp.
+      - sort_y_by_x - if True, then the y scaffolds will be sorted by the best match with x scaffolds. 
+      - prot_to_color_name - TODO finish this comment. 
+      - prot_to_color_dir - TODO finish this comment.
+      - prot_to_color_hmm_results - TODO finish this comment.
+    
+    TODO: this function needs a parameter where the user passes a chrom-to-size file, or a dict of chroms to sizes.
+          This would replace species_to_chrom_to_size() and would be much faster.
     """
     import pandas as pd
     import seaborn as sns; sns.set()
@@ -661,28 +724,209 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     if prot_to_color_name and os.path.exists(prot_to_color_dir):
         prot_to_color_mode = True
 
-    # read in the rbh file
+    # read in the rbh file. This will already have the Dx, Dy, and FET
     df = pd.read_csv(df_file, delimiter="\t")
+       
+    # now make a df to figure out the sort order
+    sort_df = df.copy()
+    # We keep the scaf, the index to figure out the center of mass on the other chrom,
+    #  and the FET value to figure out the order
+    keep_these_columns = ["{}_scaf".format(xsample), "{}_scaf".format(ysample),
+                          "{}_ix".format(xsample), "{}_ix".format(ysample),
+                          "whole_FET"]
+    sort_df = sort_df[keep_these_columns]
 
-    # first filter out the chroms by min size
-    s2c2s = species_to_chrom_to_size(config)
-    # TODO - above is one of the lines of code that needs to be changed with
-    #  a smarter species_to_chrom_to_size function that only runs once max.
-    #  Right now this is run each time plot_synteny() is called.
+    # get the size of each group so we can add it to sort_df to sort by x-size
+    size_df = sort_df.groupby(["{}_scaf".format(xsample), "{}_scaf".format(ysample)]).size().to_frame('size').reset_index()
+    size_df = size_df.sort_values(by = ["size"], ascending = [False]).reset_index(drop=True)
 
-    # If the species isn't in this dataframe, then it is likely
-    #  one of the ALGs being plotted, and not a real genome.
-    # In this case we look in the dataframe and for each scaffold, just get the largest
-    #  gene pos and use that as the size. TODO - this should be done in a smarter
-    #  way at some point
-    for thissp in [xsample, ysample]:
-        if thissp not in s2c2s:
-            s2c2s[thissp] = {}
-            for thisscaf in df["{}_scaf".format(thissp)].unique():
-                s2c2s[thissp][thisscaf] = df.loc[df["{}_scaf".format(thissp)] == thisscaf, "{}_pos".format(thissp)].max()
-    df = calculate_FET(df, s2c2s)
-    df = calc_D_for_y_and_x(df, xsample, ysample)
-        
+    # get the size of the x and y chroms to add to the sort_df
+    x_chrom_to_size = sort_df.groupby(["{}_scaf".format(xsample)]).size().to_frame('x_size').reset_index()
+    y_chrom_to_size = sort_df.groupby(["{}_scaf".format(ysample)]).size().to_frame('y_size').reset_index()
+
+    # groupby the scafs, figure out what the mean value of the other species' index is,
+    #  then flatten back into a regular df
+    # For example, if LVA is one species and BFL is another, the column "LVA_ix" will now
+    #  refer to the mean index of the BFL genes that are in the same chrom pair as the LVA gene
+    sort_df = sort_df.groupby(by=["{}_scaf".format(xsample), "{}_scaf".format(ysample)], dropna=False).mean().reset_index()
+
+    # Now merge the size_df and sort_df. This only adds the column "size" to sort_df.
+    # The column "size" is the number of genes in the x-chrom and y-chrom pair
+    sort_df = sort_df.merge(size_df, on=["{}_scaf".format(xsample), "{}_scaf".format(ysample)], how="left").sort_values(
+        by = ["size", "whole_FET"], ascending = [False, True]).reset_index(drop=True)
+    
+    # We still need to add the total number of genes on each chrom
+    ysample_chrom_to_size = df.groupby(["{}_scaf".format(ysample)]).size().to_frame("{}_size".format(xsample)).reset_index()
+    xsample_chrom_to_size = df.groupby(["{}_scaf".format(xsample)]).size().to_frame("{}_size".format(ysample)).reset_index()
+
+    # merge the above two dataframes with sort_df
+    sort_df = sort_df.merge(ysample_chrom_to_size, on=["{}_scaf".format(ysample)], how="left")
+    sort_df = sort_df.merge(xsample_chrom_to_size, on=["{}_scaf".format(xsample)], how="left")
+    # sort based on size and FET
+    sort_df = sort_df.sort_values(by = ["{}_size".format(xsample), "whole_FET"], ascending = [False, True]).reset_index(drop=True)
+
+    # now we must find the connected components to make ordering by FET clusters easier
+    # This code was adapted from this SO question: https://stackoverflow.com/questions/53573865
+    #  and this specific answer: https://stackoverflow.com/a/53574094/5843327
+    #  by SO user: https://stackoverflow.com/users/4001592/dani-mesejo
+    # first we prepend the scaf names for a fake column to get around limitations of the above code
+    splitter = ":;:;:;:"
+    sort_df["{}_scaf_absolute".format(xsample)] = "{}{}".format(xsample, splitter) + sort_df["{}_scaf".format(xsample)].astype(str)
+    sort_df["{}_scaf_absolute".format(ysample)] = "{}{}".format(ysample, splitter) + sort_df["{}_scaf".format(ysample)].astype(str)
+    G = FET_graph(sort_df.loc[sort_df["whole_FET"] <= 0.05,][["{}_scaf_absolute".format(xsample), "{}_scaf_absolute".format(ysample)]].values)
+    components = [set(x) for x in FET_connected_components(G)]
+    # convert components into a dictionary for the x or y-chroms lookup. We just want the CC, because we can filter on these later
+    sample_to_chrom_to_CC = FET_sample_to_chrom_to_CC(components, xsample, ysample, splitter)
+    # we have the connected components now, and can just add the group field with map on the xsample scafs
+    sort_df['CC_group'] = sort_df["{}_scaf".format(xsample)].map(sample_to_chrom_to_CC[xsample])
+
+    # Some of the x_samples will not have connected components, because they are not associated with any y_sample
+    #  this will likely only happen with fragmented genomes, so we must add these as their own connected components
+    xsamples_not_in_CC = set(sort_df["{}_scaf".format(xsample)].unique()) - set(sample_to_chrom_to_CC[xsample].keys())
+    #for x in xsamples_not_in_CC:
+    #    components.append(set(["{}{}{}".format(xsample, splitter, x)]))
+    # These y-samples must be associated with some x-sample in order to determine how to order them
+    ysamples_not_in_CC = set(sort_df["{}_scaf".format(ysample)].unique()) - set(sample_to_chrom_to_CC[ysample].keys())
+    unplaced_ys = sort_df.loc[sort_df["{}_scaf".format(ysample)].isin(ysamples_not_in_CC),]
+    unplaced_ys = unplaced_ys.sort_values(by = ["{}_scaf".format(ysample), "whole_FET"],
+                                          ascending = [False, True]).reset_index(drop=True)
+    # We just sorted these samples by y-sample scaffold, then FET. We now remove unique values
+    #  to get a list of associations to add to the existing connected components
+    unplaced_ys.drop_duplicates(subset = ["{}_scaf".format(ysample)], keep = "first", inplace = True)
+    # groupby x-axis scaffold and do processing to add these to the connected components
+    unplaced_ys_gb = unplaced_ys.groupby(["{}_scaf_absolute".format(xsample)])
+    # - We go through each group of y scaffs associated with x-axis scafs, and add to the connected components
+    # - If the connected component doesn't exist yet, we make it. 
+    for name, grouped in unplaced_ys_gb:
+        CC_index = grouped["CC_group"].unique()[0]
+        if CC_index in list(range(len(components))):
+            # convert to int now - we didn't case yet because it may have been None
+            CC_index = int(CC_index)
+            # this x-scaffold is already in a connected component, but add it anyway just to be safe :)
+            #  and then we add the x-scaffold to the y-scaffold connected component
+            newset = set.union(set([name]),
+                               set(grouped["{}_scaf_absolute".format(ysample)]) )
+            components[CC_index] = set.union(components[CC_index],
+                                             newset)
+        else:
+            # this x-scaffold is not in a connected component, so we need to make a new one
+            #  and then we add the x-scaffold to the y-scaffold connected component
+            newset = set.union(set([name]),
+                               set(grouped["{}_scaf_absolute".format(ysample)]) )
+            components.append(newset)
+
+    # recalculate this since we added some new connected components
+    sample_to_chrom_to_CC = FET_sample_to_chrom_to_CC(components, xsample, ysample, splitter)
+    # There might still be some unplaced scaffolds, so just add them in any order now
+    xsamples_not_in_CC = set(sort_df["{}_scaf".format(xsample)].unique()) - set(sample_to_chrom_to_CC[xsample].keys())
+    for x in xsamples_not_in_CC:
+        components.append(set(["{}{}{}".format(xsample, splitter, x)]))
+
+    # recalculate the connected components
+    sample_to_chrom_to_CC = FET_sample_to_chrom_to_CC(components, xsample, ysample, splitter)
+    # At this point all of the y-axis samples should be added to a connected component. Check to make sure.
+    if set(sample_to_chrom_to_CC[ysample].keys()) != set(sort_df["{}_scaf".format(ysample)].unique()):
+        print("ERROR: not all {} scaffolds have been identified in a connected component".format(ysample))
+        missing_from_CC = set(sort_df["{}_scaf".format(ysample)].unique()) - set(sample_to_chrom_to_CC[ysample].keys())
+        print("The missing scaffolds are:")
+        print(missing_from_CC)
+        sys.exit()
+    else:
+        print("All the {} scaffolds have been identified in a connected component, continuing".format(ysample), file = sys.stderr)
+    # also check that the x-axis samples are all in a connected component
+    if set(sample_to_chrom_to_CC[xsample].keys()) != set(sort_df["{}_scaf".format(xsample)].unique()):
+        print("ERROR: not all {} scaffolds have been identified in a connected component".format(xsample))
+        missing_from_CC = set(sort_df["{}_scaf".format(xsample)].unique()) - set(sample_to_chrom_to_CC[xsample].keys())
+        print("The missing scaffolds are:")
+        print(missing_from_CC)
+        sys.exit()
+    else:
+        print("All the {} scaffolds have been identified in a connected component, continuing".format(xsample), file = sys.stderr)
+
+    # remove the absolute fake columns - we don't need them now
+    sort_df = sort_df[[x for x in sort_df.columns if "_absolute" not in x]]
+    # go through again and add the CC_group to the dataframe based on the ysample scaf
+    sort_df["CC_group"] = sort_df["{}_scaf".format(ysample)].apply(lambda x: sample_to_chrom_to_CC[ysample][x])
+    # convert the CC_group to int
+    sort_df["CC_group"] = sort_df["CC_group"].astype(int)
+    # check that there are no Nones in the CC_group column
+    if sort_df["CC_group"].isnull().values.any():
+        print("ERROR: there are Nones in the CC_group column")
+        sys.exit()
+    
+    # now we figure out the plotting order for both axes.
+    # The algorithm is:
+    #   - Find the largest x-scaffold that we have not yet plotted
+    #   - Find the order of the y-scaffolds so that they are organized by the mean location along the x-axis
+    #   - Keep track of which CCs have been added to the plotting order lists
+    #   - Do this until all x-axis scaffolds have been seen. Check list of seen CCs against len of CCs to see if we missed something
+    CCs_seen = set()
+    x_scaffolds_by_size = df["{}_scaf".format(xsample)].value_counts().index.tolist() 
+    if len(x_scaffolds_by_size) != len(df["{}_scaf".format(xsample)].unique()):
+        print("ERROR: these x-axis counts should match")
+        sys.exit()
+
+    optimized_xorder = []
+    optimized_yorder = []
+    for thisx in x_scaffolds_by_size:
+        if thisx in optimized_xorder:
+            # we don't need to do anything
+            pass
+        else:
+            # we need to add this x-scaffold to the optimized_xorder
+            this_CC_index = sample_to_chrom_to_CC[xsample][thisx]
+            CCs_seen.add(this_CC_index)
+            x_keeps = [x for x in sample_to_chrom_to_CC[xsample] if sample_to_chrom_to_CC[xsample][x] == this_CC_index]
+            x_scaffolds = [x for x in x_scaffolds_by_size if x in x_keeps]
+            # only get the y-scaffolds that are in this CC
+            tempdf = sort_df.loc[sort_df["CC_group"] == this_CC_index, ]
+            for tempx in x_scaffolds:
+                # and only get the x-scaffolds that are in this CC
+                subtempdf = tempdf.loc[tempdf["{}_scaf".format(xsample)] == tempx, ]
+                # sort by x-chrom scaffold and the mean position of all the genes on that scaffold
+                subtempdf = subtempdf.sort_values(by = ["{}_scaf".format(xsample), "{}_ix".format(xsample)], ascending = [True, True])
+                # now we add all of these things to the optimized_orders
+                optimized_xorder.append(tempx)
+                for tempy in subtempdf["{}_scaf".format(ysample)].unique().tolist():
+                    if tempy not in optimized_yorder:
+                        optimized_yorder.append(tempy)
+    #print("optimized_xorder")
+    #print(len(optimized_xorder), len(set(optimized_xorder)))
+    #print("optimized_yorder")
+    #print(len(optimized_yorder), len(set(optimized_yorder)))
+    #print(optimized_yorder)
+
+    # now we check that we have seen all the CCs
+    if len(CCs_seen) != len(components):
+        print("ERROR: we have not seen all the Connected Components")
+        print("We have seen {} CCs, but there are {} CCs".format(len(CCs_seen), len(components)))
+        print("The CCs we have seen are:")
+        print(CCs_seen)
+        print("The CCs we have not seen are:")
+        missing_CCs = [x for x in range(len(components)) if x not in CCs_seen]
+        print(missing_CCs) 
+        sys.exit()
+    # we check that we have seen all the x-scaffolds
+    if set(optimized_xorder) != set(df["{}_scaf".format(xsample)].unique()):
+        print("ERROR: we have not seen all the x-scaffolds")
+        print("We have seen {} x-scaffolds, but there are {} x-scaffolds".format(len(set(optimized_xorder)), len(df["{}_scaf".format(xsample)].unique())))
+        print("The x-scaffolds we have not seen are:")
+        missing_x = [x for x in df["{}_scaf".format(xsample)].unique() if x not in set(optimized_xorder)]
+        print(missing_x)
+        sys.exit()
+    # we also check that we have seen all the y-scaffolds
+    if set(optimized_yorder) != set(df["{}_scaf".format(ysample)].unique()):
+        print("ERROR: we have not seen all the y-scaffolds")
+        print("We have seen {} y-scaffolds, but there are {} y-scaffolds".format(len(set(optimized_yorder)), len(df["{}_scaf".format(ysample)].unique())))
+        print("The y-scaffolds we have not seen are:")
+        missing_y = [x for x in df["{}_scaf".format(ysample)].unique() if x not in set(optimized_yorder)]
+        print(missing_y)
+        sys.exit()
+
+    # at this point we now have plotting order for both the x and y scaffolds 
+    xorder = optimized_xorder
+    yorder = optimized_yorder
+
     # now make a separate df for x and y for plotting order
     xdf = False
     xsorter = xorder
@@ -697,6 +941,10 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                            for x in xsorter]).reset_index(drop=True)
     xdf["{}_plotindex".format(xsample)] = xdf.index
 
+    # I think it would be better to put this block of code later.
+    # Specifically, I think it is important to wait until the last minute
+    #  to set the plotpos for the x-axis chroms since things might need to have
+    #  a more complicated sorting if there are splits or fusions
     xsorter_to_cumsum = [0]
     for i in range(1,len(xsorter)):
         xsorter_to_cumsum.append( xsorter_to_cumsum[i-1] + s2c2s[xsample][xsorter[i-1]])
@@ -706,32 +954,10 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     # now make a separate df for x and y for plotting order
     ydf = False
     ysorter = yorder
-    if sort_y_by_x:
-        # TODO - This needs to be reimplemented so that chromosomes that 
-        #  have significant matches with more than one other chromosome
-        #  are plotted next to one another.
-        ygb = df.groupby(by=["{}_scaf".format(ysample),
-                             "{}_scaf".format(xsample),
-                             "whole_FET"], dropna=False).size().reset_index()
-        ygb.columns = ["{}_scaf".format(ysample), "{}_scaf".format(xsample),
-                       "whole_FET", "Count"]
-        ygb = ygb.sort_values(by = ["{}_scaf".format(ysample), "whole_FET"],
-                              ascending = [True, True]
-                              ).drop_duplicates(subset=["{}_scaf".format(ysample)]
-                              ).reset_index(drop=True)
-        xscafs = list(set(ygb["{}_scaf".format(xsample)]))
-        ygb = ygb.groupby(by = ["{}_scaf".format(xsample)])
-
-        ydf = pd.concat([ygb.get_group(x).sort_values(
-            by = ["Count"], ascending=False).reset_index(drop=True)
-                               for x in xsorter if x in xscafs]
-                        ).reset_index(drop=True)
-        ysorter = list(ydf["{}_scaf".format(ysample)])
-    else:
-        if len(yorder) == 0:
-            # sort by largest to smallest
-            ygb = df.groupby(by=["{}_scaf".format(ysample)], dropna=False)
-            ysorter = list(ygb.size().sort_values(ascending = False).index)
+    if len(yorder) == 0:
+        # sort by largest to smallest
+        ygb = df.groupby(by=["{}_scaf".format(ysample)], dropna=False)
+        ysorter = list(ygb.size().sort_values(ascending = False).index)
     ygb = xdf.groupby(by=["{}_scaf".format(ysample)])
     ydf = pd.concat([ygb.get_group(x).sort_values(
         by = ["{}_ix".format(ysample)], ascending=True).reset_index(drop=True)
@@ -745,6 +971,8 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     # this is what we plot
     plotdf = ydf
+    print("plotdf")
+    print(plotdf)
 
     # Options for plotting
     #sns.set(rc={'text.usetex' : True})
@@ -864,8 +1092,6 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     color_list = []
     alpha_list = []
     legend_elements = []
-    print("this is plotdf")
-    print(plotdf)
     if prot_to_color_mode:
         # parse the colorset
         LG = oc.LG_db(prot_to_color_name, prot_to_color_dir,
@@ -1061,6 +1287,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
                  if ((y not in pos_ylinepos) and (y < pos_ymax))]
 
     linecolor="#8FA0B5"
+    linecolor = [0, 0.169, 0.357, 0.5]
     #plot vertical lines and breaks
     for xval in xlinepos:
         panel1.axvline(x=xval, color=linecolor, lw=0.5)
@@ -1410,7 +1637,6 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     captext = captionax.text(0, 1, t, fontsize = 10, ha="left", va="top", wrap=True)
 
-
     for this_panel in [chrompiecetable, chromwholetable, colortable, captionax]:
         this_panel.spines['top'].set_visible(False)
         this_panel.spines['left'].set_visible(False)
@@ -1419,12 +1645,153 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     plt.savefig(synplot)
 
+rule get_chromsize_of_one_species:
+    """
+    This chromsize file is used later to speed up the synteny_plot analysis.
+    The first column is the sample name
+    2nd col is the scaf name
+    3rd col is the scaf length
+
+    We filter out the scaffolds that are too small here.
+    """
+    input:
+        fasta = lambda wildcards: config["species"][wildcards.sp]["genome"]
+    output:
+        chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
+    threads:
+        1
+    run:
+        with open(input.fasta, "r") as f:
+            with open(output.chromsize, "w") as o:
+                for record in SeqIO.parse(f, "fasta"):
+                    recordlen = len(record.seq)
+                    if recordlen >= config["species"][wildcards.sp]["minscafsize"]:
+                        o.write("{}\t{}\t{}\n".format(wildcards.sp, record.id, len(record.seq)))
+
+def chromsize_to_s2c2s(chromsize_path):
+    """
+    this reads in a chromsize file and returns a dictionary of species to scaffold to scaflen
+    """
+    s2c2s = {}
+    with open(chromsize_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                thissp, thisscaf, thislen = line.split("\t")
+                if thissp not in s2c2s:
+                    s2c2s[thissp] = {}
+                s2c2s[thissp][thisscaf] = int(thislen)
+    return s2c2s
+
+rule get_chromsize_of_analysis_pair:
+    """
+    This chromsize file is used later to speed up the synteny_plot analysis.
+    The first column is the sample name
+    2nd col is the scaf name
+    3rd col is the scaf length
+
+    We filter out the scaffolds that are too small here.
+    """
+    input:
+        fastas = lambda wildcards: [config["species"][x]["genome"]
+                            for x in config["analysispairs"][wildcards.analysis]]
+    output:
+        chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize"
+    threads:
+        1
+    run:
+        with open(output.chromsize, "w") as o:
+            for thissp in config["analysispairs"][wildcards.analysis]:
+                thisfasta = config["species"][thissp]["genome"]
+                with open(thisfasta, "r") as f:
+                        for record in SeqIO.parse(f, "fasta"):
+                            recordlen = len(record.seq)
+                            if recordlen >= config["species"][thissp]["minscafsize"]:
+                                o.write("{}\t{}\t{}\n".format(thissp, record.id, len(record.seq)))
+
+rule analysis_D_and_FET:
+    """
+    Takes a rbh file and adds the D and FET information.
+    This rule does this for one analysis of two species.
+     Doing this here prevents this from needing to be run every time a synteny plot is made.
+    """
+    input:
+        rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh",
+        chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize"
+    output:
+        rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.D.FET.rbh"
+    params:
+        xsample = lambda wildcards: config["analysispairs"][wildcards.analysis][0], 
+        ysample = lambda wildcards: config["analysispairs"][wildcards.analysis][1]
+    threads: 1
+    run:
+        # read in the rbh file
+        df = pd.read_csv(input.rbh, delimiter="\t")
+
+        s2c2s = chromsize_to_s2c2s(input.chromsize)
+
+        # If the species isn't in s2c2s, then something is wrong.
+        # Both of these samples should be in this file
+        for thissp in config["analysispairs"][wildcards.analysis]:
+            if thissp not in s2c2s:
+                raise IOError("This species, {}, should absoluted be in this chromsize file: {}".format(
+                    thissp, input.chromsize))
+
+        print("Calculating FET of the LG {} and the species {}.".format(
+            params.xsample, params.ysample), file = sys.stderr)
+        df = calculate_FET(df, s2c2s)
+        print("Calculating D of the LG {} and the species {}.".format(
+            params.xsample, params.ysample), file = sys.stderr)
+        df = calc_D_for_y_and_x(df, params.xsample, params.ysample)
+        df.to_csv(output.rbh, sep ="\t", header = True, index = None)
+
+rule species_HMM_D_and_FET:
+    """
+    Takes a rbh file and adds the D and FET information.
+    This rule does this for one analysis of one species and one set of ALGs.
+     Doing this here prevents this from needing to be run every time a synteny plot is made.
+    """
+    input:
+        rbh = config["tool"] + "/step1-rbh/{hmm}_{sp}_reciprocal_best_hits.hmm.rbh",
+        chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
+    output:
+        rbh = config["tool"] + "/step1-rbh/{hmm}_{sp}_reciprocal_best_hits.hmm.D.FET.rbh",
+    params:
+        xsample = lambda wildcards: wildcards.hmm, 
+        ysample = lambda wildcards: wildcards.sp
+    threads: 1
+    run:
+        # read in the rbh file
+        df = pd.read_csv(input.rbh, delimiter="\t")
+
+        s2c2s = chromsize_to_s2c2s(input.chromsize)
+
+        # If the species isn't in s2c2s, then it is likely
+        #  one of the ALGs being plotted, and not a real genome.
+        # In this case we look in the dataframe and for each scaffold, just get the largest
+        #  gene pos and use that as the size. TODO - this should be done in a smarter
+        #  way at some point
+        for thissp in [params.xsample, params.ysample]:
+            if thissp not in s2c2s:
+                s2c2s[thissp] = {}
+                for thisscaf in df["{}_scaf".format(thissp)].unique():
+                    s2c2s[thissp][thisscaf] = df.loc[df["{}_scaf".format(thissp)] == thisscaf, "{}_pos".format(thissp)].max()
+
+        print("Calculating FET of the LG {} and the species {}.".format(
+            params.xsample, params.ysample), file = sys.stderr)
+        df = calculate_FET(df, s2c2s)
+        print("Calculating D of the LG {} and the species {}.".format(
+            params.xsample, params.ysample), file = sys.stderr)
+        df = calc_D_for_y_and_x(df, params.xsample, params.ysample)
+        df.to_csv(output.rbh, sep ="\t", header = True, index = None)
+
 """
 This makes the synteny plot without doing any special coloring of the dots
 """
 rule plot_synteny_nocolor:
     input:
-        rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh"
+        rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.D.FET.rbh",
+        chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize"
     output:
         rbh = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_xy_reciprocal_best_hits.plotted.rbh",
         xy  = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_xy_synteny.pdf",
@@ -1442,12 +1809,15 @@ rule plot_synteny_nocolor:
         xbreaks = config["species"][xsample]["manual_breaks"] if "manual_breaks" in config["species"][xsample] else []
         ybreaks = config["species"][ysample]["manual_breaks"] if "manual_breaks" in config["species"][ysample] else []
 
+        s2c2s = chromsize_to_s2c2s(input.chromsize)
+
         # figure out how to sort the scaffolds
         sort_y_by_x = True
         if "sort_by_x_coord_blast" in config["species"][ysample]:
             sort_y_by_x = config["species"][ysample]["sort_by_x_coord_blast"]
         synteny_plot_sheet(input.rbh, output.rbh, output.xy,
                      xsample, ysample,
+                     s2c2s,
                      xorder, yorder,
                      xbreaks, ybreaks,
                      params.orthology_method,
@@ -1457,6 +1827,7 @@ rule plot_synteny_nocolor:
             sort_y_by_x = config["species"][xsample]["sort_by_x_coord_blast"]
         synteny_plot_sheet(input.rbh, output.rbh, output.yx,
                      ysample, xsample,
+                     s2c2s,
                      yorder, xorder,
                      ybreaks, xbreaks,
                      params.orthology_method,
@@ -1577,7 +1948,6 @@ rule hmm_search_to_rbh:
         df.columns = ["{}_gene".format(wildcards.coloredby), "{}_gene".format(wildcards.sample)]
         # at this point the df is just the reciprocal best hits
 
-
         # now open the rbh file of the coloredby data and add the other columns
         rbhdf = pd.read_csv(input.coloredby_rbh, sep = "\t")
         rbhdf = rbhdf[["rbh", "gene_group", "color"]]
@@ -1663,8 +2033,9 @@ This makes the synteny plots with the pre-installed color groups
 """
 rule plot_synteny_coloredby:
     input:
-        rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh",
+        rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.D.FET.rbh",
         colordir = lambda wildcards: config["prot_to_color"][wildcards.coloredby],
+        chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize",
         hmm_results = lambda wildcards: [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(
             wildcards.coloredby, x) for x in wildcards.analysis.split("_")]
     output:
@@ -1686,6 +2057,8 @@ rule plot_synteny_coloredby:
         xbreaks = config["species"][xsample]["manual_breaks"] if "manual_breaks" in config["species"][xsample] else []
         ybreaks = config["species"][ysample]["manual_breaks"] if "manual_breaks" in config["species"][ysample] else []
 
+        s2c2s = chromsize_to_s2c2s(input.chromsize)
+
         # figure out how to sort the scaffolds
         sort_y_by_x = True
         if "sort_by_x_coord_blast" in config["species"][ysample]:
@@ -1693,6 +2066,7 @@ rule plot_synteny_coloredby:
         synteny_plot_sheet(input.rbh, output.rbh, output.xy,
                      xsample, ysample,
                      xorder, yorder,
+                     s2c2s,
                      xbreaks, ybreaks,
                      params.orthology_method,
                      sort_y_by_x = sort_y_by_x,
@@ -1705,6 +2079,7 @@ rule plot_synteny_coloredby:
             sort_y_by_x = config["species"][xsample]["sort_by_x_coord_blast"]
         synteny_plot_sheet(input.rbh, output.rbh, output.yx,
                      ysample, xsample,
+                     s2c2s,
                      yorder, xorder,
                      ybreaks, xbreaks,
                      params.orthology_method,
@@ -1728,7 +2103,8 @@ In this case, we don't need to compare the plot to the hmm samples because
 """
 rule plot_synteny_of_ALGs_plus_species:
     input:
-        rbh = config["tool"] + "/step1-rbh/{hmm}_{sp}_reciprocal_best_hits.hmm.rbh"
+        rbh = config["tool"] + "/step1-rbh/{hmm}_{sp}_reciprocal_best_hits.hmm.D.FET.rbh",
+        chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
     output:
         rbh = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_reciprocal_best_hits.plotted.rbh",
         xy  = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_synteny.pdf",
@@ -1746,11 +2122,26 @@ rule plot_synteny_of_ALGs_plus_species:
         xbreaks = []
         ybreaks = config["species"][ysample]["manual_breaks"] if "manual_breaks" in config["species"][ysample] else []
 
+
+        s2c2s = chromsize_to_s2c2s(input.chromsize)
+        # In this case we look in the dataframe and for each scaffold, just get the largest
+        #  gene pos and use that as the size. TODO - this should be done in a smarter
+        #  way at some point
+        df = pd.read_csv(input.rbh, delimiter="\t")
+
+        for thissp in [wildcards.hmm, wildcards.sp]:
+            if thissp not in s2c2s:
+                s2c2s[thissp] = {}
+                for thisscaf in df["{}_scaf".format(thissp)].unique():
+                    s2c2s[thissp][thisscaf] = df.loc[df["{}_scaf".format(thissp)] == thisscaf, "{}_pos".format(thissp)].max()
+
         # Always sort the y-axis by the x-axis
         sort_y_by_x = True
+        print("HMM x, sample y")
         # First we plot the ALGs on the x-axis and the species on the y-axis
         synteny_plot_sheet(input.rbh, output.rbh, output.xy,
                      xsample, ysample,
+                     s2c2s,
                      xorder, yorder,
                      xbreaks, ybreaks,
                      params.orthology_method,
@@ -1760,8 +2151,10 @@ rule plot_synteny_of_ALGs_plus_species:
                      prot_to_color_hmm_results = None)
 
         # Now we plot the ALGs on the y-axis and the species on the x-axis
+        print("HMM y, sample x")
         synteny_plot_sheet(input.rbh, output.rbh, output.yx,
                      ysample, xsample,
+                     s2c2s,
                      yorder, xorder,
                      ybreaks, xbreaks,
                      params.orthology_method,
