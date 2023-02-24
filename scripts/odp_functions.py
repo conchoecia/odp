@@ -14,6 +14,15 @@ import pandas as pd
 from itertools import combinations
 from itertools import product
 
+# TODO implement this function soon after release
+#def gff_or_chrom(filepath):
+#    """
+#    This function takes a filepath and determines if it is a gff or a chrom file.
+#    Returns "gff" or "chrom", or throws an error if the software can't decide.
+#    """
+#    # First check what the file extension is
+
+
 def reciprocal_best_permissive_blastp_or_diamond_blastp(
         x_to_y_blastp_results, y_to_x_blastp_results, outfile):
     """
