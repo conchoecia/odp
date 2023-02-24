@@ -60,6 +60,7 @@ import sys
 # plotting stuff
 import ast
 import itertools
+import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.patches as mplpatches
 from matplotlib.collections import LineCollection
@@ -439,7 +440,6 @@ rule make_randomization_summary:
 rule cat_together_randomization_plottables:
     """
     This just cats together all the plottables into a single file
-    so we can easily load it into seaborn later
     """
     input:
         sim_plot = expand("odp_genome_mutation_analysis/sim_randomization/plottable/{{species}}/random_sim_{{species}}_{randcore}_plottable.txt",
@@ -613,8 +613,8 @@ rule plot_joint_clouds:
             print("", file = outhandle)
         print("", file = outhandle)
 
-        import seaborn as sns
-        sns.set_theme(style="ticks")
+        # CALL THIS TO GET THE VISUAL STYLE WE NEED
+        odp_plot.format_matplotlib()
 
         # define custom colormap with fixed colour and alpha gradient
         # use simple linear interpolation in the entire scale
@@ -777,8 +777,8 @@ rule plot_hypothesis_support:
         initdf = pd.read_csv(input.init, index_col = None, sep = "\t")
         df = pd.read_csv(input.data, index_col = None, sep = "\t")
 
-        import seaborn as sns
-        sns.set_theme(style="ticks")
+        # CALL THIS TO GET THE VISUAL STYLE WE NEED
+        odp_plot.format_matplotlib()
 
         possible_vars = list(set(["_".join(x.split("_")[1::]) for x in df.columns]))
         plot_these = ["total_number_of_genes_in_FLGs",

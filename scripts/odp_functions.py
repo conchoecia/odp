@@ -391,7 +391,7 @@ def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
                 splitd = line.split()
                 keep_these.add(splitd[0])
     outhandle = open(output_fasta, "w")
-    for record in fasta.parse(input.fasta):
+    for record in fasta.parse(input_fasta):
         if record.id in keep_these and record.id not in printed_already:
             print(record, file = outhandle)
             printed_already.add(record.id)
@@ -890,7 +890,6 @@ def gen_plotting_df(ycoords_file, xcoords_file,
     """
     import pandas as pd
     import numpy as np
-    # set seaborn stuff
 
     # first make a lookup table of how to calculate the
     #  x and y coords_file. This lookup is just the amount of
@@ -998,14 +997,12 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     """
     config = kwargs["config"]
     import pandas as pd
-    import seaborn as sns; sns.set()
     import matplotlib
     import matplotlib.pyplot as plt
     import matplotlib.ticker as ticker
     #import matplotlib.patches as mplpatches
     from matplotlib.ticker import StrMethodFormatter, NullFormatter
     import numpy as np
-    # set seaborn stuff
     #sns.set(rc={'text.usetex' : True})
     sns.set_style("ticks", {'font.family': ['sans-serif'],
                                 'font.sans-serif': ['Helvetica'],
