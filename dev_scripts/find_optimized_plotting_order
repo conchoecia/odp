@@ -20,7 +20,6 @@ import statistics
 import odp_functions as odpf
 import odp_plotting_functions as odp_plot
 
-
 configfile: "config.yaml"
 
 # check for legal config entries. Useful for finding misspelled entries
@@ -34,6 +33,7 @@ for this_axis in ["xaxisspecies", "yaxisspecies"]:
             for key in config[this_axis][this_sample]:
                 if key not in legal:
                     illegal.add(key)
+
 if len(illegal) > 0:
     print("We found some fields in your config file that are not used by this program.")
     print("The only fields allowed for individual samples are:")
