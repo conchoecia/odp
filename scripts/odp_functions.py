@@ -1,11 +1,18 @@
 """
 These are functions that are shared by odp, odp_trio, and other scripts
 """
-from Bio import SeqIO
+# this is all needed to load our custom fasta parser
+import os
+import sys
+snakefile_path = os.path.dirname(os.path.abspath(__file__)) 
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
+
+# now import everything else
 import pandas as pd
 from itertools import combinations
 from itertools import product
-import sys
 
 def reciprocal_best_permissive_blastp_or_diamond_blastp(
         x_to_y_blastp_results, y_to_x_blastp_results, outfile):
@@ -376,9 +383,9 @@ def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
                 keep_these.add(splitd[0])
     outhandle = open(output_fasta, "w")
     inhandle =  open(input_fasta, "r")
-    for record in SeqIO.parse(inhandle, "fasta"):
+    for record in fasta.parse(inhandle):
         if record.id in keep_these and record.id not in printed_already:
-            SeqIO.write(record, outhandle, "fasta")
+            print(record.format(wrap=60), file = outhandle)
             printed_already.add(record.id)
     inhandle.close()
     outhandle.close()

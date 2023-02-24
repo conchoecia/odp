@@ -6,12 +6,20 @@ Author: Darrin Schultz
 Email : dts@ucsc.edu
 
 """
+# first import sys because we must look in other directories
+import os
+import sys
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
 
-from Bio import SeqIO
+#from Bio import SeqIO
+import fasta
 from itertools import permutations
 from itertools import combinations
 import logging
 #import matplotlib
+import matplotlib
 from matplotlib.patches import Patch
 from matplotlib.lines   import Line2D
 from matplotlib.font_manager import FontProperties
@@ -88,6 +96,26 @@ def flatten(list_of_lists):
     """flatten a list of lists, unique only"""
     return list(set([item for sublist in list_of_lists for item in sublist]))
 
+def format_matplotlib():
+    """format the fonts and print options for the plots"""
+    font = {'family' : 'sans-serif',
+            'sans-serif' : 'Helvetica',
+            'weight' : 'normal',
+            'size'   : 12}
+
+    matplotlib.rc('font', **font)
+
+    grid = {"color": ".95", "linestyle": "-"}
+    # grid style
+    matplotlib.rc('grid', **grid)
+
+    # Preserve the vertical order of embedded images:
+    matplotlib.rcParams['image.composite_image'] = False
+    # text as font in pdf
+    matplotlib.rcParams['pdf.fonttype'] = 42
+    matplotlib.rcParams['ps.fonttype'] = 42
+
+
 # check if these fields in config. If not, add to config.
 check_these = ["prot_to_color", "prot_to_color_rbh"]
 for this in check_these:
@@ -123,6 +151,51 @@ for tup in list(permutations(config["species"], 2)):
     t = list(sorted(tup))
     config["analysispairs"]["{}_{}".format(t[0], t[1])] = t
 
+# file targets are what we want to plot
+file_targets = []
+# if we want to plot more than LGs, add those special file 
+if "plot_sp_sp" not in config:
+    config["plot_sp_sp"] = True
+if config["plot_sp_sp"]:
+    #blast_jobs
+    # find the reciprocal best hits
+    file_targets += [config["tool"] + "/step1-rbh/{}_reciprocal_best_hits.rbh".format(x)
+     for x in config["analysispairs"]]
+    # no color here
+    file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_xy_reciprocal_best_hits.plotted.rbh".format(x)
+     for x in config["analysispairs"]]
+    file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_xy_synteny.pdf".format(x)
+     for x in config["analysispairs"]]
+    file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_yx_synteny.pdf".format(x)
+     for x in config["analysispairs"]]
+
+    # I don't think this next set of files needs to be specified, but I'm leaving it here for now.
+    file_targets += [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(hmm, sp)
+     for sp in config["analysisspecies"] for hmm in config["prot_to_color"]]
+    # color by the things in the prot_to_loc settings
+    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
+     for x in config["analysispairs"] for y in config["prot_to_color"]]
+    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
+     for x in config["analysispairs"] for y in config["prot_to_color"]]
+    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
+     for x in config["analysispairs"] for y in config["prot_to_color"]]
+
+# file targets are what we want to plot
+# if we want to plot more than LGs, add those special file 
+if "plot_LGs" not in config:
+    config["plot_LGs"] = True
+if config["plot_LGs"]:
+    # We also want to plot the ALGs as if they were genomes, against the individual species
+    # This line specifically is for testing the RBH-as-a-species analysis
+    # the rbh file after setting up the plotting
+    file_targets += expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_reciprocal_best_hits.plotted.rbh",
+           hmm = config["prot_to_color"], sp = config["species"])
+    # and the pdfs we are plotting of these relationships
+    file_targets += expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_synteny.pdf",
+           hmm = config["prot_to_color"], sp = config["species"])
+    file_targets += expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_yx_synteny.pdf",
+           hmm = config["prot_to_color"], sp = config["species"])
+
 wildcard_constraints:
     sample1="[A-Za-z0-9]+",
     sample2="[A-Za-z0-9]+",
@@ -136,39 +209,7 @@ wildcard_constraints:
 
 rule all:
     input:
-        #blast_jobs
-        # find the reciprocal best hits
-        [config["tool"] + "/step1-rbh/{}_reciprocal_best_hits.rbh".format(x)
-         for x in config["analysispairs"]],
-        # no color here
-        [config["tool"] + "/step2-figures/synteny_nocolor/{}_xy_reciprocal_best_hits.plotted.rbh".format(x)
-         for x in config["analysispairs"]],
-        [config["tool"] + "/step2-figures/synteny_nocolor/{}_xy_synteny.pdf".format(x)
-         for x in config["analysispairs"]],
-        [config["tool"] + "/step2-figures/synteny_nocolor/{}_yx_synteny.pdf".format(x)
-         for x in config["analysispairs"]],
-
-        # I don't think this next set of files needs to be specified, but I'm leaving it here for now.
-        [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(hmm, sp)
-         for sp in config["analysisspecies"] for hmm in config["prot_to_color"]],
-        # color by the things in the prot_to_loc settings
-        [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
-         for x in config["analysispairs"] for y in config["prot_to_color"]],
-        [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
-         for x in config["analysispairs"] for y in config["prot_to_color"]],
-        [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
-         for x in config["analysispairs"] for y in config["prot_to_color"]],
-
-        # We also want to plot the ALGs as if they were genomes, against the individual species
-        # This line specifically is for testing the RBH-as-a-species analysis
-        # the rbh file after setting up the plotting
-        expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_reciprocal_best_hits.plotted.rbh",
-               hmm = config["prot_to_color"], sp = config["species"]),
-        # and the pdfs we are plotting of these relationships
-        expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_synteny.pdf",
-               hmm = config["prot_to_color"], sp = config["species"]),
-        expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_yx_synteny.pdf",
-               hmm = config["prot_to_color"], sp = config["species"]),
+        file_targets
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     """
@@ -184,12 +225,10 @@ def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
                 splitd = line.split()
                 keep_these.add(splitd[0])
     outhandle = open(output_fasta, "w")
-    inhandle =  open(input_fasta, "r")
-    for record in SeqIO.parse(inhandle, "fasta"):
+    for record in fasta.parse(input_fasta):
         if record.id in keep_these and record.id not in printed_already:
-            SeqIO.write(record, outhandle, "fasta")
+            print(record, file = outhandle)
             printed_already.add(record.id)
-    inhandle.close()
     outhandle.close()
 
 rule filter_prots:
@@ -491,8 +530,8 @@ rule n_ways_reciprocal_best:
             genesdf = genesdf.sort_values(["{}_scaf".format(thisspecies),
                                            "{}_pos".format(thisspecies)],
                                           ascending = True)
-            genesdf["{}_ix".format(thisspecies)] = genesdf.groupby(["{}_scaf".format(thisspecies)]).cumcount()
-            genesdf["{}_break_ix".format(thisspecies)] = genesdf.groupby(["{}_breakchrom".format(thisspecies)]).cumcount()
+            genesdf["{}_ix".format(thisspecies)] = genesdf.groupby("{}_scaf".format(thisspecies)).cumcount()
+            genesdf["{}_break_ix".format(thisspecies)] = genesdf.groupby("{}_breakchrom".format(thisspecies)).cumcount()
 
         genesdf.to_csv(output.rbh, sep="\t", index = False)
 
@@ -709,14 +748,12 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
           This would replace species_to_chrom_to_size() and would be much faster.
     """
     import pandas as pd
-    import seaborn as sns; sns.set()
     import matplotlib
     import matplotlib.pyplot as plt
     import matplotlib.ticker as ticker
     #import matplotlib.patches as mplpatches
     from matplotlib.ticker import StrMethodFormatter, NullFormatter
     import numpy as np
-    # set seaborn stuff
 
     prot_to_color_mode = False
 
@@ -741,8 +778,8 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     size_df = size_df.sort_values(by = ["size"], ascending = [False]).reset_index(drop=True)
 
     # get the size of the x and y chroms to add to the sort_df
-    x_chrom_to_size = sort_df.groupby(["{}_scaf".format(xsample)]).size().to_frame('x_size').reset_index()
-    y_chrom_to_size = sort_df.groupby(["{}_scaf".format(ysample)]).size().to_frame('y_size').reset_index()
+    x_chrom_to_size = sort_df.groupby("{}_scaf".format(xsample)).size().to_frame('x_size').reset_index()
+    y_chrom_to_size = sort_df.groupby("{}_scaf".format(ysample)).size().to_frame('y_size').reset_index()
 
     # groupby the scafs, figure out what the mean value of the other species' index is,
     #  then flatten back into a regular df
@@ -756,8 +793,8 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
         by = ["size", "whole_FET"], ascending = [False, True]).reset_index(drop=True)
     
     # We still need to add the total number of genes on each chrom
-    ysample_chrom_to_size = df.groupby(["{}_scaf".format(ysample)]).size().to_frame("{}_size".format(xsample)).reset_index()
-    xsample_chrom_to_size = df.groupby(["{}_scaf".format(xsample)]).size().to_frame("{}_size".format(ysample)).reset_index()
+    ysample_chrom_to_size = df.groupby("{}_scaf".format(ysample)).size().to_frame("{}_size".format(xsample)).reset_index()
+    xsample_chrom_to_size = df.groupby("{}_scaf".format(xsample)).size().to_frame("{}_size".format(ysample)).reset_index()
 
     # merge the above two dataframes with sort_df
     sort_df = sort_df.merge(ysample_chrom_to_size, on=["{}_scaf".format(ysample)], how="left")
@@ -794,7 +831,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     #  to get a list of associations to add to the existing connected components
     unplaced_ys.drop_duplicates(subset = ["{}_scaf".format(ysample)], keep = "first", inplace = True)
     # groupby x-axis scaffold and do processing to add these to the connected components
-    unplaced_ys_gb = unplaced_ys.groupby(["{}_scaf_absolute".format(xsample)])
+    unplaced_ys_gb = unplaced_ys.groupby("{}_scaf_absolute".format(xsample))
     # - We go through each group of y scaffs associated with x-axis scafs, and add to the connected components
     # - If the connected component doesn't exist yet, we make it. 
     for name, grouped in unplaced_ys_gb:
@@ -932,12 +969,12 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     xsorter = xorder
     if len(xorder) == 0:
         # sort by largest to smallest
-        xgb = df.groupby(by=["{}_scaf".format(xsample)], dropna=False)
+        xgb = df.groupby(by="{}_scaf".format(xsample), dropna=False)
         xsorter = list(xgb.size().sort_values(ascending = False).index)
-    xgb = df.groupby(by=["{}_scaf".format(xsample)])
+    xgb = df.groupby(by="{}_scaf".format(xsample))
     # sorts the rows by the scaf order, and within the scafs by the gene index
     xdf = pd.concat([xgb.get_group(x).sort_values(
-        by = ["{}_ix".format(xsample)], ascending=True).reset_index(drop=True)
+        by = "{}_ix".format(xsample), ascending=True).reset_index(drop=True)
                            for x in xsorter]).reset_index(drop=True)
     xdf["{}_plotindex".format(xsample)] = xdf.index
 
@@ -956,9 +993,9 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     ysorter = yorder
     if len(yorder) == 0:
         # sort by largest to smallest
-        ygb = df.groupby(by=["{}_scaf".format(ysample)], dropna=False)
+        ygb = df.groupby(by="{}_scaf".format(ysample), dropna=False)
         ysorter = list(ygb.size().sort_values(ascending = False).index)
-    ygb = xdf.groupby(by=["{}_scaf".format(ysample)])
+    ygb = xdf.groupby(by="{}_scaf".format(ysample))
     ydf = pd.concat([ygb.get_group(x).sort_values(
         by = ["{}_ix".format(ysample)], ascending=True).reset_index(drop=True)
                            for x in ysorter]).reset_index(drop=True)
@@ -971,20 +1008,11 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     # this is what we plot
     plotdf = ydf
-    print("plotdf")
-    print(plotdf)
+    #print("plotdf")
+    #print(plotdf)
 
-    # Options for plotting
-    #sns.set(rc={'text.usetex' : True})
-    logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
-    sns.set_style("ticks", {'font.family': ['sans-serif'],
-                                'font.sans-serif': ['Helvetica'],
-                                'grid.color': '.95'})
-    # Preserve the vertical order of embedded images:
-    matplotlib.rcParams['image.composite_image'] = False
-    # text as font in pdf
-    matplotlib.rcParams['pdf.fonttype'] = 42
-    matplotlib.rcParams['ps.fonttype'] = 42
+    # CALL THIS TO GET THE VISUAL STYLE WE NEED
+    format_matplotlib()
 
     # now make a scatter plot
     #figDouble = 16
@@ -1214,7 +1242,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     # first do this for the plot with the indices
     # X-AXIS LABELS AND VERTICAL LINES
-    tempgb = plotdf.sort_values(by=["{}_plotindex".format(xsample)]).groupby(by=["{}_scaf".format(xsample)])
+    tempgb = plotdf.sort_values(by=["{}_plotindex".format(xsample)]).groupby(by="{}_scaf".format(xsample))
     # we can get these based on index
     for xscaf in xsorter:
         # sort the indices
@@ -1243,7 +1271,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     pos_xcountlabel = xcountlabel
 
     # Y-AXIS LABELS AND HORIZONTAL LINES
-    tempgb = plotdf.sort_values(by=["{}_plotindex".format(ysample)]).groupby(by=["{}_scaf".format(ysample)])
+    tempgb = plotdf.sort_values(by=["{}_plotindex".format(ysample)]).groupby(by="{}_scaf".format(ysample))
     for yscaf in ysorter:
         minpos = tempgb.get_group(yscaf)["{}_plotindex".format(ysample)].min()
         maxpos = tempgb.get_group(yscaf)["{}_plotindex".format(ysample)].max()
@@ -1270,7 +1298,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     # FIND VERTICAL BREAKS
     tempxdf = plotdf.sort_values(by=["{}_plotindex".format(xsample)]).groupby(
-        by=["{}_breakchrom".format(xsample)]).last().reset_index()
+        by="{}_breakchrom".format(xsample)).last().reset_index()
     xbreakpos = [x for x in list(tempxdf["{}_plotindex".format(xsample)] + 0.5)
                  if ((x not in xlinepos) and (x < xmax))]
     tempxdf = tempxdf.loc[~tempxdf["{}_breakchrom".format(xsample)].str.contains("end"), ]
@@ -1661,12 +1689,11 @@ rule get_chromsize_of_one_species:
     threads:
         1
     run:
-        with open(input.fasta, "r") as f:
-            with open(output.chromsize, "w") as o:
-                for record in SeqIO.parse(f, "fasta"):
-                    recordlen = len(record.seq)
-                    if recordlen >= config["species"][wildcards.sp]["minscafsize"]:
-                        o.write("{}\t{}\t{}\n".format(wildcards.sp, record.id, len(record.seq)))
+        with open(output.chromsize, "w") as o:
+            for record in fasta.parse(input.fasta):
+                recordlen = len(record.seq)
+                if recordlen >= config["species"][wildcards.sp]["minscafsize"]:
+                    o.write("{}\t{}\t{}\n".format(wildcards.sp, record.id, len(record.seq)))
 
 def chromsize_to_s2c2s(chromsize_path):
     """
@@ -1703,11 +1730,10 @@ rule get_chromsize_of_analysis_pair:
         with open(output.chromsize, "w") as o:
             for thissp in config["analysispairs"][wildcards.analysis]:
                 thisfasta = config["species"][thissp]["genome"]
-                with open(thisfasta, "r") as f:
-                        for record in SeqIO.parse(f, "fasta"):
-                            recordlen = len(record.seq)
-                            if recordlen >= config["species"][thissp]["minscafsize"]:
-                                o.write("{}\t{}\t{}\n".format(thissp, record.id, len(record.seq)))
+                for record in fasta.parse(thisfasta):
+                    recordlen = len(record.seq)
+                    if recordlen >= config["species"][thissp]["minscafsize"]:
+                        o.write("{}\t{}\t{}\n".format(thissp, record.id, len(record.seq)))
 
 rule analysis_D_and_FET:
     """
@@ -1962,7 +1988,7 @@ rule hmm_search_to_rbh:
         df = df.sort_values(by = ["gene_group", "rbh"], ascending = [True, True]).reset_index(drop=True)
         df["{}_scaf".format(wildcards.coloredby)] = df["gene_group"]
         # add an artificial position for this "pseudogenome"
-        df["{}_pos".format(wildcards.coloredby)]  = df.groupby(["gene_group"]).cumcount()+1
+        df["{}_pos".format(wildcards.coloredby)]  = df.groupby("gene_group").cumcount()+1
 
         # now open the rbh file of the sample data and add the other columns
         rbhdf = pd.read_csv(input.sample_chrom, sep = "\t", header = None)
@@ -2014,8 +2040,8 @@ rule hmm_search_to_rbh:
             genesdf = genesdf.sort_values(["{}_scaf".format(thisspecies),
                                            "{}_pos".format(thisspecies)],
                                           ascending = True)
-            genesdf["{}_ix".format(thisspecies)] = genesdf.groupby(["{}_scaf".format(thisspecies)]).cumcount()
-            genesdf["{}_break_ix".format(thisspecies)] = genesdf.groupby(["{}_breakchrom".format(thisspecies)]).cumcount()
+            genesdf["{}_ix".format(thisspecies)] = genesdf.groupby("{}_scaf".format(thisspecies)).cumcount()
+            genesdf["{}_break_ix".format(thisspecies)] = genesdf.groupby("{}_breakchrom".format(thisspecies)).cumcount()
 
         # we need to add the indices of the genes in the coloredby genome
 
@@ -2059,14 +2085,15 @@ rule plot_synteny_coloredby:
 
         s2c2s = chromsize_to_s2c2s(input.chromsize)
 
+
         # figure out how to sort the scaffolds
         sort_y_by_x = True
         if "sort_by_x_coord_blast" in config["species"][ysample]:
             sort_y_by_x = config["species"][ysample]["sort_by_x_coord_blast"]
         synteny_plot_sheet(input.rbh, output.rbh, output.xy,
                      xsample, ysample,
-                     xorder, yorder,
                      s2c2s,
+                     xorder, yorder,
                      xbreaks, ybreaks,
                      params.orthology_method,
                      sort_y_by_x = sort_y_by_x,
@@ -2137,7 +2164,7 @@ rule plot_synteny_of_ALGs_plus_species:
 
         # Always sort the y-axis by the x-axis
         sort_y_by_x = True
-        print("HMM x, sample y")
+        #print("HMM x, sample y")
         # First we plot the ALGs on the x-axis and the species on the y-axis
         synteny_plot_sheet(input.rbh, output.rbh, output.xy,
                      xsample, ysample,
@@ -2151,7 +2178,7 @@ rule plot_synteny_of_ALGs_plus_species:
                      prot_to_color_hmm_results = None)
 
         # Now we plot the ALGs on the y-axis and the species on the x-axis
-        print("HMM y, sample x")
+        #print("HMM y, sample x")
         synteny_plot_sheet(input.rbh, output.rbh, output.yx,
                      ysample, xsample,
                      s2c2s,

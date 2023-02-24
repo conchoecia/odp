@@ -132,7 +132,8 @@ class LG_db:
                     print("Species {} and {} have identical protein id columns. Keeping {}.".format(
                         species[i], species[j], sorted([species[i], species[j]])[0]))
                     drop_these_species.add(sorted([species[i], species[j]])[1])
-        print("(Don't worry, it's a duplicate and won't affect your results.) Dropping these species: {}".format(dgrop_these_species), file = sys.stderr)
+        if len(drop_these_species) != 0:
+            print("(Don't worry, it's a duplicate and won't affect your results.) Dropping these species: {}".format(drop_these_species), file = sys.stderr)
         # now that we have a list of species to drop, drop them from a copy of rbhdf
         del tempdf
         tempdf = rbhdf.copy()
@@ -257,8 +258,6 @@ class LG_db:
 
         # check which species in plotdf correspond with which species in
         species_to_LG_species = {}
-        print(plotdf.columns)
-        print(all_species)
         for thissp in all_species:
             temp = self._sp_matches_which_db_species(plotdf["{}_gene".format(thissp)])
             if temp: # if not None
