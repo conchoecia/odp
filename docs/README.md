@@ -1,4 +1,4 @@
-<img src="https://github.com/conchoecia/odp/blob/main/figs/dotplot_fig_v2-01.jpg" width="250">
+<img src="https://github.com/conchoecia/odp/blob/main/docs/dotplot_fig_v2-01.jpg" width="250">
 
 # odp - Oxford Dot Plots
 
@@ -62,6 +62,8 @@ Your active python environment must be python 3. This software is implemented in
 ```
 snakemake
 matplotlib
+networkx
+scipy
 pandas
 numpy
 ```
