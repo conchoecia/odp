@@ -3,11 +3,15 @@ This script takes a rbh file, builds a MSA of the proteins,
  builds an HMM of the protein alignment, and puts everything
  into a folder for later use by other programs.
 """
+# This block imports fasta-parser as fasta
+import os
+import sys
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
 
 import ast
-from Bio import SeqIO
-from Bio import SeqRecord
-from Bio import Seq
 from itertools import groupby
 from itertools import product
 import math
@@ -95,8 +99,8 @@ rule generate_fasta_of_each_rbh:
         print(" - Making a dict of rbh_to_fasta_records.")
         rbh_to_records = {}
         for this_species in rbh_species:
-            inhandle = open(config["species"][this_species]["proteins"], "r")
-            for record in SeqIO.parse(inhandle, "fasta"):
+            infile = config["species"][this_species]["proteins"]
+            for record in fasta.parse(infile):
                 if record.id in species_to_gene_to_rbh[this_species]:
                     thisrbh = species_to_gene_to_rbh[this_species][record.id]
                     record.name = record.id
@@ -126,7 +130,7 @@ rule generate_fasta_of_each_rbh:
             outfile = "{}/{}.fasta".format(params.fasta_dir, thisrbh)
             with open(outfile, "w") as output_handle:
                 for thisrec in rbh_to_records[thisrbh]:
-                    SeqIO.write(thisrec, output_handle, "fasta")
+                    print(thisrec, file = output_handle)
 
 rule align_fasta_of_each_group:
     input:

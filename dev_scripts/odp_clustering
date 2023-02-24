@@ -4,7 +4,14 @@ This script performs mutual-best protein diamond BLAST searches, n-ways,
 
 This script does not support y-axis species
 """
-from Bio import SeqIO
+# This block imports fasta-parser as fasta
+import os
+import sys
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
+
 from itertools import groupby
 from itertools import combinations
 import matplotlib
@@ -87,12 +94,10 @@ def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
                 splitd = line.split()
                 keep_these.add(splitd[0])
     outhandle = open(output_fasta, "w")
-    inhandle =  open(input_fasta, "r")
-    for record in SeqIO.parse(inhandle, "fasta"):
+    for record in fasta.parse(input_fasta, "fasta"):
         if record.id in keep_these and record.id not in printed_already:
-            SeqIO.write(record, outhandle, "fasta")
+            print(record, file = outhandle)
             printed_already.add(record.id)
-    inhandle.close()
     outhandle.close()
 
 rule filter_prots_x:

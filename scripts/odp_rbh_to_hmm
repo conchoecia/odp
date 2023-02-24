@@ -6,11 +6,15 @@ The output of this is an rbh .tsv file, with or without a group column,
  that has the rbhs and their orthologs. It is allowed for there to be missing
  reads.
 """
+# This block imports fasta-parser as fasta
+import os
+import sys
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
 
 import ast
-from Bio import SeqIO
-from Bio import SeqRecord
-from Bio import Seq
 from itertools import groupby
 from itertools import product
 import math
@@ -102,8 +106,8 @@ rule generate_fasta_of_each_rbh:
         print(" - Making a dict of rbh_to_fasta_records.")
         rbh_to_records = {}
         for this_species in rbh_species:
-            inhandle = open(config["species"][this_species]["proteins"], "r")
-            for record in SeqIO.parse(inhandle, "fasta"):
+            infile = config["species"][this_species]["proteins"]
+            for record in fasta.parse(infile):
                 if record.id in species_to_gene_to_rbh[this_species]:
                     thisrbh = species_to_gene_to_rbh[this_species][record.id]
                     record.name = record.id
@@ -129,7 +133,7 @@ rule generate_fasta_of_each_rbh:
             outfile = config["tool"] + "/fasta/unaligned/{}.fasta".format(thisrbh)
             with open(outfile, "w") as output_handle:
                 for thisrec in rbh_to_records[thisrbh]:
-                    SeqIO.write(thisrec, output_handle, "fasta")
+                    print(thisrec, file = output_handle)
 
 rule align_fasta_of_each_group:
     input:

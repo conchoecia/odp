@@ -2,9 +2,14 @@
 This script performs mutual-best protein diamond BLAST searches,
 then it determines the optimal order to plot the y-axis sequences
 """
-from Bio import SeqIO
-from Bio import SeqRecord
-from Bio import Seq
+# This block imports fasta-parser as fasta
+import os
+import sys
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
+
 from itertools import groupby
 import matplotlib
 import math
@@ -12,7 +17,6 @@ from operator import itemgetter
 import pandas as pd
 import numpy as np
 import statistics
-import sys
 
 configfile: "config.yaml"
 
@@ -136,12 +140,10 @@ def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
                 splitd = line.split()
                 keep_these.add(splitd[0])
     outhandle = open(output_fasta, "w")
-    inhandle =  open(input_fasta, "r")
-    for record in SeqIO.parse(inhandle, "fasta"):
+    for record in fasta.parse(input_file):
         if record.id in keep_these and record.id not in printed_already:
-            SeqIO.write(record, outhandle, "fasta")
+            print(record, file = outhandle)
             printed_already.add(record.id)
-    inhandle.close()
     outhandle.close()
 
 rule filter_prots_x:
@@ -1447,10 +1449,9 @@ rule make_pseudo_genome:
         df = df[["yscaf", "xscaf"]]
         print(df)
         #print(df["yscaf"])
-        inhandle =  open(input.ygenome, "r")
         outhandle = open(output.ygenome, "w")
         seq_to_record = {}
-        for record in SeqIO.parse(inhandle, "fasta"):
+        for record in fasta.parse(input.ygenome):
             if record.id in set(df["yscaf"]):
                 seq_to_record[record.id] = record
 
@@ -1460,9 +1461,8 @@ rule make_pseudo_genome:
             subdf = df.loc[df["xscaf"] == xchr, ]
             pseudo_records = [str(seq_to_record[x].seq) for x in subdf["yscaf"]]
             newid = "{}_pseudo_{}_{}".format(params.yname, params.xname, xchr)
-            catd = SeqRecord.SeqRecord(Seq.Seq("".join(["N"]*100).join(pseudo_records)), id = newid)
-            SeqIO.write(catd, outhandle, "fasta")
-        inhandle.close()
+            catd = fasta.Record("".join(["N"]*100).join(pseudo_records), newid, "")
+            print(catd, file = outhandle)
         outhandle.close()
 
 rule make_pseudo_chrom_to_loc:
@@ -1486,9 +1486,8 @@ rule make_pseudo_chrom_to_loc:
         df["ystart"] = 0
         df["ystop"] = 0
         #print(df["yscaf"])
-        inhandle =  open(input.ygenome, "r")
         seq_to_record = {}
-        for record in SeqIO.parse(inhandle, "fasta"):
+        for record in fasta.parse(input.ygenome):
             if record.id in set(df["yscaf"]):
                 df.loc[df["yscaf"] == record.id, "ylen"] = len(record.seq)
 
@@ -1529,7 +1528,6 @@ rule make_pseudo_chrom_to_loc:
                             gene, newid, direc, start, stop),
                               file = outhandle)
         outhandle.close()
-        inhandle.close()
 
 rule sort_chrom:
     input:
@@ -1559,10 +1557,8 @@ rule filter_prots:
                 if line:
                     keep_genes.add( line.split()[0])
 
-        inhandle =  open(input.yprots, "r")
         outhandle = open(output.yprots, "w")
-        for record in SeqIO.parse(inhandle, "fasta"):
+        for record in fasta.parse(input.yprots, "fasta"):
             if record.id in keep_genes:
-                SeqIO.write(record, outhandle, "fasta")
-        inhandle.close()
+                print(record, file = outhandle)
         outhandle.close()

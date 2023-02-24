@@ -391,12 +391,10 @@ def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
                 splitd = line.split()
                 keep_these.add(splitd[0])
     outhandle = open(output_fasta, "w")
-    inhandle =  open(input_fasta, "r")
-    for record in fasta.parse(inhandle):
+    for record in fasta.parse(input.fasta):
         if record.id in keep_these and record.id not in printed_already:
-            print(record.format(wrap=60), file = outhandle)
+            print(record, file = outhandle)
             printed_already.add(record.id)
-    inhandle.close()
     outhandle.close()
 
 ###### THESE ARE THE FUNCTIONS FOR ODP and ODP_SANDWICH

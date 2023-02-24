@@ -17,7 +17,6 @@ Step 3: Filters the groupby file to only include groups of a size with a FDR
 Step 4: Convert the filtered groupby file back to a rbh file.
 """
 
-from Bio import SeqIO
 import copy
 import ast
 from itertools import groupby
@@ -29,6 +28,7 @@ from multiprocessing import Pool
 import math
 import networkx as nx
 from operator import itemgetter
+import os
 import pandas as pd
 import numpy as np
 import statistics
@@ -134,27 +134,6 @@ rule all:
         [config["tool"] + "/step3-unwrap/{}.filt.unwrapped.rbh".format(
             "_".join(thisanalysis)) for thisanalysis in analyses_list]
 
-def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
-    """
-    takes a chrom file, only keeps proteins in input_fasta from chrom file,
-     saves those prots to output_fasta
-    """
-    keep_these = set()
-    printed_already = set()
-    with open(chrom_file, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                splitd = line.split()
-                keep_these.add(splitd[0])
-    outhandle = open(output_fasta, "w")
-    inhandle =  open(input_fasta, "r")
-    for record in SeqIO.parse(inhandle, "fasta"):
-        if record.id in keep_these and record.id not in printed_already:
-            SeqIO.write(record, outhandle, "fasta")
-            printed_already.add(record.id)
-    inhandle.close()
-    outhandle.close()
 
 rule filter_prots:
     """
@@ -168,7 +147,7 @@ rule filter_prots:
         pep = config["tool"] + "/db/{sample}_prots.pep"
     threads: 1
     run:
-        filter_fasta_chrom(input.chrom, input.prots, output.pep)
+        odpf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
 
 rule make_diamond_and_blast_db:
     input:

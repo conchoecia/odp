@@ -6,15 +6,14 @@ Author: Darrin Schultz
 Email : dts@ucsc.edu
 
 """
-# first import sys because we must look in other directories
+# This block imports fasta-parser as fasta
 import os
 import sys
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
 dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
-
-#from Bio import SeqIO
 import fasta
+
 from itertools import permutations
 from itertools import combinations
 import logging
@@ -28,10 +27,10 @@ from matplotlib.font_manager import FontProperties
 import networkx as nx
 import numpy as np
 import odp_functions as odpf
+import odp_plotting_functions as odp_plot
 import odp_color_manager as oc
 import pandas as pd
 import scipy.stats as stats
-import sys
 
 configfile: "config.yaml"
 
@@ -95,26 +94,6 @@ for this in config["species"]:
 def flatten(list_of_lists):
     """flatten a list of lists, unique only"""
     return list(set([item for sublist in list_of_lists for item in sublist]))
-
-def format_matplotlib():
-    """format the fonts and print options for the plots"""
-    font = {'family' : 'sans-serif',
-            'sans-serif' : 'Helvetica',
-            'weight' : 'normal',
-            'size'   : 12}
-
-    matplotlib.rc('font', **font)
-
-    grid = {"color": ".95", "linestyle": "-"}
-    # grid style
-    matplotlib.rc('grid', **grid)
-
-    # Preserve the vertical order of embedded images:
-    matplotlib.rcParams['image.composite_image'] = False
-    # text as font in pdf
-    matplotlib.rcParams['pdf.fonttype'] = 42
-    matplotlib.rcParams['ps.fonttype'] = 42
-
 
 # check if these fields in config. If not, add to config.
 check_these = ["prot_to_color", "prot_to_color_rbh"]
@@ -1012,7 +991,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     #print(plotdf)
 
     # CALL THIS TO GET THE VISUAL STYLE WE NEED
-    format_matplotlib()
+    odp_plot.format_matplotlib()
 
     # now make a scatter plot
     #figDouble = 16
