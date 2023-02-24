@@ -1,61 +1,264 @@
 """
-This script performs mutual-best protein diamond BLAST searches,
-then it determines the optimal order to plot the y-axis sequences
+These are functions that are shared by odp, odp_trio, and other scripts
 """
-# This block imports fasta-parser as fasta
+# this is all needed to load our custom fasta parser
 import os
 import sys
-snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+snakefile_path = os.path.dirname(os.path.abspath(__file__)) 
 dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
 import fasta
 
-from itertools import groupby
-import matplotlib
-import math
-from operator import itemgetter
+# now import everything else
 import pandas as pd
-import numpy as np
-import statistics
-import odp_functions as odpf
+from itertools import combinations
+from itertools import product
+
+# TODO implement this function soon after release
+#def gff_or_chrom(filepath):
+#    """
+#    This function takes a filepath and determines if it is a gff or a chrom file.
+#    Returns "gff" or "chrom", or throws an error if the software can't decide.
+#    """
+#    # First check what the file extension is
 
 
-configfile: "config.yaml"
+def reciprocal_best_permissive_blastp_or_diamond_blastp(
+        x_to_y_blastp_results, y_to_x_blastp_results, outfile):
+    """
+    This function finds reciprocal best blastp hits between two samples.
+    The input is a blastp results file where x was blasted against y,
+      and a blastp results file where y was blasted against x.
 
-# check for legal config entries. Useful for finding misspelled entries
-legal = ["proteins", "prot_to_loc", "genome", "minscafsize",
-         "manual_breaks", "chrom_to_color", "plotorder",
-         "noylines", "noxlines", "sort_by_x_coord_blast" ]
-illegal = set()
-for this_axis in ["xaxisspecies", "yaxisspecies"]:
-    if this_axis in config:
-        for this_sample in config[this_axis]:
-            for key in config[this_axis][this_sample]:
-                if key not in legal:
-                    illegal.add(key)
-if len(illegal) > 0:
-    print("We found some fields in your config file that are not used by this program.")
-    print("The only fields allowed for individual samples are:")
-    for key in legal:
-        print("  - {}".format(key))
-    print("The keys that we found that are not allowed/in the list above are:")
-    for key in illegal:
-        print("  - {}".format(key))
-    sys.exit()
+    The output format is just the rows of the blastp results from the x_to_y file.
+    Saves it as a df to outfile.
 
-#make fake breaks
-for this_axis in ["xaxisspecies", "yaxisspecies"]:
-    if this_axis in config:
-        for this_one in config[this_axis]:
-            if "manual_breaks" not in config[this_axis][this_one]:
-                config[this_axis][this_one]["manual_breaks"] = []
-            if "minscafsize" not in config[this_axis][this_one]:
-                config[this_axis][this_one]["minscafsize"] = 5000
+    This algorithm does not have an absolute best, but leaves all possible
+      best hits based on e-value to be filtered out later by
+      analyzing a graph of the blast results
+    """
+    f_raw = pd.read_csv(x_to_y_blastp_results, sep="\t")
+    f_raw.columns = ["qseqid", "sseqid", "pident", "length",
+                   "mismatch", "gapopen", "qstart", "qend",
+                   "sstart", "send", "evalue", "bitscore"]
+    fdf = (f_raw.groupby("qseqid")
+             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
+             .reset_index(drop=True)
+          )
 
-# we require that you define yaxisspecies for this. Only the yaxisspecies
-#  will have a pseudogenome created based on the xaxisspecies
-if "yaxisspecies" not in config:
-    raise IOError(" you must have yaxisspecies")
+    r_raw = pd.read_csv(y_to_x_blastp_results, sep="\t")
+    r_raw.columns = ["qseqid", "sseqid", "pident", "length",
+                   "mismatch", "gapopen", "qstart", "qend",
+                   "sstart", "send", "evalue", "bitscore"]
+    rdf = (r_raw.groupby("qseqid")
+             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
+             .reset_index(drop=True)
+          )
+    rdf.columns = ["sseqid", "qseqid", "pident", "length",
+                   "mismatch", "gapopen", "qstart", "qend",
+                   "sstart", "send", "evalue", "bitscore"]
+    rdf = rdf[["qseqid","sseqid"]]
+
+    #These are the singleton RBH
+    new_df = pd.merge(fdf, rdf,  how='inner', left_on=['qseqid','sseqid'], right_on = ['qseqid','sseqid'])
+    new_df.to_csv(outfile, sep="\t", index = False, header = False)
+
+def reciprocal_best_hits_blastp_or_diamond_blastp(
+        x_to_y_blastp_results, y_to_x_blastp_results, outfile):
+    """
+    This function finds reciprocal best blastp hits between two samples.
+    The input is a blastp results file where x was blasted against y,
+      and a blastp results file where y was blasted against x.
+
+    The output format is just the rows of the blastp results from the x_to_y file.
+    Saves it as a df to outfile.
+
+    This algorithm is permissive in that it finds the best hits between the two
+      species even if the e-values for the "best hit" are equivalent. This fixes
+      one of the problems with blastp results. The results are still reciprocal
+      best, though.
+    """
+    f_raw = pd.read_csv(x_to_y_blastp_results, sep="\t")
+    f_raw.columns = ["qseqid", "sseqid", "pident", "length",
+                   "mismatch", "gapopen", "qstart", "qend",
+                   "sstart", "send", "evalue", "bitscore"]
+    fdf = f_raw.sort_values(["qseqid", "bitscore", "evalue", "pident"], ascending=[True, False, True, False]).drop_duplicates(subset="qseqid")
+
+    r_raw = pd.read_csv(y_to_x_blastp_results, sep="\t")
+    r_raw.columns = ["qseqid", "sseqid", "pident", "length",
+                   "mismatch", "gapopen", "qstart", "qend",
+                   "sstart", "send", "evalue", "bitscore"]
+    rdf = r_raw.sort_values(["qseqid", "bitscore", "evalue", "pident"], ascending=[True, False, True, False]).drop_duplicates(subset="qseqid")
+    rdf.columns = ["sseqid", "qseqid", "pident", "length",
+                   "mismatch", "gapopen", "qstart", "qend",
+                   "sstart", "send", "evalue", "bitscore"]
+    rdf = rdf[["sseqid","qseqid"]]
+
+    #These are the singleton RBH
+    new_df = pd.merge(fdf, rdf,  how='inner', left_on=['qseqid','sseqid'], right_on = ['qseqid','sseqid'])
+    #these rows are a little pedantic and we don't really need to do them
+    new_df = new_df.sort_values(["qseqid","bitscore"],
+                                ascending=[True, False]).drop_duplicates(
+                                    subset="qseqid")
+    new_df = new_df.sort_values(["sseqid","bitscore"],
+                                ascending=[True, False]).drop_duplicates(
+                                    subset="sseqid")
+
+    # now filter
+    f_seqs = new_df["qseqid"]
+    r_seqs = new_df["sseqid"]
+    fdf = f_raw.copy()
+    fdf = (fdf.groupby("qseqid")
+             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
+             .reset_index(drop=True)
+          )
+    rdf = r_raw.copy()
+    rdf = (rdf.groupby("qseqid")
+             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
+             .reset_index(drop=True)
+          )
+
+    # only get the things that we haven't seen yet
+    fdf2 = fdf.loc[~fdf["qseqid"].isin(f_seqs)]
+    fdf2 = fdf2.loc[~fdf2["sseqid"].isin(r_seqs)]
+    rdf2 = rdf.loc[ ~rdf["sseqid"].isin(f_seqs)]
+    rdf2 = rdf2.loc[~rdf2["qseqid"].isin(r_seqs)]
+
+    #swap columns for merge
+    rdf2.columns = ["sseqid", "qseqid", "pident", "length",
+                   "mismatch", "gapopen", "qstart", "qend",
+                   "sstart", "send", "evalue", "bitscore"]
+    rdf2 = rdf2[["sseqid","qseqid"]]
+
+    new_df2 = pd.merge(fdf2, rdf2,  how='inner', left_on=['qseqid','sseqid'], right_on = ['qseqid','sseqid'])
+    # get rid of duplicates
+    new_df2 = new_df2.sort_values(["qseqid","bitscore"],
+                                ascending=[True, False]).drop_duplicates(
+                                    subset="qseqid")
+    new_df2 = new_df2.sort_values(["sseqid","bitscore"],
+                                ascending=[True, False]).drop_duplicates(
+                                    subset="sseqid")
+
+    # this is also pedantic and shouldn't do anything
+    finaldf = pd.concat([new_df, new_df2])
+    prelen = len(finaldf)
+    finaldf = finaldf.sort_values(["qseqid","bitscore"],
+                                ascending=[True, False]).drop_duplicates(
+                                    subset="qseqid")
+    finaldf = finaldf.sort_values(["sseqid","bitscore"],
+                                ascending=[True, False]).drop_duplicates(
+                                    subset="sseqid")
+    if prelen != len(finaldf):
+        raise IOError("something happened in parsing that shouldn't have. These filtering steps should not have done anything")
+    finaldf.to_csv(outfile, sep="\t", index = False, header = False)
+
+def reciprocal_best_hits_jackhmmer(
+        x_to_y_blastp_results, y_to_x_blastp_results, outfile):
+    """
+    This function finds reciprocal best jackhmmer hits between two samples.
+    The input is a blastp results file where x was jackhmmer'd against y,
+      and a blastp results file where y was jackhmmer'd against x.
+
+    The output format is just the rows of the blastp results from the x_to_y file.
+    Saves it as a df to outfile.
+
+    This algorithm is permissive in that it finds the best hits between the two
+      species even if the e-values for the "best hit" are equivalent. This fixes
+      one of the problems with blastp results. The results are still reciprocal
+      best, though.
+    """
+    jackhmmercol = ["target_name", "accession",  "query_name",
+                    "accession",
+                    "evalue",  "score",          "bias",
+                    "dom_evalue2", "dom_score2", "bias2",
+                    "exp", "reg", "clu",
+                    "ov", "env", "dom", "rep", "inc",
+                    "description_of_target"]
+    f_raw = pd.read_csv(x_to_y_blastp_results,
+                        sep = "\s+", comment = "#",
+                        usecols=range(len(jackhmmercol)))
+    f_raw.columns = jackhmmercol
+    fdf = f_raw.sort_values(["query_name", "score", "evalue" ], ascending=[True, False, True]).drop_duplicates(subset="query_name")
+    #fdf = f_raw.sort_values(["query_name", "score", "evalue" ], ascending=[True, False, True]).groupby("query_name").head(2)
+
+
+    r_raw = pd.read_csv(y_to_x_blastp_results,
+                        sep="\s+", comment = "#",
+                        usecols=range(len(jackhmmercol)))
+    r_raw.columns = jackhmmercol
+    rdf = r_raw.sort_values(["query_name", "score", "evalue"], ascending=[True, False, True]).drop_duplicates(subset="query_name")
+    #rdf = r_raw.sort_values(["query_name", "score", "evalue"], ascending=[True, False, True]).groupby("query_name").head(2)
+
+    rdf.columns = ["query_name", "accession",  "target_name",
+                    "accession",
+                    "evalue",  "score",          "bias",
+                    "dom_evalue2", "dom_score2", "bias2",
+                    "exp", "reg", "clu",
+                    "ov", "env", "dom", "rep", "inc",
+                    "description_of_target"]
+
+    rdf = rdf[["target_name","query_name"]]
+
+    #These are the singleton RBH
+    new_df = pd.merge(fdf, rdf,  how='inner',
+                      left_on  = ['query_name','target_name'],
+                      right_on = ['query_name','target_name'])
+    #these rows are a little pedantic and we don't really need to do them
+    new_df = new_df.sort_values(["query_name","score"],
+                                ascending=[True, False]).drop_duplicates(
+                                    subset="query_name")
+    new_df = new_df.sort_values(["target_name","score"],
+                                ascending=[True, False]).drop_duplicates(
+                                    subset="query_name")
+
+    new_df.columns = ["sseqid", "accession",  "qseqid",
+                      "accession",
+                      "evalue",  "bitscore",          "bias",
+                      "dom_evalue2", "dom_score2", "bias2",
+                      "exp", "reg", "clu",
+                      "ov", "env", "dom", "rep", "inc",
+                      "description_of_target"]
+    new_df["pident"]   = 0
+    new_df["length"]   = 0
+    new_df["mismatch"] = 0
+    new_df["gapopen"]  = 0
+    new_df["qstart"]   = 0
+    new_df["qend"]     = 0
+    new_df["sstart"]   = 0
+    new_df["send"]     = 0
+    new_df = new_df[["qseqid", "sseqid", "pident", "length",
+                   "mismatch", "gapopen", "qstart", "qend",
+                   "sstart", "send", "evalue", "bitscore"]]
+    print(new_df)
+    new_df.to_csv(outfile, sep="\t", index = False, header = False)
+
+
+def check_legality(config):# check for legal config entries. Useful fr finding misspelled entries
+    legal = ["proteins", "prot_to_loc", "genome", "genus",
+             "minscafsize", "manual_breaks", "chrom_to_color",
+             "plotorder", "species", "prot_to_group"]
+    illegal = set()
+    for this_axis in ["xaxisspecies", "yaxisspecies"]:
+        if this_axis in config:
+            for this_sample in config[this_axis]:
+                for key in config[this_axis][this_sample]:
+                    if key not in legal:
+                        illegal.add(key)
+    if len(illegal) > 0:
+        print("We found some fields in your config file that are not used by this program.")
+        print("The only fields allowed for individual samples are:")
+        for key in legal:
+            print("  - {}".format(key))
+        print("The keys that we found that are not allowed/in the list above are:")
+        for key in illegal:
+            print("  - {}".format(key))
+        sys.exit()
+    for thisdirection in ["xaxisspecies", "yaxisspecies"]:
+        if thisdirection in config:
+            for thissample in config[thisdirection]:
+                if "_" in thissample:
+                    raise IOError("Sample names can't have '_' char: {}".format(thissample))
+
 
 def flatten(list_of_lists):
     """flatten a list of lists, unique only"""
@@ -73,29 +276,7 @@ def expand_avoid_matching_x_and_y(filestring, xsamples, ysamples):
         for ysamp in ysamples:
             if xsamp != ysamp:
                 outlist.append(filestring.format(xsamp, ysamp))
-    #print(outlist)
-    #print(type(outlist))
-    return [x for x in outlist]
-
-def expand_avoid_matching_x_and_y_kwargs(filestring, **kwargs):
-    """
-    this works like snakemake's expand function but does not generate
-     files where xsample equals ysample
-
-    outputs a list of files
-    """
-    outlist = []
-    keys = [x for x in kwargs]
-    values = [[y for y in kwargs[x]] for x in keys]
-    for pos0 in values[0]:
-        for pos1 in values[1]:
-            if pos0 != pos1:
-                thesekwargs = {keys[0]: pos0, keys[1]: pos1}
-                print(thesekwargs)
-                outlist.append(filestring.format(**thesekwargs))
-    #print(outlist)
-    #print(type(outlist))
-    return [x for x in outlist]
+    return outlist
 
 def expand_avoid_matching_x_and_y_third(filestring, xsamples, ysamples, third):
     """
@@ -111,230 +292,113 @@ def expand_avoid_matching_x_and_y_third(filestring, xsamples, ysamples, third):
         for ysamp in ysamples:
             if xsamp != ysamp:
                 for t in third:
+                    print("hey", xsamp, ysamp, third)
                     outlist.append(filestring.format(xsamp, ysamp, t))
     return outlist
 
-
-rule all:
-    input:
-        expand_avoid_matching_x_and_y("synteny_analysis/plots/synteny_uncolored/{}_and_{}_synteny_manualbreaks.pdf",
-                config["xaxisspecies"], config["yaxisspecies"]),
-        expand_avoid_matching_x_and_y("synteny_analysis/xblast_grouporder/{}_and_{}_ygrouporder.tsv",
-                config["xaxisspecies"], config["yaxisspecies"]),
-        expand_avoid_matching_x_and_y_kwargs("synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.fasta",
-                xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
-        expand_avoid_matching_x_and_y_kwargs("synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.chrom",
-                xsample = config["xaxisspecies"], ysample = config["yaxisspecies"]),
-        expand_avoid_matching_x_and_y_kwargs("synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.pep",
-                xsample = config["xaxisspecies"], ysample = config["yaxisspecies"])
-
-
-rule filter_prots_x:
+def expand_avoid_matching(filestring, **kwargs):
     """
-    Sometimes the prot file with have sequences that are not present in
-     the chrom file. Make a prot file of only the proteins in the chrom file.
+    this works like snakemake's expand function but does not generate
+     files where xsample equals ysample
+
+    outputs a list of files
     """
-    input:
-        prots = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["proteins"],
-        chrom = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["prot_to_loc"]
-    output:
-        pep = "synteny_analysis/db/xaxis/{xsample}_prots.pep"
-    threads: 1
-    run:
-        odpf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
+    outlist = []
+    keys = [x for x in kwargs]
+    values = [[y for y in kwargs[x]] for x in keys]
+    nonmatching_products = [x for x in list(product(*values)) if len(set(x)) == len(x)]
+    for entry in nonmatching_products:
+        these_kwargs = {}
+        for i in range(len(entry)):
+            these_kwargs[keys[i]] = entry[i]
+        outlist.append(filestring.format(**these_kwargs))
+    return [x for x in outlist]
 
-rule filter_prots_y:
+def expand_avoid_matching_all_third(filestring, **kwargs):
     """
-    Sometimes the prot file with have sequences that are not present in
-     the chrom file. Make a prot file of only the proteins in the chrom file.
+    this works like snakemake's expand function but does not generate
+     files where xsample equals ysample
+
+    outputs a list of files
     """
-    input:
-        prots = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["proteins"],
-        chrom = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"]
-    output:
-        pep = "synteny_analysis/db/yaxis/{ysample}_prots.pep"
-    threads: 1
-    run:
-        odpf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
+    if "third" not in kwargs:
+        raise IOError("third not in kwargs")
+    outlist = []
+    keys = [x for x in kwargs if x != "third"]
+    values = [[y for y in kwargs[x]] for x in keys]
+    nonmatching_products = [x for x in list(product(*values)) if len(set(x)) == len(x)]
+    for entry in nonmatching_products:
+        these_kwargs = {}
+        for i in range(len(entry)):
+            these_kwargs[keys[i]] = entry[i]
+        for t in kwargs["third"]:
+            temp_kwargs = these_kwargs
+            temp_kwargs["third"] = t
+            outlist.append(filestring.format(**temp_kwargs))
+    return [x for x in outlist]
 
 
-rule make_diamonddb_x:
-    input:
-        prots = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["proteins"],
-        pep = "synteny_analysis/db/xaxis/{xsample}_prots.pep"
-    output:
-        dmnd = "synteny_analysis/db/xaxis/dmnd/{xsample}_prots.dmnd"
-    threads: workflow.cores - 1
-    shell:
-        """
-        diamond makedb --in {input.pep} --db {output.dmnd}
-        """
-
-rule make_diamonddb_y:
-    input:
-        prots = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["proteins"],
-        pep = "synteny_analysis/db/yaxis/{ysample}_prots.pep"
-    output:
-        dmnd = "synteny_analysis/db/yaxis/dmnd/{ysample}_prots.dmnd"
-    threads: workflow.cores - 1
-    shell:
-        """
-        diamond makedb --in {input.pep} --db {output.dmnd}
-        """
-
-rule diamond_blast_x_to_y:
-    input:
-        xpep = "synteny_analysis/db/xaxis/{xsample}_prots.pep",
-        ydmnd = "synteny_analysis/db/yaxis/dmnd/{ysample}_prots.dmnd",
-    output:
-        blastp = "synteny_analysis/blastp_results/xtoy/{xsample}_against_{ysample}.blastp",
-    threads: workflow.cores - 1
-    shell:
-        """
-        diamond blastp --query {input.xpep} --db {input.ydmnd} \
-          --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
-        """
-
-rule diamond_blast_y_to_x:
-    input:
-        ypep = "synteny_analysis/db/yaxis/{ysample}_prots.pep",
-        xdmnd = "synteny_analysis/db/xaxis/dmnd/{xsample}_prots.dmnd",
-    output:
-        blastp = "synteny_analysis/blastp_results/ytox/{ysample}_against_{xsample}.blastp",
-    threads: workflow.cores - 1
-    shell:
-        """
-        diamond blastp --query {input.ypep} --db {input.xdmnd} \
-          --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
-        """
-
-rule absolute_best_from_blast_x_to_y:
-    input:
-        blastp = "synteny_analysis/blastp_results/xtoy/{xsample}_against_{ysample}.blastp",
-    output:
-        blastp = "synteny_analysis/blastp_results/xtoybest/{xsample}_against_{ysample}.blastp",
-    threads: 1
-    shell:
-        """
-        awk 'BEGIN{{former = ""}} {{if ($1 != former){{print($0)}}; former=$1}}' {input.blastp} > {output.blastp}
-        """
-
-rule absolute_best_from_blast_y_to_x:
-    input:
-        blastp = "synteny_analysis/blastp_results/ytox/{ysample}_against_{xsample}.blastp",
-    output:
-        blastp = "synteny_analysis/blastp_results/ytoxbest/{ysample}_against_{xsample}.blastp",
-    threads: 1
-    shell:
-        """
-        awk 'BEGIN{{former = ""}} {{if ($1 != former){{print($0)}}; former=$1}}' {input.blastp} > {output.blastp}
-        """
-
-rule reciprocal_best_hits:
+def generate_coord_structs_from_chrom_to_loc(prot_to_loc_file):
     """
-    finds the reciprocal best hits.
-    reports it in the form of the blastp results from x -> y search
+    This parses a .chrom file and outputs five data structures that are easily
+     used for mapping pandas dataframes.
+    The output is a dict of dicts. Not the most intuitive format but easy for
+     mapping to column values.
+     { "prot_to_scaf":   prot_to_scaf,
+       "prot_to_strand": prot_to_strand,
+       "prot_to_start":  prot_to_start,
+       "prot_to_stop":   prot_to_stop,
+       "prot_to_middle": prot_to_middle }
     """
-    input:
-        ytoxblastp = "synteny_analysis/blastp_results/ytoxbest/{ysample}_against_{xsample}.blastp",
-        xtoyblastp = "synteny_analysis/blastp_results/xtoybest/{xsample}_against_{ysample}.blastp",
-    output:
-        xtoyblastp = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp",
-    threads: 1
-    run:
-        pairs = set()
-        #first look in y_to_x
-        with open(input.ytoxblastp, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    splitd = line.split("\t")
-                    add_this = (splitd[1], splitd[0])
-                    if add_this in pairs:
-                        raise IOError("This set was already found")
-                    else:
-                        pairs.add(add_this)
-        # now go through x_to_y and filter
-        out_handle = open(output.xtoyblastp, "w")
-        with open(input.xtoyblastp, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    splitd = line.split("\t")
-                    check_this = (splitd[0], splitd[1])
-                    if check_this in pairs:
-                        print(line, file=out_handle)
-        out_handle.close()
+    prot_to_scaf   = {}
+    prot_to_strand = {}
+    prot_to_start  = {}
+    prot_to_stop   = {}
+    prot_to_middle = {}
+    print("prot_to_loc_file", prot_to_loc_file)
+    with open(prot_to_loc_file, "r") as f:
+       for line in f:
+           line = line.strip()
+           if line:
+               splitd = line.split()
+               prot = splitd[0]
+               # add things now
+               prot_to_scaf[prot]   = splitd[1]
+               prot_to_strand[prot] = splitd[2]
+               start = int(splitd[3])
+               prot_to_start[prot]  = start
+               stop = int(splitd[4])
+               prot_to_stop[prot]   = stop
+               stop = int(splitd[4])
+               prot_to_middle[prot] = int(start + (stop - start)/2)
+    return { "prot_to_scaf":   prot_to_scaf,
+             "prot_to_strand": prot_to_strand,
+             "prot_to_start":  prot_to_start,
+             "prot_to_stop":   prot_to_stop,
+             "prot_to_middle": prot_to_middle }
 
-rule make_recip_table_for_marginplot:
-    input:
-        xtoyblastp = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp",
-    output:
-        table = "synteny_analysis/blastp_results/reciprocal_best/table_for_marginplot/{xsample}_and_{ysample}_peridentity_length.tsv",
-    threads: 1
-    shell:
-        """
-        echo "" | awk '{{printf("PercentIdentity\\tMatchLength\\n")}}' > {output.table}
-        cat {input.xtoyblastp} | cut -f3,4 >> {output.table}
-        """
+def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
+    """
+    takes a chrom file, only keeps proteins in input_fasta from chrom file,
+     saves those prots to output_fasta
+    """
+    keep_these = set()
+    printed_already = set()
+    with open(chrom_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                splitd = line.split()
+                keep_these.add(splitd[0])
+    outhandle = open(output_fasta, "w")
+    for record in fasta.parse(input_fasta):
+        if record.id in keep_these and record.id not in printed_already:
+            print(record, file = outhandle)
+            printed_already.add(record.id)
+    outhandle.close()
 
-rule make_identity_marginplot:
-    input:
-        table = "synteny_analysis/blastp_results/reciprocal_best/table_for_marginplot/{xsample}_and_{ysample}_peridentity_length.tsv",
-    output:
-        plot = "synteny_analysis/plots/sample_similarity/{xsample}_and_{ysample}_peridentity_length.pdf"
-    params:
-        stem = "synteny_analysis/plots/sample_similarity/{xsample}_and_{ysample}_peridentity_length",
-        xsample = lambda wildcards: wildcards.xsample,
-        ysample = lambda wildcards: wildcards.ysample
-    threads: 1
-    shell:
-        """
-        pauvre custommargin -i {input.table} --fileform pdf \
-          --xcol MatchLength --ycol PercentIdentity \
-          -o {params.stem} --no_timestamp \
-          --plot_min_y 0 --plot_max_y 100 \
-          --plot_min_x 0 --plot_max_x 2000 \
-          -t "Protein Identity of {params.xsample} and {params.ysample}"
-        """
-
-rule get_genome_coords_x:
-    input:
-        genome = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["genome"]
-    output:
-        coords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
-    threads:
-        1
-    params:
-        minsize = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["minscafsize"]
-    shell:
-        """
-        bioawk -cfastx '{{ if (length($seq) >= {params.minsize}) {{ \
-                           print($name, length($seq), sum)  }} \
-                        }}' {input.genome} | \
-          sort -k2 -nr | \
-          awk '{{sum = sum + $2; print($1, $2, sum, sum - $2) }}' > {output.coords}
-        """
-
-rule get_genome_coords_y:
-    input:
-        genome = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["genome"]
-    output:
-        coords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
-    threads:
-        1
-    params:
-        minsize = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["minscafsize"]
-    shell:
-        """
-        bioawk -cfastx '{{ if (length($seq) >= {params.minsize}) {{ \
-                           print($name, length($seq), sum)  }} \
-                        }}' {input.genome} | \
-          sort -k2 -nr | \
-          awk '{{sum = sum + $2; print($1, $2, sum, sum - $2) }}' > {output.coords}
-        """
-
-def genome_coords_to_plotstart_dict(path_to_genocoords_file):
+###### THESE ARE THE FUNCTIONS FOR ODP and ODP_SANDWICH
+def genome_coords_to_plotstart_dict(path_to_genocoords_file, **kwargs):
     """
     Takes a genome coords file where:
       - col1: scaf name
@@ -361,7 +425,7 @@ def genome_coords_to_plotstart_dict(path_to_genocoords_file):
                 offset_dict[splitd[0]] = int(splitd[3])
     return offset_dict
 
-def genome_coords_to_offset_dict(path_to_genocoords_file):
+def genome_coords_to_offset_dict(path_to_genocoords_file, **kwargs):
     """
     Takes a genome coords file where:
       - col1: scaf name
@@ -388,7 +452,7 @@ def genome_coords_to_offset_dict(path_to_genocoords_file):
                 offset_dict[splitd[0]] = int(splitd[2])
     return offset_dict
 
-def generate_coord_structs_from_chrom_to_loc(prot_to_loc_file):
+def generate_coord_structs_from_chrom_to_loc(prot_to_loc_file, **kwargs):
     """
     This parses a .chrom file and outputs five data structures that are easily
      used for mapping pandas dataframes.
@@ -405,6 +469,7 @@ def generate_coord_structs_from_chrom_to_loc(prot_to_loc_file):
     prot_to_start  = {}
     prot_to_stop   = {}
     prot_to_middle = {}
+    print("prot_to_loc_file", prot_to_loc_file)
     with open(prot_to_loc_file, "r") as f:
        for line in f:
            line = line.strip()
@@ -427,7 +492,7 @@ def generate_coord_structs_from_chrom_to_loc(prot_to_loc_file):
              "prot_to_middle": prot_to_middle }
 
 def blast_plot_order_helper(coords, sample, xory, xprottoloc, yprottoloc, recip,
-                            xorder, group_file):
+                            xorder, **kwargs):
     """
     This uses the reciprocal blast results to come up with the sort order
      for the y-axis scaffolds. Returns a list of the plot order.
@@ -450,15 +515,12 @@ def blast_plot_order_helper(coords, sample, xory, xprottoloc, yprottoloc, recip,
                   "sstart", "send", "evalue", "bitscore"]
     df = df[["xgene", "ygene", "bitscore", "evalue"]]
 
-
     #print(x_prot_to_loc)
     df["xpos"] = df["xgene"].map(xcoords["prot_to_middle"])
     df["ypos"] = df["ygene"].map(ycoords["prot_to_middle"])
 
     df["xscaf"] = df["xgene"].map(xcoords["prot_to_scaf"])
-    df["yscaf"] = df["ygene"].map(ycoords["prot_to_scaf"])
-
-
+    df["yscaf"] = df["ygene"].map(xcoords["prot_to_scaf"])
     df = df.dropna()
     df = df.sort_values(by=['xpos'])
     df = df.dropna()
@@ -480,17 +542,25 @@ def blast_plot_order_helper(coords, sample, xory, xprottoloc, yprottoloc, recip,
         ascending = [True, True], inplace = True)
     df = df.dropna()
     df.reset_index(drop=True, inplace = True)
-    print(df)
-    print(group_file)
-    df.to_csv(group_file, sep="\t")
-
     #print(list(df.yscaf))
     return(list(df.yscaf))
 
+def config_legal(config):
+    """
+    Use this function to check for config legality
+    """
+    # make sure that plotorder and sort_by_x_coord_blast aren't there together
+    #  These are two conflicting sort order operations.
+    #  Specifically, sort_by_x_coord_blast will mess up plotorder.
+    if ("plotorder" in config["{}axisspecies".format(xory)][sample]) and \
+       ("sort_by_x_coord_blast" in config["{}axisspecies".format(xory)][sample]):
+        raise IOError("""can't have plotorder and sort_by_x_coord_blast in the
+        same sample.""")
+
+
 def parse_coords(coords_file, sample, xory,
                  xprottoloc=None, yprottoloc=None,
-                 recip=None, xorder=None, sort_table = None,
-                 group_file = None):
+                 recip=None, xorder=None, **kwargs):
     """
     This parses the coordinates and returns a
       - coord-to-offset dict (I don't remember what this is for),
@@ -501,6 +571,7 @@ def parse_coords(coords_file, sample, xory,
       - the tick positions
       - the yorder or xorder
     """
+    config = kwargs["config"]
     offset = {}
     max_coord = 0
     lines_at = []
@@ -508,40 +579,9 @@ def parse_coords(coords_file, sample, xory,
     df.columns = ["scaf", "scaflen", "cumsum", "coordstart"]
     # now figure out if we need to sort or not
     drop_nas = True
-    # make sure that plotorder and sort_by_x_coord_blast aren't there together
-    #  These are two conflicting sort order operations.
-    #  Specifically, sort_by_x_coord_blast will mess up plotorder.
-    if ("plotorder" in config["{}axisspecies".format(xory)][sample]) and \
-       ("sort_by_x_coord_blast" in config["{}axisspecies".format(xory)][sample]):
-        raise IOError("""can't have plotorder and sort_by_x_coord_blast in the
-        same sample.""")
 
-    if xory == "x":
-        if sample not in config["xaxisspecies"]:
-            raise IOError("Can't find this xspecies")
-        else:
-            if "plotorder" in config["xaxisspecies"][sample]:
-                plotorder = config["xaxisspecies"][sample]["plotorder"]
-                #print("plot order is: {}".format(plotorder))
-                drop_nas = False
-            else:
-                plotorder = None
-    elif xory == "y":
-        #print("we're in y")
-        if sample not in config["yaxisspecies"]:
-            raise IOError("Can't find this yspecies")
-        else:
-            #print("we're in the sort_by_x_coord_blast of y True")
-            # we need to set up the sort order based on the occurrence in the blast results
-            print("xorder is ")
-            print(xorder)
-            plotorder = blast_plot_order_helper(coords_file, sample, xory,
-                                                xprottoloc, yprottoloc,
-                                                recip, xorder,
-                                                group_file)
-            #print("after plot order in sort_by_x_coord_blast")
-    else:
-        raise IOError("Don't know what this is")
+    plotorder = None
+
     #print("df after xory")
     # now we have determined if we need to sort
     if plotorder != None: # if plotorder has something in it.
@@ -580,7 +620,7 @@ def parse_coords(coords_file, sample, xory,
     return (offset, scaf_to_len, lines_at, max_coord, tick_labels, tick_pos, list(df["scaf"]))
 
 
-def calc_D_for_y_and_x(df, x_offset, y_offset, x_scaf_to_len, y_scaf_to_len):
+def calc_D_for_y_and_x(df, x_offset, y_offset, x_scaf_to_len, y_scaf_to_len, **kwargs):
     """
     This calculates D for both the x and y axes.
     Defined in the 2020 vertebrate synteny paper.
@@ -655,7 +695,7 @@ def calc_D_for_y_and_x(df, x_offset, y_offset, x_scaf_to_len, y_scaf_to_len):
     return df
 
 def determine_breaks(df, scaf_to_breaks_set, scaf_to_offset_dict,
-                     sort_direction, auto_breaks):
+                     sort_direction, auto_breaks, **kwargs):
     """
     determines the major breaks in Dx or Dy to use as partitions.
 
@@ -842,8 +882,7 @@ def determine_breaks(df, scaf_to_breaks_set, scaf_to_offset_dict,
 def gen_plotting_df(ycoords_file, xcoords_file,
                     xprottoloc, yprottoloc,
                     xsample, ysample,
-                    recip, outtable, plotorder_file,
-                    group_file = False):
+                    recip, outtable, plotorder_file, **kwargs):
     """
     Generates a dataframe that will be used by the other parts of the program
      for plotting.
@@ -859,12 +898,12 @@ def gen_plotting_df(ycoords_file, xcoords_file,
     #  xprot_to_scaf in case we need to sort everything based on order of
     #  occurrence on the scaffolds
     x_offset, x_scaf_to_len, vertical_lines_at, xmax, xticklabel, xtickpos, xorder = parse_coords(
-        xcoords_file, xsample, "x")
+        xcoords_file, xsample, "x", **kwargs)
     print("found {} x chromosomes".format(len(x_offset)))
 
     y_offset, y_scaf_to_len, horizontal_lines_at, ymax, yticklabel, ytickpos, yorder = parse_coords(
         ycoords_file, ysample, "y",
-        xprottoloc, yprottoloc, recip, xticklabel, group_file = group_file)
+        xprottoloc, yprottoloc, recip, xticklabel)
     print("found {} y chromosomes".format(len(y_offset)))
 
     # now save the plot order to a file
@@ -944,105 +983,6 @@ def gen_plotting_df(ycoords_file, xcoords_file,
     if outtable:
         df.to_csv(outtable, sep="\t")
 
-rule generate_plotting_df_and_plot_order:
-    """
-    This parses all of the various types of input and generates the df that
-     contains the plotting information like genes, reciprocal-best orthologs.
-
-    Also outputs a file of the plotting order.
-    """
-    input:
-        ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
-        xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
-        xprottoloc = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["prot_to_loc"],
-        yprottoloc = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"],
-        recip = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp"
-    output:
-        table = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
-        plot_order = "synteny_analysis/plot_order/{xsample}_and_{ysample}_plotorder.tsv",
-        group_file     = "synteny_analysis/xblast_grouporder/{xsample}_and_{ysample}_ygrouporder.tsv"
-    threads:
-        1
-    params:
-        xsample  = lambda wildcards: wildcards.xsample,
-        ysample  = lambda wildcards: wildcards.ysample,
-    run:
-        print("printing x")
-        print(config["xaxisspecies"][wildcards.xsample])
-        gen_plotting_df(input.ycoords, input.xcoords,
-                     input.xprottoloc, input.yprottoloc,
-                     params.xsample, params.ysample,
-                     input.recip, output.table,
-                     output.plot_order, group_file = output.group_file)
-
-rule generate_breaks_file:
-    """
-    This rule handles generating a file that defines the breaks within individual
-     scaffolds. This process will:
-      - automatically define breaks if the user wants
-      - manually add breaks that are defined in the config file
-      - manually remove breaks defined in the config file.
-
-    Input for the rule:
-      - the plotting df
-      - the genomecoords for both axes
-
-    Output for the rule:
-      - a subsection of the plotting df that defines where the breaks are
-    """
-    input:
-        table = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
-        ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
-        xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
-    output:
-        xtable_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
-        ytable_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
-        xtable_auto   = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_auto.tsv",
-        ytable_auto   = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_auto.tsv"
-    threads:
-        1
-    params:
-        xsample  = lambda wildcards: wildcards.xsample,
-        ysample  = lambda wildcards: wildcards.ysample,
-        xbreaks  = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["manual_breaks"],
-        ybreaks  = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["manual_breaks"],
-    run:
-        # the breaks are a dict have scafs as key, list of breaks as the values
-        x_breaks = {}
-        for string in params.xbreaks:
-            splitd   = string.split(":")
-            scaf     = splitd[0]
-            position = int(splitd[1])
-            if scaf not in x_breaks:
-                x_breaks[scaf] = set()
-            x_breaks[scaf].add(position)
-        y_breaks = {}
-        for string in params.ybreaks:
-            splitd   = string.split(":")
-            scaf     = splitd[0]
-            position = int(splitd[1])
-            if scaf not in y_breaks:
-                y_breaks[scaf] = set()
-            y_breaks[scaf].add(position)
-        x_offset = genome_coords_to_plotstart_dict(input.xcoords)
-        y_offset = genome_coords_to_plotstart_dict(input.ycoords)
-
-        print("printing the input before finding the breaks")
-        df = pd.read_csv(input.table, delimiter="\t", index_col=0)
-        df["xgene"] = df["xgene"].astype(str)
-        df["ygene"] = df["ygene"].astype(str)
-        print(df)
-
-        print("  - Getting the manual breaks for x")
-        xdf = determine_breaks(df, x_breaks, x_offset, "x", False)
-        print("  - Getting the manual breaks for y")
-        ydf = determine_breaks(df, y_breaks, y_offset, "y", False)
-        # save the results to a file
-        xdf.to_csv(output.xtable_manual, sep="\t")
-        ydf.to_csv(output.ytable_manual, sep="\t")
-        xdf.to_csv(output.xtable_auto, sep="\t")
-        ydf.to_csv(output.ytable_auto, sep="\t")
-
 def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
                  xsample,        ysample,
                  xbreaks_file,   ybreaks_file,
@@ -1050,14 +990,13 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
                  plot_x_lines = False,
                  plot_y_lines = False,
                  xprottoloc = False,
-                 yprottoloc = False,
-                 recip = False,
-                 group_file = False):
+                 yprottoloc = False, **kwargs):
     """
     If the user provided a plot order, then we should not skip any scaffolds.
 
     This is the main plotting script for the synteny plot
     """
+    config = kwargs["config"]
     import pandas as pd
     import seaborn as sns; sns.set()
     import matplotlib
@@ -1095,15 +1034,11 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     #  xprot_to_scaf in case we need to sort everything based on order of
     #  occurrence on the scaffolds
     x_offset, x_scaf_to_len, vertical_lines_at, xmax, xticklabel, xtickpos, xorder = parse_coords(
-        xcoords_file, xsample, "x",
-        xprottoloc = xprottoloc, yprottoloc = yprottoloc)
+        xcoords_file, xsample, "x", **kwargs)
     print("found {} x chromosomes".format(len(x_offset)))
 
     y_offset, y_scaf_to_len, horizontal_lines_at, ymax, yticklabel, ytickpos, yorder = parse_coords(
-        ycoords_file, ysample, "y",
-        xprottoloc = xprottoloc, yprottoloc = yprottoloc,
-        recip = recip, xorder = xorder)
-
+        ycoords_file, ysample, "y")
     print("found {} y chromosomes".format(len(y_offset)))
 
     # first make a lookup table
@@ -1232,7 +1167,6 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     newarr=[]
     newarrlabels=[]
     if not plot_y_lines:
-        # getting rid of plot_y_lines
         #there are inevitably going to be many scaffolds. We need to subset
         # get a list of evenly spaced indices
         numElems = min(20, len(ytickpos))
@@ -1279,9 +1213,9 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
         for value in vertical_lines_at:
             panel1.axvline(x=value, color="black", lw=0.5)
     #plot horizontal lines
-    #if plot_y_lines:
-    #    for value in horizontal_lines_at:
-    #        panel1.axhline(y=value, color="black", lw=0.5)
+    if plot_y_lines:
+        for value in horizontal_lines_at:
+            panel1.axhline(y=value, color="black", lw=0.5)
 
     # plot vertical BOS
     for value in xbreaks_df["xmiddle"]:
@@ -1290,258 +1224,3 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     for value in ybreaks_df["ymiddle"]:
         panel1.axhline(y=value, color=[0,0,0,0.25], lw=0.5, linestyle="dotted")
     plt.savefig(synplot)
-
-
-"""
-This makes the synteny plot without doing any special coloring of the dots
-"""
-rule plot_synteny:
-    input:
-        dtable = "synteny_analysis/dvalue_table/{xsample}_and_{ysample}_info.tsv",
-        plot_order = "synteny_analysis/plot_order/{xsample}_and_{ysample}_plotorder.tsv",
-        ycoords = "synteny_analysis/genome_coords/y_genome_coords/{ysample}_genomecoords.txt",
-        xcoords = "synteny_analysis/genome_coords/x_genome_coords/{xsample}_genomecoords.txt",
-        xbreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_auto.tsv",
-        ybreaks_auto = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_auto.tsv",
-        xbreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_xbreaks_manual.tsv",
-        ybreaks_manual = "synteny_analysis/dvalue_table_breaks/{xsample}_and_{ysample}_ybreaks_manual.tsv",
-        xprottoloc = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["prot_to_loc"],
-        yprottoloc = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"],
-        recip = "synteny_analysis/blastp_results/reciprocal_best/{xsample}_and_{ysample}_recip.blastp"
-    output:
-        synplot_manual = "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_manualbreaks.pdf",
-        synplot_auto   = "synteny_analysis/plots/synteny_uncolored/{xsample}_and_{ysample}_synteny_autobreaks.pdf",
-    threads:
-        1
-    params:
-        xsample  = lambda wildcards: wildcards.xsample,
-        ysample  = lambda wildcards: wildcards.ysample,
-        keep_x   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["xaxisspecies"][wildcards.xsample]) or ("noxlines" in config["xaxisspecies"][wildcards.xsample])) else True,
-        keep_y   = lambda wildcards: False if ( ("sort_by_x_coord_blast" in config["yaxisspecies"][wildcards.ysample]) or ("noylines" in config["yaxisspecies"][wildcards.ysample])) else True,
-    run:
-        print("printing x")
-        print(config["xaxisspecies"][wildcards.xsample])
-        synteny_plot(input.dtable,   input.xcoords,  input.ycoords,
-                     params.xsample, params.ysample,
-                     input.xbreaks_auto, input.ybreaks_auto,
-                     output.synplot_auto, None,           False,
-                     plot_x_lines = params.keep_x,
-                     plot_y_lines = params.keep_y,
-                     xprottoloc = input.xprottoloc,
-                     yprottoloc = input.yprottoloc,
-                     recip = input.recip)
-        synteny_plot(input.dtable,   input.xcoords,  input.ycoords,
-                     params.xsample, params.ysample,
-                     input.xbreaks_manual, input.ybreaks_manual,
-                     output.synplot_manual, None,           False,
-                     plot_x_lines = params.keep_x,
-                     plot_y_lines = params.keep_y,
-                     xprottoloc = input.xprottoloc,
-                     yprottoloc = input.yprottoloc,
-                     recip = input.recip)
-
-def sizes_and_scale_minp(smallest_p):
-    """
-    This outputs two lists. One of scale, and one of sizes,
-    based on the smallest_p.
-
-    This is used for plotting elipses in the figure and the legend
-    """
-    scale     = [1,       0.84,     0.67,     0.5,    0.3   ]
-
-    if smallest_p == 0:
-        sizes = [0,       "1E-20", "1E-10", "1E-5", "1E-2"]
-    elif smallest_p <= float("1E-20"):
-        sizes = ["1E-20", "1E-15", "1E-7",  "1E-4", "5E-2"]
-    elif smallest_p <= float("1E-15"):
-        sizes = ["1E-15", "1E-10", "1E-5",  "1E-2", "1E-1"]
-    elif smallest_p <= float("1E-10"):
-        sizes = ["1E-10", "1E-7",  "1E-4",  "1E-2", "1E-1"]
-    elif smallest_p <= float("1E-8"):
-        sizes = ["1E-8",  "1E-6",  "1E-4",  "1E-2", "1E-1"]
-    elif smallest_p <= float("1E-6"):
-        sizes = ["1E-6",  "1E-5",  "1E-3",  "1E-2", "1E-1"]
-    elif smallest_p <= float("1E-5"):
-        sizes = ["1E-5",  "1E-4",  "1E-3",  "1E-2", "0.5"]
-    else:
-        sizes = ["1E-4",  "1E-3",  "1E-2",  "1E-1", "0.5"]
-    return [scale, sizes]
-
-rule xprot_to_color:
-    """
-    In addition to plotting the synteny without a color scheme,
-      we also would like to plot by coloring with another species' color scheme
-    The output is just:
-    xsample_prot\thex_color
-    """
-    input:
-        x_prot_to_loc = lambda wildcards: config["xaxisspecies"][wildcards.colorby]["prot_to_loc"]
-    output:
-        prot_to_color = "synteny_analysis/prot_to_color/{colorby}_prottocolor.tsv"
-    params:
-        colormap = lambda wildcards: config["xaxisspecies"][wildcards.colorby]["chrom_to_color"]
-    run:
-        print(params.colormap)
-        # parse the printing information
-        print_list = []
-        for key in params.colormap:
-            coord = key
-            color = params.colormap[coord]
-            scaf = coord.split(":")[0]
-            pos_raw = coord.split(":")[1]
-            if pos_raw == "all":
-                pos_min = 1
-                pos_max = 999999999
-            else:
-                pos_min = int(pos_raw.split("-")[0])
-                pos_max = int(pos_raw.split("-")[1])
-            print_list.append({"scaf": scaf, "pos_min": pos_min,
-                               "pos_max": pos_max, "color": color})
-        df = pd.DataFrame.from_dict(print_list)
-        print(df)
-        #df["colors_py"] =  df["color"].apply(matplotlib.colors.to_rgba)
-        out_handle = open(output.prot_to_color, "w")
-        xstruct = generate_coord_structs_from_chrom_to_loc(input.x_prot_to_loc)
-        for prot in list(xstruct["prot_to_scaf"].keys()):
-            scaf = xstruct["prot_to_scaf"][prot]
-            if scaf in list(df["scaf"]):
-                pos  = xstruct["prot_to_middle"][prot]
-                query = "scaf == '{}' & pos_min <= {} & pos_max >= {}".format(scaf, pos, pos)
-                color = df.query(query)["color"].values[0]
-                print("{}\t{}".format(prot, color), file=out_handle)
-            else:
-                color = "#000000"
-                print("{}\t{}".format(prot, color), file=out_handle)
-        out_handle.close()
-
-rule make_pseudo_genome:
-    """
-    After getting the new grouping order for the scaffolds, generate a pseudogenome.
-    """
-    input:
-        grouporder = "synteny_analysis/xblast_grouporder/{xsample}_and_{ysample}_ygrouporder.tsv",
-        ygenome    = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["genome"]
-    output:
-        ygenome = "synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.fasta"
-    params:
-        yname = lambda wildcards: wildcards.ysample,
-        xname = lambda wildcards: wildcards.xsample
-    threads: 1
-    run:
-        df = pd.read_csv(input.grouporder, delimiter="\t", index_col=0)
-        df = df[["yscaf", "xscaf"]]
-        print(df)
-        #print(df["yscaf"])
-        outhandle = open(output.ygenome, "w")
-        seq_to_record = {}
-        for record in fasta.parse(input.ygenome):
-            if record.id in set(df["yscaf"]):
-                seq_to_record[record.id] = record
-
-        # now that we have the sequences
-        # go through the chromosomes and cat everything
-        for xchr in df["xscaf"].unique():
-            subdf = df.loc[df["xscaf"] == xchr, ]
-            pseudo_records = [str(seq_to_record[x].seq) for x in subdf["yscaf"]]
-            newid = "{}_pseudo_{}_{}".format(params.yname, params.xname, xchr)
-            catd = fasta.Record("".join(["N"]*100).join(pseudo_records), newid, "")
-            print(catd, file = outhandle)
-        outhandle.close()
-
-rule make_pseudo_chrom_to_loc:
-    """
-    get a new chrom_to_loc for the new genome
-    """
-    input:
-        grouporder = "synteny_analysis/xblast_grouporder/{xsample}_and_{ysample}_ygrouporder.tsv",
-        y_prot_to_loc = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"],
-        ygenome    = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["genome"]
-    output:
-        ychrom = temp("synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.temp.chrom")
-    params:
-        yname = lambda wildcards: wildcards.ysample,
-        xname = lambda wildcards: wildcards.xsample
-    threads: 1
-    run:
-        df = pd.read_csv(input.grouporder, delimiter="\t", index_col=0)
-        df = df[["yscaf", "xscaf"]]
-        df["ylen"] = 0
-        df["ystart"] = 0
-        df["ystop"] = 0
-        #print(df["yscaf"])
-        seq_to_record = {}
-        for record in fasta.parse(input.ygenome):
-            if record.id in set(df["yscaf"]):
-                df.loc[df["yscaf"] == record.id, "ylen"] = len(record.seq)
-
-        # now that we have the sequences
-        # go through the chromosomes and figure out the offsets
-        for xchr in df["xscaf"].unique():
-            subdf = df.loc[df["xscaf"] == xchr, ]
-            counter    = 0
-            prev_start = -100
-            prev_end   = -100
-            for index, row in subdf.iterrows():
-                df.loc[index, "ystart"] = prev_end + 100
-                prev_start = prev_end + 100
-                df.loc[index, "ystop"] = df.loc[index, "ystart"] + row["ylen"] - 1
-                prev_end = df.loc[index, "ystart"] + row["ylen"] - 1
-        print(df)
-        # we have the offsets now. go through the chrom file and print an
-        #  updated version
-        outhandle = open(output.ychrom, "w")
-        with open(input.y_prot_to_loc, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    #Hcv1.av93.c1.g10.i1     c1      -       69053   70505
-                    splitd = line.split()
-                    gene  = str(splitd[0])
-                    chrom = str(splitd[1])
-                    direc = str(splitd[2])
-                    start = int(splitd[3])
-                    stop  = int(splitd[4])
-                    if chrom in set(df["yscaf"]):
-                        offset = int(df.loc[df["yscaf"] == chrom, "ystart"])
-                        start += offset
-                        stop  += offset
-                        xchr = df.loc[df["yscaf"] == chrom, "xscaf"].values[0]
-                        newid = "{}_pseudo_{}_{}".format(params.yname, params.xname, xchr)
-                        print("{}\t{}\t{}\t{}\t{}".format(
-                            gene, newid, direc, start, stop),
-                              file = outhandle)
-        outhandle.close()
-
-rule sort_chrom:
-    input:
-        ychrom = "synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.temp.chrom"
-    output:
-        ychrom = "synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.chrom"
-    threads: 1
-    shell:
-        """
-        cat {input.ychrom} | sort -k2,2 -k4,4n > {output.ychrom}
-        """
-rule filter_prots:
-    """
-    Now that we have a filtered chrom file, file the pep file
-    """
-    input:
-        ychrom = "synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.chrom",
-        yprots = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["proteins"]
-    output:
-        yprots = "synteny_analysis/xblast_grouporder/{ysample}_pseudogenome_basedOn_{xsample}/{ysample}_pseudoGenomeBasedOn_{xsample}.pep"
-    threads: 1
-    run:
-        keep_genes = set()
-        with open(input.ychrom, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    keep_genes.add( line.split()[0])
-
-        outhandle = open(output.yprots, "w")
-        for record in fasta.parse(input.yprots, "fasta"):
-            if record.id in keep_genes:
-                print(record, file = outhandle)
-        outhandle.close()

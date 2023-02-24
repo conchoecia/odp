@@ -80,26 +80,6 @@ rule all:
         #"synteny_analysis/clustering/Ward_quartets.pdf",
         #"synteny_analysis/clustering/graph.pdf"
 
-def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
-    """
-    takes a chrom file, only keeps proteins in input_fasta from chrom file,
-     saves those prots to output_fasta
-    """
-    keep_these = set()
-    printed_already = set()
-    with open(chrom_file, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                splitd = line.split()
-                keep_these.add(splitd[0])
-    outhandle = open(output_fasta, "w")
-    for record in fasta.parse(input_fasta, "fasta"):
-        if record.id in keep_these and record.id not in printed_already:
-            print(record, file = outhandle)
-            printed_already.add(record.id)
-    outhandle.close()
-
 rule filter_prots_x:
     """
     Sometimes the prot file with have sequences that are not present in
@@ -112,7 +92,7 @@ rule filter_prots_x:
         pep = "synteny_analysis/db/xaxis/{xsample}_prots.pep"
     threads: 1
     run:
-        filter_fasta_chrom(input.chrom, input.prots, output.pep)
+        odpf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
 
 rule filter_prots_y:
     """
@@ -126,7 +106,7 @@ rule filter_prots_y:
         pep = "synteny_analysis/db/yaxis/{ysample}_prots.pep"
     threads: 1
     run:
-        filter_fasta_chrom(input.chrom, input.prots, output.pep)
+        opdf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
 
 rule make_diamonddb_x:
     input:
