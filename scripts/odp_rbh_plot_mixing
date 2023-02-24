@@ -4,7 +4,13 @@ This plots the amount that the genes in each group are mixed.
 This version uses an unwrapped groupby dataframe.
 Needs coordinates from the genomes
 """
-from Bio import SeqIO
+# This block imports fasta-parser as fasta
+import os
+import sys
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mplpatches
@@ -459,14 +465,13 @@ rule read_in_genome_sizes:
         species = lambda wildcards: wildcards.species
     run:
         outhandle = open(output.size, "w")
-        with open(input.genome) as handle:
-            for record in SeqIO.parse(handle, "fasta"):
-                thischrom = record.id
-                print("{}\t{}\t{}".format(
-                    params.species,
-                    thischrom,
-                    len(record.seq)),
-                    file = outhandle)
+        for record in fasta.parse(input.genome):
+            thischrom = record.id
+            print("{}\t{}\t{}".format(
+                params.species,
+                thischrom,
+                len(record.seq)),
+                file = outhandle)
         outhandle.close()
 
 rule gen_mixing_plots:

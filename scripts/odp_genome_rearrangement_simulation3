@@ -57,10 +57,6 @@ TODO: As of August 23rd 2022 the weaknesses of this program are:
 # data stuff
 import pandas as pd
 import numpy as np
-# sequence stuff
-from Bio import SeqIO
-from Bio import SeqRecord
-from Bio import Seq
 # simulation stuff
 import time
 import random

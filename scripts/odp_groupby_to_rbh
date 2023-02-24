@@ -12,23 +12,21 @@ There can be as many samples as you'd like.
 """
 
 import ast
-from Bio import SeqIO
-from Bio import SeqRecord
-from Bio import Seq
 from itertools import groupby
 from itertools import product
 import math
 import numpy as np
-import odp_functions as OdpF
+import odp_functions as odpf
 from operator import itemgetter
 import pandas as pd
 import statistics
+import sys
 
 configfile: "config.yaml"
 
 config["tool"] = "odp_groupby_to_rbh"
 
-OdpF.check_legality(config)
+odpf.check_legality(config)
 
 if "groupby_files" not in config:
     raise IOError("You must specify 'groupby_files' in config")

@@ -3,13 +3,18 @@ This script takes a list of species as a plotting order,
  and a list of rbh files from those species,
  and makes a synteny subway plot.
 """
-from Bio import SeqIO
+# This block imports fasta-parser as fasta
+import os
+import sys
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
+
 import logging
 import pandas as pd
-import sys
 
 #plotting imports
-import seaborn as sns; sns.set()
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.path import Path
@@ -603,7 +608,7 @@ rule sp_to_chr_to_len:
         for thissp in params.sp_order:
             if thissp not in sp_to_chr_to_size:
                 sp_to_chr_to_size[thissp] = {}
-                for record in SeqIO.parse(config["species"][thissp]["genome"], "fasta"):
+                for record in fasta.parse(config["species"][thissp]["genome"]):
                     print("{}\t{}\t{}".format(thissp, record.id, len(record.seq)), file = outfile)
         outfile.close()
 

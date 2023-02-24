@@ -52,10 +52,6 @@ num_randomizations:  1000000
 # data stuff
 import pandas as pd
 import numpy as np
-# sequence stuff
-from Bio import SeqIO
-from Bio import SeqRecord
-from Bio import Seq
 # simulation stuff
 import time
 import random
