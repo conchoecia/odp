@@ -93,12 +93,14 @@ Future versions of `odp` may bundle these software packages directly to avoid
 these requirements.
 
 - [diamond](https://github.com/bbuchfink/diamond)
+- [blastp](https://blast.ncbi.nlm.nih.gov/Blast.cgi?CMD=Web&PAGE_TYPE=BlastDocs&DOC_TYPE=Download)
 - awk
 
 For the aims above, this software works by:
 1. For comparisons between two species, this program finds reciprocal-best protein matches using diamond blastp. The pipeline performs comparions between all *n* species in the config file. Compute time scales quadratically with increasing species *O(n*<sup>2</sup>*)*. The [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) of each pairwise comparison is calculated to determine synteny block cutoffs in the cases of complex rearrangements. The signifiance of interactions between two or more genomes is calculated 
 2. Calculating [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) for each genome.
-3. Plotting the genome assembly, reciprocal best protein hits, and Da/Db using matplotlib
+3. Finding which orthologs correspond to previously identified ancestral linkage groups (ALGs), such as the Bilateria-Cnidaria-Sponge ALGs from [Simakov et al. (2020).](https://www.nature.com/articles/s41559-020-1156-z).
+3. Plotting the genome assembly, reciprocal best protein hits, the ALGs, and Da/Db using matplotlib.
 
 ## <a name="general"></a>General Usage
 
@@ -108,14 +110,19 @@ A minimal working example of a config file that is set up to compare the genomes
 
 ```yaml
 # this file is called config.yaml
-xaxisspecies:
+ignore_autobreaks: True       # Skip steps to find breaks in synteny blocks
+diamond_or_blastp: "diamond"  # "diamond" or "blastp"
+plot_LGs: True                # Plot the ALGs based on the installed databases
+plot_sp_sp: True              # Plot the synteny between two species, if False just generates .rbh files
+
+species:
   Celegans:
     proteins: /path/to/proteins_in_Cel_genome.fasta
-    prot_to_loc: /path/to/Cel_genome_annotation.chrom
+    chrom: /path/to/Cel_genome_annotation.chrom
     genome: /path/to/Cel_genome_assembly.fasta
   Homosapiens:
     proteins: /path/to/Human_prots.fasta
-    prot_to_loc: /path/to/Human_annotation.chrom
+    chrom: /path/to/Human_annotation.chrom
     genome: /path/to/Human_genome_assembly.fasta
 ```
 
@@ -130,13 +137,11 @@ snakemake --snakefile odp/scripts/odp
 The file formats that are needed for the three files per genome are:
 1. A genome assembly in [`.fasta` format](https://en.wikipedia.org/wiki/FASTA_format).
 2. Protein sequences in [`.fasta` format](https://en.wikipedia.org/wiki/FASTA_format).
-3. A file which details where the proteins are located in the genome, in [`.chrom` format](#chromspec)
+3. A file which details where the proteins are located in the genome, in [`.chrom` format](#chromspec). Using a `.gff` or `.gtf` file is currently not supported, but support is planned.
 
 ### <a name="chromspec"></a>`.chrom` file specifications
 
-The `.chrom` file format has 5 tab-delimited fields. Each line details the location of a protein on a scaffold. The fields are: 
-  - `protein_header scaffold_header strand start stop`.
-
+The `.chrom` file format has 5 tab-delimited fields. Each line details the location of a protein on a scaffold. The fields are:
 The requirements for each field are:
 1. `protein_header` - the string here must match the header of a protein in the protein fasta.
 2. `scaffold_header` - the string here must match the header of a sequence in the genome assembly fasta.
@@ -186,32 +191,23 @@ Output:
 
 ignore_autobreaks: True  # Can be True or False. True results in faster jobs
 diamond_or_blastp: blastp # pick your protein search program. blastp is more sensitive.
-
-prot_to_color:    # This is an optional parameter. odp_groupby_to_rbh generates a file 
-  MyColorGroups1: /path/to/file_of_color_groups1.tsv        # that can be used here to
-  ColorGroups2:   /path/to/another_color_group_file.tsv     # color proteins by groups
   
-xaxisspecies:
+species:
   Celegans:
     proteins: /path/to/proteins_in_Cel_genome.fasta # required field
-    prot_to_loc: /path/to/Cel_annot.chrom           # required field
-    genome: /path/to/Cel_genome_assembly.fasta      # required field
-    
+    chrom:    /path/to/Cel_annot.chrom              # required field
+    genome:   /path/to/Cel_genome_assembly.fasta    # required field 
+
     genus: "Caenorhabditis" # This is an optional field
-    species: "elegans" # This is an optional field
-    
-    minscafsize: 1000000 # optional field. Sets minimum scaffold size to plot
-    
+    species: "elegans" # This is an optional field 
+
+    minscafsize: 1000000 # optional field. Sets minimum scaffold size to plot. 
+
     manual_breaks:    # optional field, tells the software to treat breaks
       - "I:50000"     #  as separate units for calculating the homology p-values
       - "IV:9000000"  #  with Fisher's exact test. Useful for plotting centromeres.
-      - "II:99009"    #  Here, we tell the software that Cel chroms I, IV, II have breaks.
-      
-    chrom_to_color:                     # This is also an optional field, it tells odp
-      "I:all": "#e11f26"                #  to plot different chromosomes' proteins with
-      "II:0-50000": "#8d4b68"           #  different colors. This plots chromosome II
-      "II:50000-9999999": "#3a7eb5"     #  with two colors and chromosome I with one.
-      
+      - "II:99009"    #  Here, we tell the software that Cel chroms I, IV, II have breaks.      
+
     plotorder:    # This optional field tells the software to only plot the scaffolds
       - "I"       #  listed here, and to do it in this order. This is useful for plotting
       - "II"      #  comparisons between two species where you want a specific order for
@@ -219,48 +215,50 @@ xaxisspecies:
     
   Homosapiens:
     proteins: /path/to/Human_prots.fasta
-    prot_to_loc: /path/to/Human_annotation.chrom
-    genome: /path/to/Human_genome_assembly.fasta
+    chrom:    /path/to/Human_annotation.chrom
+    genome:   /path/to/Human_genome_assembly.fasta
 ```
 
 Run the pipeline with the command `snakemake -r -p --snakefile odp/scripts/odp`. The output files will be located in the folder `synteny_analysis/`. In this folder there are these folders:
-  - `blastp_results/`
-    - Files pertaining to the blastp searches between all the genomes. Also has files with the reciprocal best hits.
-  - `db/`
-    - Blast databases for searches.
-  - `dvalue_table/`
-    - Tables with the best reciprocal hits between species, genome coordinates.
-  - `dvalue_table_breaks/`
-    - The same files as in `dvalue_table/`, except that it contains *Da* and *Db* values for each pair.
-  - `genome_coords/`
-    - The genome coordinates (only used for plotting).
-  - `odp_plotting_configs/`
-    - Temporarily defunct, but generates `config.yaml` files that can be used for later steps in `odp`.
-  - `plot_order/`
-    - For each comparison, has the order in which scaffolds will be plotted.
-  - `plots/`
-    - `sample_similarity/`
-      - Plots of distributions of ortholog length vs protein percent identity.
-    - `significance/`
-      - Plots containing several visual styles showing the significance of interactions between chromosomes, or sub-chromosomal regions defined by the user.
-    - `synteny_colored_by*/`
-      - Oxford dot plots of two species, color by the specified color from a list of protein ids and colors.
-    - `synteny_colored_by_no_missing/`
-      - Oxford dot plots of two species colored by the orthology and color identity of another species.
-    - `synteny_uncolored`
-      - Oxford dot plots. Every orthologous protein is colored blue.
-  - `prot_to_color/`
-    - A list of protein ids and how to color them.
+  - `db`
+    - blastp and and diamond databases for searches.
+  - `step0-blastp_results`
+    - blastp/diamond searches between all the genomes. Also has files with the reciprocal best hits.
+  - `step0-chromsize`
+    - chromosome information used later for plotting.
+  - `step1-rbh`
+    - reciprocal best hits files for the analyses.
+  - `step2-figures`
+    - `ALG-species_plots`
+      - If there are ALGs installed in the `LG_db`, then the ALG-species plots will appear here.
+    - `synteny_coloredby_*`
+      - If there are ALGs installed in the `LG_db`, then the species-species synteny plots will appear here.
+    - `synteny_nocolor`
+      - Two-species synteny plots appear here regardless of what is in `LG_db`.
 
 ### <a name="ALGanalysis"></a>Find and characterize ancestral linkage groups
 
-Finding ancestral linkage groups of proteins for a group of species is a useful way to characterize what the genome at the ancestral node of that clade may have looked like, and to analyze how the genomes have evolved since that node.  See [Simakov et al. (2022)](https://www.science.org/doi/full/10.1126/sciadv.abi5884) for an example on how this concept was used to determine the ancestral number of chromosomal linkage groups in the common ancestor of sponges, cnidarians, and bilaterians.
+Finding ancestral linkage groups of proteins for a group of species is a useful
+way to characterize what the genome at the ancestral node of that clade may have
+looked like, and to analyze how the genomes have evolved since that node.  See
+[Simakov et al. (2022)](https://www.science.org/doi/full/10.1126/sciadv.abi5884)
+for an example on how this concept was used to determine the ancestral number of
+chromosomal linkage groups in the common ancestor of sponges, cnidarians, and
+bilaterians.
 
-The current implementation of this pipeline uses multiple steps to perform these analyses and determine the ALGs. For future versions of odp, we plan to implement this analysis into a single step.
+The current implementation of this pipeline uses multiple steps to perform these
+analyses and determine the ALGs. For future versions of odp, we plan to
+implement this analysis into a single step.
 
 #### <a name="nwayreciprocalbest"></a>ALGs part 1 - Ortholog finding in 3+ species
 
-For this analysis, `blastp` or `diamond` analyses are performed against _n_ species that you specify. Orthologs are kept only when proteins in the _n_ speices are reciprocal best hits of each other. These are found by loading the `blast` results into a graph structure and finding [bidirectional complete graphs](https://en.wikipedia.org/wiki/Complete_graph) of `blastp` hits. This process is highly conservative, therefore as the number of genomes _n_ increases, the number of highly conserved orthologs decreases.
+For this analysis, `blastp` or `diamond` analyses are performed against _n_
+species that you specify. Orthologs are kept only when proteins in the _n_
+speices are reciprocal best hits of each other. These are found by loading the
+`blast` results into a graph structure and finding
+[bidirectional complete graphs](https://en.wikipedia.org/wiki/Complete_graph) of `blastp`
+hits. This process is highly conservative, therefore as the number of genomes _n_
+increases, the number of highly conserved orthologs decreases.
 
 Program: `odp/scripts/odp_nway_rbh`
 Input: `config.yaml`, same as for `odp/scripts/odp`, but with some modifications.
@@ -284,22 +282,22 @@ analyses:
   - ["Celegans", "Dmel", "Mmus"]
   # - ["Homosapiens", "Dmel", "Mmus"]   # You can comment out lines if you would like
   
-xaxisspecies:
+species:
   Celegans:
     proteins: /path/to/proteins_in_Cel_genome.fasta
-    prot_to_loc: /path/to/Cel_genome_annotation.chrom
+    chrom: /path/to/Cel_genome_annotation.chrom
     genome: /path/to/Cel_genome_assembly.fasta
   Homosapiens:
     proteins: /path/to/Human_prots.fasta
-    prot_to_loc: /path/to/Human_annotation.chrom
+    chrom: /path/to/Human_annotation.chrom
     genome: /path/to/Human_genome_assembly.fasta
   Dmel:
     proteins: /path/to/drosophila_prots.fasta
-    prot_to_loc: /path/to/drosophila_annotation.chrom
+    chrom: /path/to/drosophila_annotation.chrom
     genome: /path/to/drosophila_genome_assembly.fasta
   Mmus:
     proteins: /path/to/mouse_prots.fasta
-    prot_to_loc: /path/to/mouse_annotation.chrom
+    chrom: /path/to/mouse_annotation.chrom
     genome: /path/to/mouse_genome_assembly.fasta
 ```
 
@@ -324,25 +322,49 @@ will be one group. All of the orthologs that exist on a slightly different set o
   * _D. melanogaster_ chromosome 3
   * and *human chromosome 16*
 
-The groups are saved in a tab-delimited file called a `.groupby` file. Each line is one group, and gene ids, scaffolds on which they reside, and genome coordinates are saved in python-type lists in single columns.
+The groups are saved in a tab-delimited file called a `.groupby` file. Each line
+is one group, and gene ids, scaffolds on which they reside, and genome
+coordinates are saved in python-type lists in single columns.
 
-The number of groups found in this analysis, and the number of genes found in each group, depend on the degree of shared macrosynteny between the species used in the analysis. Distantly related species, or species with fast-evolving genomes, will have many groups, each with few genes. Closely related species or species with slowly-evolving genomes will have fewer groups, with more genes per group. Regardless of the relationships between the species, there will be a log decay of group sizes given the phenomenon of single genes translocating to other chromosomes.
+The number of groups found in this analysis, and the number of genes found in
+each group, depend on the degree of shared macrosynteny between the species used
+in the analysis. Distantly related species, or species with fast-evolving
+genomes, will have many groups, each with few genes. Closely related species or
+species with slowly-evolving genomes will have fewer groups, with more genes per
+group. Regardless of the relationships between the species, there will be a log
+decay of group sizes given the phenomenon of single genes translocating to other
+chromosomes.
 
-For each group of orthologs *G*, we can estimate the false discovery rate *α* of finding a group with *i* or fewer genes given the real genomes in these comparisons. We estimate this false discovery rate by producing randomized versions of the genomes by shuffling the gene IDs in the `.chrom` file, measuring whether a group of *i* or fewer genes was present, then repeating this measurement hundreds of millions of times.
+For each group of orthologs *G*, we can estimate the false discovery rate *α* of
+finding a group with *i* or fewer genes given the real genomes in these
+comparisons. We estimate this false discovery rate by producing randomized
+versions of the genomes by shuffling the gene IDs in the `.chrom` file,
+measuring whether a group of *i* or fewer genes was present, then repeating this
+measurement hundreds of millions of times.
 
 #### <a name=“groupbyfilter”></a>ALGs part 3 - Filter groups of orthologs
 
-The groups of reciprocal best hits, as well as the newly-calculated false discovery rates, are saved in the resulting `.groupby` file. This can be manually or programmatically filtered to only keep groups with certain properties, or groups with a significantly low false discovery rate.
+The groups of reciprocal best hits, as well as the newly-calculated false
+discovery rates, are saved in the resulting `.groupby` file. This can be
+manually or programmatically filtered to only keep groups with certain
+properties, or groups with a significantly low false discovery rate.
 
-This can be performed with the script `odp_groupby_filter`, by specifying the `.groupby` file, and by specifying the acceptable false discovery rate cutoff.
+This is performed automatically by `odp_nway_rbh`, but can be performed with the
+script `odp_groupby_filter` by specifying the `.groupby` file, and by specifying
+the acceptable false discovery rate cutoff.
 
-This process can also be performed in a table editor, such as the spreadsheets on Google Drive, Apple Sheets, or Microsoft Excel.
+This process can also be performed in a table editor, such as the spreadsheets
+on Google Drive, Apple Sheets, or Microsoft Excel.
 
-After removing the rows that have a less-than-significant false discovery rate, continue on to the next step to annotate the groups of orthologs.
+After removing the rows that have a less-than-significant false discovery rate,
+continue on to the next step to annotate the groups of orthologs.
 
 #### <a name=“groupbyannotate”></a>ALGs part 4 - Annotate groups of orthologs
 
-At this stage the resulting rows are groups of orthologous genes that are present on the same set of chromosomes in the species under consideration, and have been since the common ancestor of these species. In other words, these are ancestral linkage groups (ALGs) for this clade.
+At this stage the resulting rows are groups of orthologous genes that are
+present on the same set of chromosomes in the species under consideration, and
+have been since the common ancestor of these species. In other words, these are
+ancestral linkage groups (ALGs) for this clade.
 
 It is useful at this stage to assign names to each of the rows in the `group` column of the `.groupby` file. There is some precedence for these naming conventions, see [Simakov et al. (2020)](https://www.nature.com/articles/s41559-020-1156-z) and [Simakov et al. (2022)](https://www.science.org/doi/full/10.1126/sciadv.abi5884). So, if your analysis includes animal genomes then it may be helpful to include some of the species from these publications.
 
@@ -353,7 +375,7 @@ It is not necessary that each row has its own unique group ID. However, doing so
 In this section let’s consider a few species to compare:
   - Unicellular (+colonial multicellular) outgroups of animals:
     - the icthyosporean _Creolimax fragrantissima_ (CFR)
-    - the filasterean amoeba_Capsaspora owczarzaki_ (COW)
+    - the filasterean amoeba _Capsaspora owczarzaki_ (COW)
     - the choanoflagellate _Monosiga brevicollis_ (MBR)
   - The animals:
     - the ctenophore _Hormiphora californensis_ (HCO)
