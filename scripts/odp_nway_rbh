@@ -142,7 +142,7 @@ rule filter_prots:
     """
     input:
         prots = lambda wildcards: config["species"][wildcards.sample]["proteins"],
-        chrom = lambda wildcards: config["species"][wildcards.sample]["prot_to_loc"]
+        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"]
     output:
         pep = config["tool"] + "/db/{sample}_prots.pep"
     threads: 1
@@ -240,7 +240,7 @@ rule n_ways_reciprocal_best:
         xtoyblastp = [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(
             config["blastjobs"][this][0], config["blastjobs"][this][1])
          for this in config["blastjobs"]],
-        chrom = lambda wildcards: [config["species"][x]["prot_to_loc"]
+        chrom = lambda wildcards: [config["species"][x]["chrom"]
                     for x in config["analysisspecies"]]
     output:
         acceptable_prots = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_acceptable_prots.txt",
@@ -270,11 +270,11 @@ rule n_ways_reciprocal_best:
         # get the chrom files
         chrom_dicts = {}
         for thisspecies in all_species:
-            if not os.path.exists(config["species"][thisspecies]["prot_to_loc"]):
+            if not os.path.exists(config["species"][thisspecies]["chrom"]):
                 raise IOError("This chrom file doesn't exist: {}".format(
-                    config["species"][thisspecies]["prot_to_loc"]))
+                    config["species"][thisspecies]["chrom"]))
             chrom_dicts[thisspecies] = pd.read_csv(
-                config["species"][thisspecies]["prot_to_loc"],
+                config["species"][thisspecies]["chrom"],
                 header=None, sep = "\t")
             chrom_dicts[thisspecies].columns = ["prot",
                 "scaf", "direction", "start", "stop"]

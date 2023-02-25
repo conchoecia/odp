@@ -94,7 +94,7 @@ rule filter_prots_x:
     """
     input:
         prots = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["proteins"],
-        chrom = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["prot_to_loc"]
+        chrom = lambda wildcards: config["xaxisspecies"][wildcards.xsample]["chrom"]
     output:
         pep = "synteny_analysis/db/xaxis/{xsample}_prots.pep"
     threads: 1
@@ -108,7 +108,7 @@ rule filter_prots_y:
     """
     input:
         prots = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["proteins"],
-        chrom = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["prot_to_loc"]
+        chrom = lambda wildcards: config["yaxisspecies"][wildcards.ysample]["chrom"]
     output:
         pep = "synteny_analysis/db/yaxis/{ysample}_prots.pep"
     threads: 1
@@ -239,7 +239,7 @@ rule n_ways_reciprocal_best:
         xtoyblastp = odpf.expand_avoid_matching_x_and_y(
             "synteny_analysis/blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp",
                 config["xaxisspecies"], config["yaxisspecies"]),
-        chrom = [config["xaxisspecies"][x]["prot_to_loc"]
+        chrom = [config["xaxisspecies"][x]["chrom"]
                  for x in config["xaxisspecies"]]
     output:
         acceptable_prots = "synteny_analysis/blastp_results/reciprocal_best/{}_acceptable_prots_{{n}}_ways.txt".format(
@@ -265,7 +265,7 @@ rule n_ways_reciprocal_best:
         chrom_dicts = {}
         for thisspecies in all_species:
             chrom_dicts[thisspecies] = pd.read_csv(
-                config["xaxisspecies"][thisspecies]["prot_to_loc"],
+                config["xaxisspecies"][thisspecies]["chrom"],
                 header=None, sep = "\t")
             chrom_dicts[thisspecies].columns = ["prot",
                 "scaf", "direction", "start", "stop"]

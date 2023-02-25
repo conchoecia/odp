@@ -155,7 +155,7 @@ if config["plot_sp_sp"]:
     # I don't think this next set of files needs to be specified, but I'm leaving it here for now.
     file_targets += [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(hmm, sp)
      for sp in config["analysisspecies"] for hmm in config["prot_to_color"]]
-    # color by the things in the prot_to_loc settings
+    # color by the things in the chrom settings
     file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
      for x in config["analysispairs"] for y in config["prot_to_color"]]
     file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
