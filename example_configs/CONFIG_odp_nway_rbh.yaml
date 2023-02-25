@@ -24,24 +24,24 @@
 species:
   SP1:
     proteins:    "/path/to/SP1.pep"
-    prot_to_loc: "/path/to/SP1.chrom"
+    chrom: "/path/to/SP1.chrom"
     genome:      "/path/to/SP1.fasta"
     minscafsize: 900000
 
   SP2:
     proteins:    "/path/to/SP2.pep"
-    prot_to_loc: "/path/to/SP2.chrom"
+    chrom: "/path/to/SP2.chrom"
     genome:      "/path/to/SP2.fasta"
     minscafsize: 1200000
 
   SP3:
     proteins:    "/path/to/SP3.pep"
-    prot_to_loc: "/path/to/SP3.chrom"
+    chrom: "/path/to/SP3.chrom"
     genome:      "/path/to/SP3.fasta"
     minscafsize: 800000
 
   SP4:
     proteins:    "/path/to/SP4.pep"
-    prot_to_loc: "/path/to/SP4.chrom"
+    chrom: "/path/to/SP4.chrom"
     genome:      "/path/to/SP4.fasta"
     minscafsize: 2000000

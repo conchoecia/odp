@@ -255,14 +255,14 @@ rule collate_best_hits_into_best_hits_file:
         rbh_file = config["rbh_file"],
         best_hits_files = expand(config["tool"] + "/hmm/searches_agg_best/{other_species}_hmm_best.tsv",
                                  other_species = other_species),
-        chrom = lambda wildcards: [config["species"][x]["prot_to_loc"] for x in
+        chrom = lambda wildcards: [config["species"][x]["chrom"] for x in
                                    other_species]
     output:
         rbh = config["tool"] + "/output/" + species_string + "_rbhhmm_plus_other_species.rbh"
     run:
         rbh = pd.read_csv(input.rbh_file, header = 0, index_col = None, sep = "\t")
         for thisspecies in other_species:
-            thischrom = config["species"][thisspecies]["prot_to_loc"]
+            thischrom = config["species"][thisspecies]["chrom"]
             species_gene_to_chrom = {}
             species_gene_to_pos = {}
             with open(thischrom, "r") as f:
@@ -304,7 +304,7 @@ rule collate_best_hits_into_best_hits_file:
 #    """
 #    input:
 #        tsv = config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.sorted.tsv"
-#        chrom = lambda wildcards: config["xaxisspecies"][wildcards.species]["prot_to_loc"],
+#        chrom = lambda wildcards: config["xaxisspecies"][wildcards.species]["chrom"],
 #        rbh = "rbh/reciprocal_best_hits.tsv"
 #    output:
 #        tsv = "hmm/searches_agg_best/{species}_hmm_best.tsv",

@@ -236,10 +236,10 @@ def reciprocal_best_hits_jackhmmer(
 
 
 def check_legality(config):# check for legal config entries. Useful fr finding misspelled entries
-    legal = ["proteins", "prot_to_loc", "genome", "genus",
+    legal = ["proteins", "chrom", "genome", "genus",
              "minscafsize", "manual_breaks", "chrom_to_color",
              "plotorder", "species", "prot_to_group"]
-    illegal = set()
+    illegal = set("prot_to_loc", "prot-to-loc")
     for this_axis in ["xaxisspecies", "yaxisspecies"]:
         if this_axis in config:
             for this_sample in config[this_axis]:
@@ -340,7 +340,7 @@ def expand_avoid_matching_all_third(filestring, **kwargs):
     return [x for x in outlist]
 
 
-def generate_coord_structs_from_chrom_to_loc(prot_to_loc_file):
+def generate_coord_structs_from_chrom_to_loc(chrom_file):
     """
     This parses a .chrom file and outputs five data structures that are easily
      used for mapping pandas dataframes.
@@ -357,8 +357,8 @@ def generate_coord_structs_from_chrom_to_loc(prot_to_loc_file):
     prot_to_start  = {}
     prot_to_stop   = {}
     prot_to_middle = {}
-    print("prot_to_loc_file", prot_to_loc_file)
-    with open(prot_to_loc_file, "r") as f:
+    print("chrom_file", chrom_file)
+    with open(chrom_file, "r") as f:
        for line in f:
            line = line.strip()
            if line:
@@ -454,7 +454,7 @@ def genome_coords_to_offset_dict(path_to_genocoords_file, **kwargs):
                 offset_dict[splitd[0]] = int(splitd[2])
     return offset_dict
 
-def generate_coord_structs_from_chrom_to_loc(prot_to_loc_file, **kwargs):
+def generate_coord_structs_from_chrom_to_loc(chrom_file, **kwargs):
     """
     This parses a .chrom file and outputs five data structures that are easily
      used for mapping pandas dataframes.
@@ -471,8 +471,8 @@ def generate_coord_structs_from_chrom_to_loc(prot_to_loc_file, **kwargs):
     prot_to_start  = {}
     prot_to_stop   = {}
     prot_to_middle = {}
-    print("prot_to_loc_file", prot_to_loc_file)
-    with open(prot_to_loc_file, "r") as f:
+    print("chrom_file", chrom_file)
+    with open(chrom_file, "r") as f:
        for line in f:
            line = line.strip()
            if line:
@@ -517,7 +517,7 @@ def blast_plot_order_helper(coords, sample, xory, xprottoloc, yprottoloc, recip,
                   "sstart", "send", "evalue", "bitscore"]
     df = df[["xgene", "ygene", "bitscore", "evalue"]]
 
-    #print(x_prot_to_loc)
+    #print(x_chrom)
     df["xpos"] = df["xgene"].map(xcoords["prot_to_middle"])
     df["ypos"] = df["ygene"].map(ycoords["prot_to_middle"])
 
@@ -895,7 +895,7 @@ def gen_plotting_df(ycoords_file, xcoords_file,
 
     # first make a lookup table of how to calculate the
     #  x and y coords_file. This lookup is just the amount of
-    # bp to add to the value when plotting. We pass the xprot_to_loc,
+    # bp to add to the value when plotting. We pass the xchrom,
     #  xprot_to_scaf in case we need to sort everything based on order of
     #  occurrence on the scaffolds
     x_offset, x_scaf_to_len, vertical_lines_at, xmax, xticklabel, xtickpos, xorder = parse_coords(
@@ -961,7 +961,7 @@ def gen_plotting_df(ycoords_file, xcoords_file,
     df = df[["xgene", "ygene", "bitscore", "evalue"]]
     df["xgene"] = df["xgene"].astype(str)
     df["ygene"] = df["ygene"].astype(str)
-    #print(x_prot_to_loc)
+    #print(x_chrom)
     df["xstart"]  = df["xgene"].map(xstruct["prot_plot_start"])
     df["xmiddle"] = df["xgene"].map(xstruct["prot_plot_middle"])
     df["xstop"]   = df["xgene"].map(xstruct["prot_plot_stop"])
@@ -1029,7 +1029,7 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
 
     # first make a lookup table of how to calculate the
     #  x and y coords. This lookup is just the amount of
-    # bp to add to the value when plotting. We pass the xprot_to_loc,
+    # bp to add to the value when plotting. We pass the xchrom,
     #  xprot_to_scaf in case we need to sort everything based on order of
     #  occurrence on the scaffolds
     x_offset, x_scaf_to_len, vertical_lines_at, xmax, xticklabel, xtickpos, xorder = parse_coords(

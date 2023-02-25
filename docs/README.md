@@ -188,9 +188,10 @@ Output:
 
 ```yaml
 # this file is called config.yaml
-
-ignore_autobreaks: True  # Can be True or False. True results in faster jobs
-diamond_or_blastp: blastp # pick your protein search program. blastp is more sensitive.
+ignore_autobreaks: True       # Skip steps to find breaks in synteny blocks
+diamond_or_blastp: "diamond"  # "diamond" or "blastp"
+plot_LGs: True                # Plot the ALGs based on the installed databases
+plot_sp_sp: True              # Plot the synteny between two species, if False just generates .rbh files
   
 species:
   Celegans:
