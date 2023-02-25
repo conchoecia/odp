@@ -16,6 +16,9 @@ temp.sh
 *.summary_table.tsv
 *~
 *#*
+# cython is being used more frequently by base python, so this pops up easily
+__pycache__
+*.pyc
 # specific ignore patterns for this project
 *.check
 *.hmm
