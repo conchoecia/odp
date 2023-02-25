@@ -16,3 +16,8 @@ temp.sh
 *.summary_table.tsv
 *~
 *#*
+# specific ignore patterns for this project
+*.check
+*.hmm
+*.rbh
+LG_db/*/
