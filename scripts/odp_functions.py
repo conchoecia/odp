@@ -9,10 +9,12 @@ dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
 import fasta
 
-# now import everything else
-import pandas as pd
+# other standard python libraries
 from itertools import combinations
 from itertools import product
+
+# non-standard dependencies
+import pandas as pd
 
 # TODO implement this function soon after release
 #def gff_or_chrom(filepath):

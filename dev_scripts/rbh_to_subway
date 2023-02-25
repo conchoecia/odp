@@ -11,15 +11,20 @@ dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
 import fasta
 
-import logging
-import pandas as pd
+# ODP-specific imports
+# None
 
-#plotting imports
+# Other standard python libraries
+import logging
+
+# non-standard dependencies
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.path import Path
 import matplotlib.path as mpath
 import matplotlib.patches as patches
+import pandas as pd
+
 
 configfile: "config.yaml"
 

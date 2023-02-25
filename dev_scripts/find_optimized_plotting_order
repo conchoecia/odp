@@ -10,15 +10,22 @@ dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
 import fasta
 
-from itertools import groupby
-import matplotlib
-import math
-from operator import itemgetter
-import pandas as pd
-import numpy as np
-import statistics
+# ODP-specific imports
+scripts_path = os.path.join(snakefile_path, "../scripts")
+sys.path.insert(1, scripts_path)
 import odp_functions as odpf
 import odp_plotting_functions as odp_plot
+
+# other standard python libraries
+from itertools import groupby
+import math
+from operator import itemgetter
+import statistics
+
+# non-standard dependencies
+import matplotlib
+import pandas as pd
+import numpy as np
 
 configfile: "config.yaml"
 

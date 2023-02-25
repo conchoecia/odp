@@ -54,25 +54,28 @@ TODO: As of August 23rd 2022 the weaknesses of this program are:
     in complicated cases, say cases with 3 rows (fusion-with-mixing of multiple groups)
 """
 
+# standard python libraries
+import ast
+import itertools
+import operator
+import random
+from random import randrange
+import sys
+import time
+
+# non-standard dependencies
 # data stuff
 import pandas as pd
 import numpy as np
 # simulation stuff
-import time
-import random
-from random import randrange
 import seaborn as sns
-import sys
 # plotting stuff
-import ast
-import itertools
 import matplotlib.pyplot as plt
 import matplotlib.patches as mplpatches
 from matplotlib.collections import LineCollection
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pylab as pl
-import operator
 
 configfile: "config.yaml"
 

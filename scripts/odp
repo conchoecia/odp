@@ -14,21 +14,25 @@ dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
 import fasta
 
+# ODP-specific imports
+scripts_path = os.path.join(snakefile_path, "../scripts")
+sys.path.insert(1, scripts_path)
+import odp_functions as odpf
+import odp_plotting_functions as odp_plot
+import odp_color_manager as oc
+
+# other standard python libraries
 from itertools import permutations
 from itertools import combinations
 import logging
-#import matplotlib
+
+# non-standard dependencies
 import matplotlib
 from matplotlib.patches import Patch
 from matplotlib.lines   import Line2D
 from matplotlib.font_manager import FontProperties
-
-#from matplotlib.lines import Line2D
 import networkx as nx
 import numpy as np
-import odp_functions as odpf
-import odp_plotting_functions as odp_plot
-import odp_color_manager as oc
 import pandas as pd
 import scipy.stats as stats
 
