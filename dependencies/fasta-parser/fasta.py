@@ -7,12 +7,12 @@ Maciej Michalczyk (mccv99@gmail.com)
 https://github.com/aziele/fasta-parser
 """
 
-import bz2
-import gzip
-import io
-import pathlib
-import typing
-import zipfile
+import bz2      # standard python library
+import gzip     # standard python library
+import io       # standard python library
+import pathlib  # standard python library
+import typing   # standard python library
+import zipfile  # standard python library
 
 # Zstandard
 try:
