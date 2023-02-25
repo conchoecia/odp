@@ -1,0 +1,103 @@
+#
+# Example config.yaml file for: rbh_to_subway
+# Author: dts
+# github account: @conchoecia
+# link to github repo: https://github.com/conchoecia/odp
+# date: 2022-2023
+# license: GNU GPL https://github.com/conchoecia/odp/blob/main/LICENSE
+#
+# Goal: This script creates subway plots of genome synteny.
+#
+# First select which plotting order is desired for the chromosomes
+#  chr_sort_order < custom | optimal-top | optimal-size | optimal-random >
+#    custom         - use the custom sorting order for EVERY species in chromorder
+#    optimal-top    - use the custom order for the topmost species, then optimizes everything else
+#    optimal-size   - sort the top species' chromosomes by number of genes, optimize everything else
+#    optimal-chr-or - use `chromorder` when possible, optimize everything else
+#    optimal-random - randomly sort the chromosomes of the top species, optimize everything else
+chr_sort_order: optimal-chr-or
+
+# - If you only want to plot the significant relationships, set to False
+#   - the significant lines will be 0.8
+# - If you want to plot everything, set to True
+#   - the significant lines will be 0.8, the faint lines will be 0.15
+plot_all: True
+
+# - First type in the list of species to plot
+# - In this example we plot the relationships between
+#   three species with the codes "EMU", "RES", and "HCA".
+#   These three species must also be present in the "species"
+#   entry of the config file below.
+species_order:
+  - EMU
+  - RES
+  - HCA
+
+# - If there are any organisms for which you would like to specify the
+#   chromosome order, then this is the place to do it. The species name
+#   here must match the species name in the "species" part of the config
+#   file.
+# - Only the chromosomes here will be plotted for this species. This is an
+#   easy way to just plot a subset of chromosomes that you are interested in.
+chromorder:
+  EMU:
+    - EMU1
+    - EMU6
+    - EMU5
+    - EMU4
+    - EMU2
+    - EMU3
+
+# NOTE : YOU CAN ONLY SPECIFY ONE OF THE FOLLOWING:
+#  - rbh_files_in_order
+#  - rbh_directory
+
+# - This is the list of RBH files output from odp2 or another source.
+# - Each RBH file contains the orthologs between species that should be
+#   plotted.
+# - The number of files will always be the number of species minus one.
+# - Currently, only relationships that are significant with Fisher's exact
+#   test will be plotted here.
+rbh_files_in_order:
+  - /path/to/EMU_RES_xy_reciprocal_best_hits.coloredby_BCnS_LGs.plotted.rbh
+  - /path/to/HCA_RES_xy_reciprocal_best_hits.coloredby_BCnS_LGs.plotted.rbh
+
+# If your rbh files were generated with odp, you can just supply the
+#  path to the
+rbh_directory: /scratch/molevo/dts/leech_copy/odp/step2-figures/synteny_coloredby_BCnS_LGs/
+
+# - All of the species that are in "species_order" above should be here
+# - This information is important for calculating some stats that are used
+#   for plotting.
+# - The necessary fields are:
+#   - proteins
+#   - chrom
+#   - genome
+# - If you specify "minscafsize", then only scaffolds >= this size are
+#   included in the subway plot.
+species:
+  HCA:
+    genus:    "Hormiphora"
+    species:  "californensis"
+    proteins: "/path/to/HCA.pep"
+    chrom:    "/path/to/HCA.chrom"
+    genome:   "/path/to/HCA.fasta"
+    minscafsize: 5000000
+
+  RES:
+    # as you can see in this example, it doesn't matter if the file
+    # prefixes match the species name (RES) specified above
+    proteins:    "/path/to/rhopilema_chromosome_v1.pep"
+    chrom:       "/path/to/rhopilema_chromosome_v1.chrom"
+    genome:      "/path/to/rhopilema_chromosome_v1.fasta"
+    genus:       "Rhopilema"
+    species:     "esculentum"
+    minscafsize: 4000000
+
+  EMU:
+    genus:     "Ephydatia"
+    species:   "muelleri"
+    proteins:  "/path/to/EMU.pep"
+    chrom:     "/path/to/EMU.chrom"
+    genome:    "/path/to/EMU.fasta"
+    minscafsize: 1000000
