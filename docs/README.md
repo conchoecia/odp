@@ -1,16 +1,16 @@
 <img src="https://github.com/conchoecia/odp/blob/main/docs/dotplot_fig_v2-01.jpg" width="250">
 
-# odp - Oxford Dot Plots
+# odp - Oxford dot plots
 
 ## <a name="started"></a>Getting Started
 ```sh
+#install
 git clone https://github.com/conchoecia/odp.git
+cd odp && make
 # make a config.yaml file for your odp analysis
-cp odp/example_configs/CONFIG_odp.yaml ./
+cp odp/example_configs/CONFIG_odp.yaml ./config.yaml
 # modify the config file to include your own data
-vim CONFIG_odp.yaml
-# rename the config so snakemake can find it
-mv CONFIG_odp.yaml config.yaml
+vim config.yaml
 # run the pipeline
 snakemake -r -p --snakefile odp/scripts/odp
 # currently there is no man page, see https://github.com/conchoecia/odp/ for instructions
@@ -41,23 +41,37 @@ snakemake -r -p --snakefile odp/scripts/odp
 
 ## <a name="uguide"></a>Users' Guide
 
-Odp is a protein-based synteny analysis software suite that is useful for comparing the evolution of chromosomes between two or more species. Use cases include (1) ploting synteny relationships between two genome assemblies, (2) inferring evolutionary relationships using chromosome synteny information, and (3) determining groups of ancestrally linked genes given a set of species' chromosome-scale genomes.
+Odp is a protein-based synteny analysis software suite that is useful for
+comparing the evolution of chromosomes between two or more species. Use cases
+include (1) ploting synteny relationships between two genome assemblies, (2)
+inferring evolutionary relationships using chromosome synteny information, and
+(3) determining groups of ancestrally linked genes given a set of species'
+chromosome-scale genomes.
 
-This software was visually modelled on the dotplots found in [Simakov, Oleg, et al. "Deeply conserved synteny resolves early events in vertebrate evolution." Nature ecology & evolution 4.6 (2020): 820-830.](https://www.nature.com/articles/s41559-020-1156-z), and was further expanded to determine the phylogenetic tree toplogy of animals in [Schultz, D.T., et al. (2022)](https://www.biorxiv.org/).
+This software was visually modelled on the dotplots found in [Simakov, Oleg, et al. "Deeply conserved synteny resolves early events in vertebrate evolution." Nature ecology & evolution 4.6 (2020):820-830.](https://www.nature.com/articles/s41559-020-1156-z), and was further
+expanded to determine the phylogenetic tree toplogy of animals in
+[Schultz, D.T., et al. (2023)](https://www.biorxiv.org/).
 
-This software fills a niche in that it automates comparisons of chromosome-scale genomes, an increasingly important task as the genomes of more non-model organisms become available.
+This software fills a niche in that it automates comparisons of chromosome-scale
+genomes, an increasingly important task as the genomes of more non-model
+organisms become available.
 
 ## <a name="install"></a>Installation
 
-Odp and its dependencies are developed for a unix environment (linux, Mac OS X) running bash as the shell. You can download the software with this command:
+Odp and its dependencies are developed for a unix environment (linux, Mac OS X)
+running bash as the shell. You can download the software with this command:
 
 ```
 git clone https://github.com/conchoecia/odp.git
+cd odp && make
 ```
 
 ### <a name="python"></a>Python Requirements
 
-Your active python environment must be python 3. This software is implemented in [`snakemake`](https://snakemake.readthedocs.io/en/stable/). Specific python packages within the pipeline that must be available in your path are:
+Your active python environment must be python 3. This software is implemented in
+[`snakemake`](https://snakemake.readthedocs.io/en/stable/). Specific python
+packages within the pipeline that must be available in your python installation
+are:
 
 ```
 snakemake
@@ -66,19 +80,20 @@ networkx
 scipy
 pandas
 numpy
+seaborn
 ```
 
-If you have `conda` I recommend `conda install snakemake matplotlib pandas numpy` if you are not sure if you have the required packages.
+If you have `conda` I recommend `conda install snakemake matplotlib pandas numpy seaborn`
+if you are not sure if you have the required packages.
 
 ### <a name="otherreq"></a>Other Requirements
 
-Direct calls to these programs must also be available in your environment. Future versions of `odp` may bundle these software packages directly to avoid these requirements.
+Direct calls to these programs must also be available in your environment.
+Future versions of `odp` may bundle these software packages directly to avoid
+these requirements.
 
 - [diamond](https://github.com/bbuchfink/diamond)
 - awk
-- [pauvre](https://github.com/conchoecia/pauvre) - I may remove this requirement in future releases 
-- [bioawk](https://github.com/lh3/bioawk) - I may remove this requirement in future releases
-
 
 For the aims above, this software works by:
 1. For comparisons between two species, this program finds reciprocal-best protein matches using diamond blastp. The pipeline performs comparions between all *n* species in the config file. Compute time scales quadratically with increasing species *O(n*<sup>2</sup>*)*. The [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) of each pairwise comparison is calculated to determine synteny block cutoffs in the cases of complex rearrangements. The signifiance of interactions between two or more genomes is calculated 
