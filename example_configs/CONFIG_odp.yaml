@@ -8,6 +8,7 @@
 # # Then run the pipeline
 # snakemake -r -p --snakefile odp/scripts/odp
 
+
 ignore_autobreaks: True       # Skip steps to find breaks in synteny blocks
 diamond_or_blastp: "diamond"  # "diamond" or "blastp"
 plot_LGs: True                # Plot the ALGs based on the installed databases
@@ -18,7 +19,9 @@ species:
     proteins: /path/to/proteins_in_Cel_genome.fasta
     chrom: /path/to/Cel_genome_annotation.chrom
     genome: /path/to/Cel_genome_assembly.fasta
+    minscafsize: 1000000  # Only plots scaffolds that are 1 Mbp or longer
   Homosapiens:
     proteins: /path/to/Human_prots.fasta
     chrom: /path/to/Human_annotation.chrom
     genome: /path/to/Human_genome_assembly.fasta
+    minscafsize: 8000000  # Only plots scaffolds that are 8 Mbp or larger
