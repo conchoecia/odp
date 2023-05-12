@@ -5,9 +5,7 @@
 #   date: 2022
 #
 # This is the example config file for odp_nway_rbh
-#  - it is basically the sample config file as for odp2,
-#     but I think currently instead of a .chrom field there
-#     is a prot_to_loc field
+#  - it is basically the sample config file as for odp
 #
 # For each run you can only pick n-way comparisons.
 # In this example file, we can only specify 3-species
