@@ -4,6 +4,9 @@ This script performs mutual-best protein diamond BLAST searches, n-ways,
 
 This script does not support y-axis species
 """
+
+# 20230512 - This script is now deprecated. It performs no essential function and should be deleted soon.
+
 # This block imports fasta-parser as fasta
 import os
 import sys

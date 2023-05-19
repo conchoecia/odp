@@ -1,3 +1,7 @@
+[![Manuscript](manuscript_DOI.svg)](https://www.nature.com/articles/s41586-023-05936-6)
+[![DOI](https://zenodo.org/badge/329185461.svg)](https://zenodo.org/badge/latestdoi/329185461)
+
+
 <img src="https://github.com/conchoecia/odp/blob/main/docs/dotplot_fig_v2-01.jpg" width="250">
 
 # odp - Oxford dot plots
@@ -38,6 +42,7 @@ snakemake -r -p --snakefile odp/scripts/odp
       - [ALGs part 6 - Find orthologs in more species](#groupbytohmm)
       - [ALGs part 7 - Plot mixing of select linkage groups](#plotmixing)
     - [Determine which clade is sister](#4speciesphylogeny)
+- [Citing odp](#cite)
 
 ## <a name="uguide"></a>Users' Guide
 
@@ -50,11 +55,17 @@ chromosome-scale genomes.
 
 This software was visually modelled on the dotplots found in [Simakov, Oleg, et al. "Deeply conserved synteny resolves early events in vertebrate evolution." Nature ecology & evolution 4.6 (2020):820-830.](https://www.nature.com/articles/s41559-020-1156-z), and was further
 expanded to determine the phylogenetic tree toplogy of animals in
-[Schultz, D.T., et al. (2023)](https://www.biorxiv.org/).
+[Schultz, D.T., et al. (2023)](https://www.nature.com/articles/s41586-023-05936-6).
 
 This software fills a niche in that it automates comparisons of chromosome-scale
 genomes, an increasingly important task as the genomes of more non-model
 organisms become available.
+
+For the aims above, this software works by:
+1. For comparisons between two species, this program finds reciprocal-best protein matches using diamond blastp. The pipeline performs comparions between all *n* species in the config file. Compute time scales quadratically with increasing species *O(n*<sup>2</sup>*)*. The [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) of each pairwise comparison is calculated to determine synteny block cutoffs in the cases of complex rearrangements. The signifiance of interactions between two or more genomes is calculated 
+2. Calculating [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) for each genome.
+3. Finding which orthologs correspond to previously identified ancestral linkage groups (ALGs), such as the Bilateria-Cnidaria-Sponge ALGs from [Simakov et al. (2020).](https://www.nature.com/articles/s41559-020-1156-z).
+3. Plotting the genome assembly, reciprocal best protein hits, the ALGs, and Da/Db using matplotlib.
 
 ## <a name="install"></a>Installation
 
@@ -95,12 +106,6 @@ these requirements.
 - [diamond](https://github.com/bbuchfink/diamond)
 - [blastp](https://blast.ncbi.nlm.nih.gov/Blast.cgi?CMD=Web&PAGE_TYPE=BlastDocs&DOC_TYPE=Download)
 - awk
-
-For the aims above, this software works by:
-1. For comparisons between two species, this program finds reciprocal-best protein matches using diamond blastp. The pipeline performs comparions between all *n* species in the config file. Compute time scales quadratically with increasing species *O(n*<sup>2</sup>*)*. The [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) of each pairwise comparison is calculated to determine synteny block cutoffs in the cases of complex rearrangements. The signifiance of interactions between two or more genomes is calculated 
-2. Calculating [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) for each genome.
-3. Finding which orthologs correspond to previously identified ancestral linkage groups (ALGs), such as the Bilateria-Cnidaria-Sponge ALGs from [Simakov et al. (2020).](https://www.nature.com/articles/s41559-020-1156-z).
-3. Plotting the genome assembly, reciprocal best protein hits, the ALGs, and Da/Db using matplotlib.
 
 ## <a name="general"></a>General Usage
 
@@ -428,7 +433,9 @@ The program `odp_genome_rearrangement_simulation` does the following:
 
 The output of this program is histograms showing the different measured parameters from the simulations (grey bars), plotted with the parameters observed from the real genomes (red vertical bars). These plots show whether the sister clade hypotheses seen in the real data can be explained by a highly rearranged state in any of the genomes in the analysis.
 
-## <a name=“citation”></a>Citation
 
-There is currently no citation for this work, so please cite the repository. This section will be updated when the manuscript has been published or uploaded to bioRxiv.
+## <a name="cite"></a>Citing odp
 
+If you use `odp` in your work, please cite the following paper:
+
+[Schultz, D.T., Haddock, S.H.D., Bredeson, J.V., Green, R.E., Simakov, O & Rokhsar, D.S. Ancient gene linkages support ctenophores as sister to other animals. Nature (2023). https://doi.org/10.1038/s41586-023-05936-6](https://www.nature.com/articles/s41586-023-05936-6)

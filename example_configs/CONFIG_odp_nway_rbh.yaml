@@ -17,29 +17,42 @@
 #  1000000 permutations, but it is likely that doing many more than that
 #  isn't useful.
 #
-#
+
+nways: 3                 # This number should be the number of species that will be in each combination. Should match the number in analyses below.
+search_method: "diamond" # this must be diamond or blastp
+# These are all of the analyses that you would like to perform.
+#  The things in quotes here are the 4-way comparisons that you would like to perform
+#  We require these to be explicitely specified in this program because of the higher compute
+#   time of each analysis. 
+analyses:
+  - ["SP1", "SP2", "SP3"]
+  - ["SP2", "SP3", "SP4"]
+  # You can comment out analyses that you want to mark down, but not complete, or if you need to rerun the pipeline
+  #- ["SP1", "SP2", "SP4"]
+
+num_permutations: 1000000
 
 species:
   SP1:
     proteins:    "/path/to/SP1.pep"
-    chrom: "/path/to/SP1.chrom"
+    chrom:       "/path/to/SP1.chrom"
     genome:      "/path/to/SP1.fasta"
     minscafsize: 900000
 
   SP2:
     proteins:    "/path/to/SP2.pep"
-    chrom: "/path/to/SP2.chrom"
+    chrom:       "/path/to/SP2.chrom"
     genome:      "/path/to/SP2.fasta"
     minscafsize: 1200000
 
   SP3:
     proteins:    "/path/to/SP3.pep"
-    chrom: "/path/to/SP3.chrom"
+    chrom:       "/path/to/SP3.chrom"
     genome:      "/path/to/SP3.fasta"
     minscafsize: 800000
 
   SP4:
     proteins:    "/path/to/SP4.pep"
-    chrom: "/path/to/SP4.chrom"
+    chrom:       "/path/to/SP4.chrom"
     genome:      "/path/to/SP4.fasta"
     minscafsize: 2000000
