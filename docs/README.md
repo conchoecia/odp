@@ -1,4 +1,4 @@
-[![Manuscript](manuscript_DOI.svg)](https://www.nature.com/articles/s41586-023-05936-6)
+<a href="https://www.nature.com/articles/s41586-023-05936-6"><img src="manuscript_DOI.svg" alt="Manuscript"  height="20"></a>
 [![DOI](https://zenodo.org/badge/329185461.svg)](https://zenodo.org/badge/latestdoi/329185461)
 
 
