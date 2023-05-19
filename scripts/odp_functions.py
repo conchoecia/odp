@@ -236,11 +236,18 @@ def reciprocal_best_hits_jackhmmer(
 
 
 def check_legality(config):# check for legal config entries. Useful fr finding misspelled entries
+    """
+    Just checks to see if the arguments in this config file are legal.
+    """
+    # The following strings are illegal and may have been used in previous versions of the program
+    #  - "prot_to_loc"
+    #  - "prot_to_loc"
     legal = ["proteins", "chrom", "genome", "genus",
              "minscafsize", "manual_breaks", "chrom_to_color",
              "plotorder", "species", "prot_to_group"]
-    illegal = set("prot_to_loc", "prot-to-loc")
-    for this_axis in ["xaxisspecies", "yaxisspecies"]:
+    illegal = set()
+
+    for this_axis in ["species"]:
         if this_axis in config:
             for this_sample in config[this_axis]:
                 for key in config[this_axis][this_sample]:
