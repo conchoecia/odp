@@ -1,5 +1,5 @@
-rbh_file: "OUTER_SP1_SP2_SP3.rbh"
-outer:    "OUTER"
+rbh_file: "OUTER_SP1_SP2_SP3.rbh" # The order of the species in this name doesn't matter
+outgroup: "OUTER"
 species1: "SP1"
 species2: "SP2"
 species3: "SP3"

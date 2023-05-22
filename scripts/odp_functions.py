@@ -402,6 +402,12 @@ def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     outhandle = open(output_fasta, "w")
     for record in fasta.parse(input_fasta):
         if record.id in keep_these and record.id not in printed_already:
+            # The record object has the properties
+            #  - Record.id
+            #  - Record.seq
+            #  - Record.desc
+            # get rid of the description to avoid parsing errors later
+            record.desc=""
             print(record, file = outhandle)
             printed_already.add(record.id)
     outhandle.close()
