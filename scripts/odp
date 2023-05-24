@@ -179,6 +179,13 @@ if config["plot_LGs"]:
     file_targets += expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_yx_synteny.pdf",
            hmm = config["prot_to_color"], sp = config["species"])
 
+# plot the decay blocks
+if "plot_LG_decay" not in config:
+    config["plot_LG_decay"] = False
+if config["plot_LG_decay"]:
+    file_targets += expand(config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.pdf",
+           hmm = config["prot_to_color"], sp = config["species"])
+
 wildcard_constraints:
     sample1="[A-Za-z0-9]+",
     sample2="[A-Za-z0-9]+",
@@ -193,6 +200,8 @@ wildcard_constraints:
 rule all:
     input:
         file_targets
+
+
 
 rule filter_prots:
     """
@@ -2017,10 +2026,10 @@ rule hmm_search_to_rbh:
                                                            x["{}_scaf".format(wildcards.coloredby)]), axis=1)
         genesdf2.to_csv(output.rbh, sep ="\t", header = True, index = None)
 
-"""
-This makes the synteny plots with the pre-installed color groups
-"""
 rule plot_synteny_coloredby:
+    """
+    This makes the synteny plots with the pre-installed color groups
+    """
     input:
         rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.D.FET.rbh",
         colordir = lambda wildcards: config["prot_to_color"][wildcards.coloredby],
@@ -2078,20 +2087,20 @@ rule plot_synteny_coloredby:
                      prot_to_color_dir  = params.coloredbydir,
                      prot_to_color_hmm_results = input.hmm_results)
 
-"""
-This makes a synteny plot specifically with the ALG pseudo-genomes
- and the species in the analysis.
-
- For example the BCnS ALGs will be plotted on the x-axis as if they
-  are a genome assembly, and the real genome from the species being
-  analyzed will be plotted on the y-axis. This will be repeated, so the
-  ALGs and species will be on the y and x axes.
-
-In this case, we don't need to compare the plot to the hmm samples because
-  the rbh file we are using has already been treated to have the columns
-  "gene_group" and "color" from the ALG folder's information.
-"""
 rule plot_synteny_of_ALGs_plus_species:
+    """
+    This makes a synteny plot specifically with the ALG pseudo-genomes
+     and the species in the analysis.
+    
+     For example the BCnS ALGs will be plotted on the x-axis as if they
+      are a genome assembly, and the real genome from the species being
+      analyzed will be plotted on the y-axis. This will be repeated, so the
+      ALGs and species will be on the y and x axes.
+    
+    In this case, we don't need to compare the plot to the hmm samples because
+      the rbh file we are using has already been treated to have the columns
+      "gene_group" and "color" from the ALG folder's information.
+    """
     input:
         rbh = config["tool"] + "/step1-rbh/{hmm}_{sp}_reciprocal_best_hits.hmm.D.FET.rbh",
         chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
@@ -2152,3 +2161,95 @@ rule plot_synteny_of_ALGs_plus_species:
                      prot_to_color_name = None,
                      prot_to_color_dir  = None,
                      prot_to_color_hmm_results = None)
+
+def plot_decay(datastruct, outpath):
+    """
+    This plots the decay of an ALG between number of genes in the main chromosome,
+    and the number of genes in smaller chromosomes
+    """
+    import matplotlib.pyplot as plt
+    # convert the datastruct to a simple dataframe
+    ALGs = list(datastruct.keys())
+    conserved = [sum(datastruct[x][0].values()) for x in ALGs]
+    scattered = [sum(datastruct[x][1].values()) for x in ALGs]
+    total     = [conserved[i] + scattered[i] for i in range(len(ALGs))]
+    # turn those columns into a dataframe
+    df = pd.DataFrame({"ALG":ALGs, "conserved":conserved, "scattered":scattered, "total":total})
+    df = df.sort_values(by="total", ascending=False)
+    df = df.reset_index(drop=True)
+    print(df)
+
+    fig, ax1 = plt.subplots()
+    
+    color = 'tab:red'
+    ax1.set_xlabel('ALG size')
+    ax1.set_ylabel('Distribution size', color=color)
+    ax1.tick_params(axis='y', labelcolor=color)
+
+    for index, row in df.iterrows():
+        x1 = row["total"]
+        x2 = row["total"]
+        y1 = 0
+        y2 = row["total"]
+        ax1.plot([x1,x2],[y1,y2],'k-')
+    ax1.plot(df["total"], df["total"],'ro')
+    ax1.plot(df["total"], df["scattered"],'bo')
+ 
+    ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+    ax2.set_ylim([0, 100])
+
+    
+    color = 'tab:blue'
+    ax2.set_ylabel('percent conserved on ALGs', color=color)  # we already handled the x-label with ax1
+    ax2.plot(df["total"], 100*(df["conserved"]/df["total"]), "b-")
+    ax2.tick_params(axis='y', labelcolor=color)
+    
+    fig.tight_layout()  # otherwise the right y-label is slightly clipped
+    plt.savefig(outpath)
+
+rule ALG_decay_plot:
+    """
+    This rule creates the ALG decay plot
+    |
+    | X
+    | X X X X X 
+    | X X X X X X X X X X 
+    | X.X.X.X.X.X.X.X.X.X.X.X.X.X.X........
+    | X X X X X X X X X X X X X X X X X X X 
+    +----------------------------------------
+    """
+    input:
+        rbh = config["tool"] + "/step1-rbh/{hmm}_{sp}_reciprocal_best_hits.hmm.D.FET.rbh"
+    output:
+        plot = config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.pdf"
+    threads: 1
+    run:
+        # read in the rbh dataframe
+        rbhdf = pd.read_csv(input.rbh, sep = "\t", header = 0)
+        # sort by the whole_FET value
+        rbhdf = rbhdf.sort_values(by = "whole_FET")
+        # groupby the HMM scaf 
+        hmmgroupby = rbhdf.groupby(["{}_scaf".format(wildcards.hmm)])
+
+
+        # ALG dataframe
+        #  - key: the ALG name
+        #    - 0th element are things that are on orthologous chroms
+        #    - 1st elements are things that are not on orthologous chroms
+        ALG_results = {}
+        # iterate through each group and print the contents
+        for name, group in hmmgroupby:
+            # get a subset of the df where whole_FET is less than 0.05
+            ALGs   = group[group["whole_FET"] <= 0.05]
+            others = group[group["whole_FET"] > 0.05]
+
+            results = [{}, {}]
+            # add the ALGs and others counts to the results dataframe as a dict
+            results[0] = ALGs["{}_scaf".format(wildcards.sp)].value_counts().to_dict()
+            results[1] = others["{}_scaf".format(wildcards.sp)].value_counts().to_dict()
+            # add the results to the ALG_results dict with the hmm name as the key
+            ALG_results[name] = results
+        
+        # plot the results with this dataframe
+        plot_decay(ALG_results, output.plot)
+
