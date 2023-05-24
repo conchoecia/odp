@@ -12,7 +12,7 @@ sys.path.insert(1, dependencies_path)
 import fasta
 
 # ODP-specific imports
-# None
+import odp_plotting_functions as odp_plot
 
 # Other standard python libraries
 import logging
@@ -370,12 +370,11 @@ def subway_plot(species_order, rbh_filelist,
             #print(chromdf)
             sp_to_chromdf[sp] = chromdf
 
-    # set some parameters to make the font helvetica, and the output
-    # more easily editable in illustrator or inkscape
-    #sns.set(rc={'text.usetex' : True})
-    sns.set_style("ticks", {'font.family': ['sans-serif'],
-                                'font.sans-serif': ['Helvetica'],
-                                'grid.color': '.95'})
+    # Set some parameters to make the font helvetica, and the output
+    # more easily editable in illustrator or inkscape.
+    # This is implemented in odp_plotting_functions
+    odp_plot.format_matplotlib()
+
     logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
     # Preserve the vertical order of embedded images:
     matplotlib.rcParams['image.composite_image'] = False
