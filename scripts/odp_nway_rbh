@@ -131,6 +131,7 @@ rule all:
         # the filtered groupby file
         [config["tool"] + "/step2-groupby/{}.rbh.filt.groupby".format(
             "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        # This unwrapped file needs to have the false discovery rate lines
         [config["tool"] + "/step3-unwrap/{}.filt.unwrapped.rbh".format(
             "_".join(thisanalysis)) for thisanalysis in analyses_list]
 
@@ -591,6 +592,7 @@ rule unwrap_rbh_file_with_group_column:
         rbh_entries = []
         for index, row in df.iterrows():
             rbh_list = ast.literal_eval(row["rbh"])
+
             species_to_gene_list = {}
             species_to_gene_pos  = {}
             species_to_gene_scaf = {}
@@ -625,8 +627,9 @@ rule unwrap_rbh_file_with_group_column:
                     thisentry[poscol]  = species_to_gene_pos[thisspecies][i]
                 rbh_entries.append(thisentry)
 
+
         unwrapped = pd.DataFrame(rbh_entries)
         unwrapped = unwrapped[[x for x in unwrapped.columns
-                               if x not in ["count", "alpha", "alpha_type"]]]
+                               if x not in ["count"]]]
         outfile = params.prefix + species_string + ".unwrapped.rbh"
         unwrapped.to_csv(output.rbh, sep="\t", na_rep = "None", index = False)
