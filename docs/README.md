@@ -37,7 +37,7 @@ snakemake -r -p --snakefile odp/scripts/odp
     - [Help generating `.chrom` files](#chromhelp)
   - [Use cases](#cases)
     - [Make macrosynteny plots between two or more genomes](#macrosynuse)
-    - [If you want to analyze chordate linkage groups](#CLGs)
+    - [If you want to analyze chordate linkage groups](#CLGsection)
     - [Find and characterize ancestral linkage groups](#ALGanalysis)
       - [ALGs part 1 - Ortholog finding in 3+ species](#nwayreciprocalbest)
       - [ALGs part 2 - Find significantly numerous groups of orthologs](#groupby)
@@ -247,7 +247,7 @@ Run the pipeline with the command `snakemake -r -p --snakefile odp/scripts/odp`.
     - `synteny_nocolor`
       - Two-species synteny plots appear here regardless of what is in `LG_db`.
 
-### <a name="CLGs"></a> If you want to analyze chordate linkage groups
+### <a name="CLGsection"></a> If you want to analyze chordate linkage groups
 
 The preinstalled ALGs are the Bilaterian-Cnidarian-Sponge Linkage Groups (BCnS
 LGs) that are discussed in [Simakov et al.(2022)](https://www.science.org/doi/full/10.1126/sciadv.abi5884). If you want to
