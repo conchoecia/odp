@@ -24,6 +24,33 @@ snakemake -r -p --snakefile odp/scripts/odp
 # currently there is no man page, see https://github.com/conchoecia/odp/ for instructions
 ```
 
+## <a name="started"></a>Quick Start
+
+### Oxford Dot Plots or ALG-genome comparisons
+
+[CLICK HERE](#macrosynuse) if you want to make an Oxford dot plot report between
+two or more combinations of genomes (shown below), OR you want to compare your
+genomes to:
+
+- the chordate linkage groups (CLGs) from [Simakov et al 2020](https://www.nature.com/articles/s41559-020-1156-z)
+- the BCnS ancestral linkage groups from [Simakov et al 2022](https://www.science.org/doi/10.1126/sciadv.abi5884)
+- or the pre-metazoan linkage groups from [Schultz et al 2023](https://www.nature.com/articles/s41586-023-05936-6)
+
+<a href="https://github.com/conchoecia/odp#make-macrosynteny-plots-between-two-or-more-genomes"><img src="ODP_example_small_283KB.jpg" alt="ODP_example"  width="500"></a>
+
+### Ribbon Diagrams
+
+[CLICK HERE](#ribbondiagram) if you want to make ribbon diagrams of conserved
+linkages between genomes (shown below).
+
+<a href="https://github.com/conchoecia/odp#make-ribbon-diagrams-of-conserved-linkages-between-genomes"><img src="ribbon_diagram_black_1000px.png" alt="ODP_example"  width="500"></a>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://user-images.githubusercontent.com/25423296/163456776-7f95b81a-f1ed-45f7-b7ab-8fa810d529fa.png">
+  <source media="(prefers-color-scheme: light)" srcset="https://user-images.githubusercontent.com/25423296/163456779-a8556205-d0a5-45e2-ac17-42d089e3c3f8.png">
+  <img alt="Shows an illustrated sun in light mode and a moon with stars in dark mode." src="https://user-images.githubusercontent.com/25423296/163456779-a8556205-d0a5-45e2-ac17-42d089e3c3f8.png">
+</picture>
+
 ## Table of Contents
 
 - [Getting Started](#started)
@@ -36,8 +63,9 @@ snakemake -r -p --snakefile odp/scripts/odp
     - [`.chrom` file specifications](#chromspec)
     - [Help generating `.chrom` files](#chromhelp)
   - [Use cases](#cases)
-    - [Make macrosynteny plots between two or more genomes](#macrosynuse)
     - [If you want to analyze chordate linkage groups](#clgsection)
+    - [Make macrosynteny plots between two or more genomes](#macrosynuse)
+    - [Make ribbon diagrams of conserved linkages between genomes](#ribbondiagram)
     - [Find and characterize ancestral linkage groups](#alganalysis)
       - [ALGs part 1 - Ortholog finding in 3+ species](#nwayreciprocalbest)
       - [ALGs part 2 - Find significantly numerous groups of orthologs](#groupby)
@@ -184,6 +212,23 @@ XP_011540840.1  NC_000001.11    -       586839  611112
 
 ## <a name="cases"></a>Use cases
 
+### <a name="clgsection"></a> If you want to analyze chordate linkage groups
+
+The preinstalled ALGs are the Bilaterian-Cnidarian-Sponge Linkage Groups (BCnS
+LGs) that are discussed in [Simakov et al.(2022)](https://www.science.org/doi/full/10.1126/sciadv.abi5884). If you want to
+analyze your genomes in the context of the Chordate Linkage Groups (CLGs), then
+please compile them first by changing directories to where you installed the software, then running this command.
+
+```sh
+cd odp && make CLGs_v1.0
+```
+
+Be warned that this will take a long time as there are 25 thousand gene groups
+for which HMMs must be built. The final directory will occupy 6.2Gb on disk. By
+default this command will use all of the threads available on the machine you
+are using: `make CLGs_v1.0`. To use only one core, run `make -f Makefile_1core
+CLGs_v1.0`.
+
 ### <a name="macrosynuse"></a>Make macrosynteny plots between two or more genomes
 
 Program: `odp/scripts/odp`
@@ -247,22 +292,9 @@ Run the pipeline with the command `snakemake -r -p --snakefile odp/scripts/odp`.
     - `synteny_nocolor`
       - Two-species synteny plots appear here regardless of what is in `LG_db`.
 
-### <a name="clgsection"></a> If you want to analyze chordate linkage groups
+### <a name="ribbondiagram"></a>Make ribbon diagrams of conserved linkages between genomes
 
-The preinstalled ALGs are the Bilaterian-Cnidarian-Sponge Linkage Groups (BCnS
-LGs) that are discussed in [Simakov et al.(2022)](https://www.science.org/doi/full/10.1126/sciadv.abi5884). If you want to
-analyze your genomes in the context of the Chordate Linkage Groups (CLGs), then
-please compile them first by changing directories to where you installed the software, then running this command.
-
-```sh
-cd odp && make CLGs_v1.0
-```
-
-Be warned that this will take a long time as there are 25 thousand gene groups
-for which HMMs must be built. The final directory will occupy 6.2Gb on disk. By
-default this command will use all of the threads available on the machine you
-are using: `make CLGs_v1.0`. To use only one core, run `make -f Makefile_1core
-CLGs_v1.0`.
+Under construction.
 
 ### <a name="alganalysis"></a>Find and characterize ancestral linkage groups
 
