@@ -10,6 +10,10 @@
 ```sh
 #install
 git clone https://github.com/conchoecia/odp.git
+# NOTE: The make step will automatically use all of the cores on
+#       your current machine. If using a slurm cluster be sure to
+#       request all of the threads on that node. If you need to use
+#       fewer cores, run `make -f Makefile_1core` instead.
 cd odp && make
 # make a config.yaml file for your odp analysis
 cp odp/example_configs/CONFIG_odp.yaml ./config.yaml
@@ -33,6 +37,7 @@ snakemake -r -p --snakefile odp/scripts/odp
     - [Help generating `.chrom` files](#chromhelp)
   - [Use cases](#cases)
     - [Make macrosynteny plots between two or more genomes](#macrosynuse)
+    - [If you want to analyze chordate linkage groups](#CLGs)
     - [Find and characterize ancestral linkage groups](#ALGanalysis)
       - [ALGs part 1 - Ortholog finding in 3+ species](#nwayreciprocalbest)
       - [ALGs part 2 - Find significantly numerous groups of orthologs](#groupby)
@@ -241,6 +246,17 @@ Run the pipeline with the command `snakemake -r -p --snakefile odp/scripts/odp`.
       - If there are ALGs installed in the `LG_db`, then the species-species synteny plots will appear here.
     - `synteny_nocolor`
       - Two-species synteny plots appear here regardless of what is in `LG_db`.
+
+### <a name="CLGs"></a> If you want to analyze chordate linkage groups
+
+The preinstalled ALGs are the Bilaterian-Cnidarian-Sponge Linkage Groups (BCnS
+LGs) that are discussed in [Simakov et al.(2022)](https://www.science.org/doi/full/10.1126/sciadv.abi5884). If you want to
+analyze your genomes in the context of the Chordate Linkage Groups (CLGs), then
+please compile them first by running this command. Be warned that this will take
+a long time as there are 25 thousand gene groups for which HMMs must be built.
+By default this command will use all of the threads available on the machine you
+are using: `make CLGs_v1.0`. To use only one core, run `make -f Makefile_1core
+CLGs_v1.0`.
 
 ### <a name="ALGanalysis"></a>Find and characterize ancestral linkage groups
 

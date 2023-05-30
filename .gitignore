@@ -24,3 +24,4 @@ __pycache__
 *.hmm
 *.rbh
 LG_db/*/
+._*
