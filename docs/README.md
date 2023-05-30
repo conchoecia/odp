@@ -37,8 +37,8 @@ snakemake -r -p --snakefile odp/scripts/odp
     - [Help generating `.chrom` files](#chromhelp)
   - [Use cases](#cases)
     - [Make macrosynteny plots between two or more genomes](#macrosynuse)
-    - [If you want to analyze chordate linkage groups](#CLGsection)
-    - [Find and characterize ancestral linkage groups](#ALGanalysis)
+    - [If you want to analyze chordate linkage groups](#clgsection)
+    - [Find and characterize ancestral linkage groups](#alganalysis)
       - [ALGs part 1 - Ortholog finding in 3+ species](#nwayreciprocalbest)
       - [ALGs part 2 - Find significantly numerous groups of orthologs](#groupby)
       - [ALGs part 3 - Filter groups of orthologs](#groupbyfilter)  
@@ -247,7 +247,7 @@ Run the pipeline with the command `snakemake -r -p --snakefile odp/scripts/odp`.
     - `synteny_nocolor`
       - Two-species synteny plots appear here regardless of what is in `LG_db`.
 
-### <a name="CLGsection"></a> If you want to analyze chordate linkage groups
+### <a name="clgsection"></a> If you want to analyze chordate linkage groups
 
 The preinstalled ALGs are the Bilaterian-Cnidarian-Sponge Linkage Groups (BCnS
 LGs) that are discussed in [Simakov et al.(2022)](https://www.science.org/doi/full/10.1126/sciadv.abi5884). If you want to
@@ -258,7 +258,7 @@ By default this command will use all of the threads available on the machine you
 are using: `make CLGs_v1.0`. To use only one core, run `make -f Makefile_1core
 CLGs_v1.0`.
 
-### <a name="ALGanalysis"></a>Find and characterize ancestral linkage groups
+### <a name="alganalysis"></a>Find and characterize ancestral linkage groups
 
 Finding ancestral linkage groups of proteins for a group of species is a useful
 way to characterize what the genome at the ancestral node of that clade may have
