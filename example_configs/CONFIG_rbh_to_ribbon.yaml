@@ -1,12 +1,12 @@
 #
-# Example config.yaml file for: rbh_to_subway
+# Example config.yaml file for: odp_rbh_to_ribbon
 # Author: dts
 # github account: @conchoecia
 # link to github repo: https://github.com/conchoecia/odp
 # date: 2022-2023
 # license: GNU GPL https://github.com/conchoecia/odp/blob/main/LICENSE
 #
-# Goal: This script creates subway plots of genome synteny.
+# Goal: This script creates ribbon plots of genome synteny.
 #
 # First select which plotting order is desired for the chromosomes
 #  chr_sort_order < custom | optimal-top | optimal-size | optimal-random >
@@ -49,6 +49,7 @@ chromorder:
     - EMU3
 
 # NOTE : YOU CAN ONLY SPECIFY ONE OF THE FOLLOWING:
+#        COMMENT OUT THE ONE YOU DO NOT USE
 #  - rbh_files_in_order
 #  - rbh_directory
 
@@ -74,7 +75,7 @@ rbh_directory: /scratch/molevo/dts/leech_copy/odp/step2-figures/synteny_coloredb
 #   - chrom
 #   - genome
 # - If you specify "minscafsize", then only scaffolds >= this size are
-#   included in the subway plot.
+#   included in the ribbon plot.
 species:
   HCA:
     genus:    "Hormiphora"

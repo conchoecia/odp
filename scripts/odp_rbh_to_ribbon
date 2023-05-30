@@ -1,7 +1,7 @@
 """
 This script takes a list of species as a plotting order,
  and a list of rbh files from those species,
- and makes a synteny subway plot.
+ and makes a synteny ribbon plot.
 """
 # This block imports fasta-parser as fasta
 import os
@@ -174,7 +174,7 @@ def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy):
         panel.add_patch(patch)
     return panel
 
-def subway_plot(species_order, rbh_filelist,
+def ribbon_plot(species_order, rbh_filelist,
                 sp_to_chr_to_size,
                 sp_min_chr_size, outfile,
                 sp_to_gene_order = None,
@@ -648,7 +648,7 @@ rule make_plot:
                 min_chr_size[sp] = config["species"][sp]["minscafsize"]
             else:
                 min_chr_size[sp] = 0
-        subway_plot(params.sp_order, input.rbh_filelist,
+        ribbon_plot(params.sp_order, input.rbh_filelist,
                     sp_to_chr_to_size, min_chr_size, output.pdf,
                     config["chromorder"],
                     config["chr_sort_order"],
