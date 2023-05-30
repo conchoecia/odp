@@ -252,9 +252,15 @@ Run the pipeline with the command `snakemake -r -p --snakefile odp/scripts/odp`.
 The preinstalled ALGs are the Bilaterian-Cnidarian-Sponge Linkage Groups (BCnS
 LGs) that are discussed in [Simakov et al.(2022)](https://www.science.org/doi/full/10.1126/sciadv.abi5884). If you want to
 analyze your genomes in the context of the Chordate Linkage Groups (CLGs), then
-please compile them first by running this command. Be warned that this will take
-a long time as there are 25 thousand gene groups for which HMMs must be built.
-By default this command will use all of the threads available on the machine you
+please compile them first by changing directories to where you installed the software, then running this command.
+
+```sh
+cd odp && make CLGs_v1.0
+```
+
+Be warned that this will take a long time as there are 25 thousand gene groups
+for which HMMs must be built. The final directory will occupy 6.2Gb on disk. By
+default this command will use all of the threads available on the machine you
 are using: `make CLGs_v1.0`. To use only one core, run `make -f Makefile_1core
 CLGs_v1.0`.
 
