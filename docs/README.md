@@ -2,7 +2,7 @@
 [![DOI](https://zenodo.org/badge/329185461.svg)](https://zenodo.org/badge/latestdoi/329185461)
 
 
-<img src="https://github.com/conchoecia/odp/blob/main/docs/dotplot_fig_v2-01.jpg" width="250">
+<img src="dotplot_fig_v2-01.jpg" width="250">
 
 # odp - Oxford dot plots
 
@@ -24,12 +24,12 @@ snakemake -r -p --snakefile odp/scripts/odp
 # currently there is no man page, see https://github.com/conchoecia/odp/ for instructions
 ```
 
-## <a name="started"></a>Quick Start
+## <a name="quickstart"></a>Quick Start
 
 ### Oxford Dot Plots or ALG-genome comparisons
 
-[CLICK HERE](#macrosynuse) if you want to make an Oxford dot plot report between
-two or more combinations of genomes (shown below), OR you want to compare your
+[CLICK HERE](#macrosynuse) if you want to make an Oxford dot plot report (SHOWN BELOW) between
+two or more combinations of genomes, OR you want to compare your
 genomes to:
 
 - the chordate linkage groups (CLGs) from [Simakov et al 2020](https://www.nature.com/articles/s41559-020-1156-z)
@@ -46,8 +46,8 @@ genomes to:
 
 ### Ribbon Diagrams
 
-[CLICK HERE](#ribbondiagram) if you want to make ribbon diagrams of conserved
-linkages between genomes (shown below).
+[CLICK HERE](#ribbondiagram) if you want to make ribbon diagrams (SHOWN BELOW) of conserved
+linkages between genomes.
 
 <a href="https://github.com/conchoecia/odp#make-ribbon-diagrams-of-conserved-linkages-between-genomes">
   <picture>
@@ -59,6 +59,7 @@ linkages between genomes (shown below).
 ## Table of Contents
 
 - [Getting Started](#started)
+- [Quick Start](#quickstart)
 - [Users' Guide](#uguide)
   - [Installation](#install)
     - [Python Requirements](#python)
