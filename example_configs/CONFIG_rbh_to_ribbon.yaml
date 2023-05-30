@@ -65,7 +65,7 @@ rbh_files_in_order:
 
 # If your rbh files were generated with odp, you can just supply the
 #  path to the
-rbh_directory: /scratch/molevo/dts/leech_copy/odp/step2-figures/synteny_coloredby_BCnS_LGs/
+rbh_directory: /path/to/odp/step2-figures/synteny_coloredby_BCnS_LGs/
 
 # - All of the species that are in "species_order" above should be here
 # - This information is important for calculating some stats that are used
