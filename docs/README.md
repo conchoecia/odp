@@ -43,12 +43,12 @@ genomes to:
 [CLICK HERE](#ribbondiagram) if you want to make ribbon diagrams of conserved
 linkages between genomes (shown below).
 
-<a href="https://github.com/conchoecia/odp#make-ribbon-diagrams-of-conserved-linkages-between-genomes"><img src="ribbon_diagram_black_1000px.png" alt="ODP_example"  width="500"></a>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://user-images.githubusercontent.com/25423296/163456776-7f95b81a-f1ed-45f7-b7ab-8fa810d529fa.png">
+  <a href="https://github.com/conchoecia/odp#make-ribbon-diagrams-of-conserved-linkages-between-genomes">
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/conchoecia/odp/blob/fc3f57a870af10600ee14807475d1758f9e5df0a/docs/ribbon_diagram_black_1000px.png">
   <source media="(prefers-color-scheme: light)" srcset="https://github.com/conchoecia/odp/blob/3d6d2fbc48e8f6548c97f0ddce9189f6c4c9d8f5/docs/ribbon_diagram_white_1000px.jpeg">
-  <img alt="Shows an illustrated sun in light mode and a moon with stars in dark mode." src="https://user-images.githubusercontent.com/25423296/163456779-a8556205-d0a5-45e2-ac17-42d089e3c3f8.png">
+  <img width = "1000" alt="Example ribbon diagram of animals with the BCnS ALGs" src="https://github.com/conchoecia/odp/blob/3d6d2fbc48e8f6548c97f0ddce9189f6c4c9d8f5/docs/ribbon_diagram_white_1000px.jpeg">
 </picture>
 
 ## Table of Contents
