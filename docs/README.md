@@ -45,11 +45,12 @@ linkages between genomes (shown below).
 
 
 
-<picture>
-  <a href="https://github.com/conchoecia/odp#make-ribbon-diagrams-of-conserved-linkages-between-genomes">
-  <source media="(prefers-color-scheme: dark)" srcset="ribbon_diagram_black_1000px.png">
-  <img alt="Example ribbon diagram of animals with the BCnS ALGs" src="ribbon_diagram_white_1000px.jpeg">
-</picture>
+<a href="https://github.com/conchoecia/odp#make-ribbon-diagrams-of-conserved-linkages-between-genomes">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="ribbon_diagram_black_1000px.png">
+    <img alt="Example ribbon diagram of animals with the BCnS ALGs" src="ribbon_diagram_white_1000px.jpeg">
+  </picture>
+</a>
 
 ## Table of Contents
 
