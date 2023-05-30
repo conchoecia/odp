@@ -7,7 +7,6 @@
 *.jf
 *.histo
 temp.sh
-*.png
 *_model.txt
 *_progress.txt
 *_summary.txt
