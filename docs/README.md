@@ -36,14 +36,18 @@ genomes to:
 - the BCnS ancestral linkage groups from [Simakov et al 2022](https://www.science.org/doi/10.1126/sciadv.abi5884)
 - or the pre-metazoan linkage groups from [Schultz et al 2023](https://www.nature.com/articles/s41586-023-05936-6)
 
-<a href="https://github.com/conchoecia/odp#make-macrosynteny-plots-between-two-or-more-genomes"><img src="ODP_example_small_283KB.jpg" alt="ODP_example"  width="500"></a>
+<a href="https://github.com/conchoecia/odp#make-macrosynteny-plots-between-two-or-more-genomes">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="dotplot_black_small.png">
+    <img alt="Example Oxford Dot Plot report"       src="dotplot_white_small_300KB.jpg">
+  </picture>
+</a>
+
 
 ### Ribbon Diagrams
 
 [CLICK HERE](#ribbondiagram) if you want to make ribbon diagrams of conserved
 linkages between genomes (shown below).
-
-
 
 <a href="https://github.com/conchoecia/odp#make-ribbon-diagrams-of-conserved-linkages-between-genomes">
   <picture>
