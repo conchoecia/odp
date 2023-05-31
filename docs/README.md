@@ -6,9 +6,6 @@
   <img      alt="logo for ODP"                    src="odp_logo_white_400px.jpg">
 </picture>
 
-
-<img src="dotplot_fig_v2-01.jpg" width="250">
-
 # odp - Oxford dot plots
 
 ## <a name="started"></a>Getting Started
