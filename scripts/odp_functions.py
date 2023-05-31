@@ -9,6 +9,9 @@ dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
 import fasta
 
+# ODP-specific imports
+import odp_plotting_functions as odp_plot
+
 # other standard python libraries
 from itertools import combinations
 from itertools import product
@@ -1018,10 +1021,10 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     #import matplotlib.patches as mplpatches
     from matplotlib.ticker import StrMethodFormatter, NullFormatter
     import numpy as np
-    #sns.set(rc={'text.usetex' : True})
-    sns.set_style("ticks", {'font.family': ['sans-serif'],
-                                'font.sans-serif': ['Helvetica'],
-                                'grid.color': '.95'})
+
+    # CALL THIS TO GET THE VISUAL STYLE WE NEED
+    odp_plot.format_matplotlib()
+
     # Preserve the vertical order of embedded images:
     matplotlib.rcParams['image.composite_image'] = False
     # text as font in pdf
