@@ -2,8 +2,8 @@
 [![DOI](https://zenodo.org/badge/329185461.svg)](https://zenodo.org/badge/latestdoi/329185461)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="odp_logo_black_1114px.png">
-  <img alt="logo for ODP"       src="odp_logo_white_1114px.jpg">
+  <source media="(prefers-color-scheme: dark)" srcset="odp_logo_black_400px.png">
+  <img      alt="logo for ODP"                    src="odp_logo_white_400px.jpg">
 </picture>
 
 
