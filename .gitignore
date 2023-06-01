@@ -24,3 +24,5 @@ __pycache__
 *.rbh
 LG_db/*/
 ._*
+slurm-*
+make_submit.sh

@@ -30,8 +30,16 @@ configfile: "config.yaml"
 
 # plot_all has to be in the config file
 if "plot_all" not in config:
-    sys.exit("ERROR: plot_all not in config file. Please add this to the config file and see the available options in the example config.")
+    outmessage = "ERROR: plot_all not in config file. Please add this to the config file and see the available options in the example config.\n"
+    outmessage += "    # - The line in the config file must be simply 'plot_all: True' or 'plot_all: False'.\n"
+    outmessage += "    # - If you only want to plot the significant relationships, set to False.\n"
+    outmessage += "    #    The significant lines will have an opacity of 0.8\n"
+    outmessage += "    # - If you want to plot everything, set to True\n"
+    outmessage += "    #   The significant lines will have an opacity of 0.8,\n"
+    outmessage += "    #   and opacity of the the faint lines will be 0.15.\n"
+    sys.exit(outmessage)
 else:
+    # plot_all must be True or False
     if config["plot_all"] not in [True, False]:
         sys.exit("ERROR: plot_all must be selected from < True | False >. You provided {}.".format(config["plot_all"]))
 
@@ -43,7 +51,14 @@ for entry in checklist:
     if entry in config:
         in_config.append(entry)
 if len(in_config) != 1:
-    raise IOError("You must specify one, and only one, of the options 'rbh_files_in_order' or 'rbh_directory' in the config. Please comment out one of them to proceed, or add one if you have not yet.")
+    errmess =  "You must specify one, and only one, of the options 'rbh_files_in_order' or 'rbh_directory' in the config.\n"
+    errmess += "  Please comment out one of those lines with a '#' character to proceed, or add one if you have not yet.\n"
+    raise IOError(errmess)
+
+# check that every species in the config file's species_order field is present in the species list in the config
+for sp in config["species_order"]:
+    if sp not in config["species"]:
+        sys.exit("ERROR: {} is in the species_order field of the config file, but is not in the species field.".format(sp))
 
 # If the user specified "rbh_directory", we need to get a list of the files
 #  in that directory, and find the files in the order that they appear in
@@ -58,7 +73,21 @@ if ("rbh_directory" in config) and ("rbh_files_in_order" not in config):
         sp =     config["species_order"][i]
         nextsp = config["species_order"][i+1]
         sortstring = "_".join(sorted([sp, nextsp]))
-        # this gets the first file with the sortstring in it
+
+        # check if a file exists with this sortstring
+        in_direc = False
+        for file in fileslist:
+            if file.startswith(sortstring):
+                in_direc = True
+        if not in_direc:
+            error_message =    "   There is no file in the rbh directory that starts with {}.".format(sortstring)
+            error_message += "\n   The program needs this file because this species pair was specified in the config.yaml file."
+            error_message += "\n   Did you forget to include one of these species in the config.yaml file?"
+            error_message += "\n   Please also ensure that no .rbh files have been deleted."
+            raise IOError(error_message)
+
+        # This gets the first file with the sortstring in it. We now know that this
+        #  file exists.
         thisfile = [x for x in fileslist if x.startswith(sortstring)][0]
         absfile = os.path.join(config["rbh_directory"], thisfile)
         files_list_in_order.append(absfile)
