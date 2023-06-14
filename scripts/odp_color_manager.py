@@ -16,6 +16,7 @@ file accompanying the hmms.
 
 import os
 import pandas as pd
+import random
 import sys
 
 class LG_db:
@@ -303,3 +304,42 @@ class LG_db:
                 plotdf.loc[index,"gene_group"] = group
 
         return plotdf
+
+def return_random_color():
+    """
+    Return a random color
+    """
+    return "#%06x" % random.randint(0, 0xFFFFFF)
+
+def generate_random_color():
+    while True:
+        color = random.randint(0, 0xFFFFFF)
+        brightness = calculate_brightness(color)
+        saturation = calculate_saturation(color)
+
+        if brightness > 127 and brightness < 300:
+            if saturation > 0.3 and saturation < 0.8:
+                return "#{:06x}".format(color)
+
+def calculate_brightness(color):
+    red = (color >> 16) & 0xFF
+    green = (color >> 8) & 0xFF
+    blue = color & 0xFF
+
+    # return the brightness
+    return (red * 299 + green * 587 + blue * 114) / 1000
+
+def calculate_saturation(color):
+    red = (color >> 16) & 0xFF
+    green = (color >> 8) & 0xFF
+    blue = color & 0xFF
+
+    maximum = max(red, green, blue)
+    minimum = min(red, green, blue)
+
+    if maximum == 0:
+        saturation = 0
+    else:
+        saturation = (maximum - minimum) / maximum
+
+    return saturation

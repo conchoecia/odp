@@ -35,6 +35,9 @@ import statistics
 import sys
 import odp_functions as odpf
 
+# we need a way to handle the colors
+from odp_color_manager import generate_random_color as grc
+
 configfile: "config.yaml"
 
 config["tool"] = "odp_nway_rbh"
@@ -500,8 +503,6 @@ rule groupby_rbh_results:
 
         # calculate the alpha score for each level
         df = df.reset_index(drop = True)
-        print(df)
-        print(df.columns)
         grouped_multiple = df.groupby(groupbycols).agg(list).reset_index()
 
         # get the size
@@ -537,6 +538,24 @@ rule groupby_rbh_results:
                                     if x.split("_")[0] in all_species]))
         upfront_species_other = upfront + species_cols + other_pt2
         grouped_multiple = grouped_multiple[upfront_species_other]
+
+        # We should automatically assign some colors to the groups
+        # This feature was part of some requests from Grisha Zolotarov
+        # - request documented here: https://github.com/conchoecia/odp/issues/31
+        # generate a random color for each row  by running the grc() command once per row
+        grouped_multiple["color"] = grouped_multiple.apply(lambda x: grc(), axis = 1)
+        # move the color column to right after the gene_group column
+        cols1 = ['rbh', 'gene_group', 'color', 'count', 'alpha', 'alpha_type']
+        cols2 = cols1 + [x for x in grouped_multiple.columns if x not in cols1]
+        grouped_multiple = grouped_multiple[cols2]
+    
+        # Now we add an Ersatz gene group name since we don't have one yet
+        # reset the indices
+        grouped_multiple = grouped_multiple.reset_index(drop = True)
+        # for the 'gene_group' column just use the species string and the df row index
+        grouped_multiple["gene_group"] = grouped_multiple.apply(lambda x: "{}_{}".format(
+                                           match_string, str(int(x.name) + 1)), axis = 1)
+        # now we save the file
         grouped_multiple.to_csv(output.rbh, sep="\t", index = False)
 
 rule filter_rbh_files:
