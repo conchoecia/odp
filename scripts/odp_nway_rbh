@@ -35,6 +35,12 @@ import statistics
 import sys
 import odp_functions as odpf
 
+# fasta importer to get the chrom lengths
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
+
 # we need a way to handle the colors
 from odp_color_manager import generate_random_color as grc
 
@@ -143,6 +149,12 @@ rule all:
             "_".join(thisanalysis)) for thisanalysis in analyses_list],
         # This unwrapped file has every n-way RBH possible
         [config["tool"] + "/step3-unwrap/{}.unwrapped.rbh".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        # the ribbon diagrams
+        [config["tool"] + "/step4-ribbon_diagram/{}.ribbon.pdf".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        # plot the ribbon diagrams
+        [config["tool"] + "/step4-ribbon_diagram/{}.ribbon.pdf".format(
             "_".join(thisanalysis)) for thisanalysis in analyses_list]
 
 rule filter_prots:
@@ -717,3 +729,75 @@ rule unwrap_unfiltered_rbh_file:
     run:
         unwrap_groupby_to_rbh(input.groupby, params.outprefix,
                               outdir = params.outdir)
+
+rule sp_to_chr_to_len:
+    output:
+        outfile = config["tool"] + "/step3-unwrap/{analysis}.sp_to_chr_to_size.tsv"
+    params:
+        sp_order = lambda wildcards: wildcards.analysis.split("_")
+    threads: 1
+    run:
+        sp_to_chr_to_size = {}
+        outfile = open(output.outfile, "w")
+        # for this test just get the species's chromosome sizes
+        for thissp in params.sp_order:
+            if thissp not in sp_to_chr_to_size:
+                sp_to_chr_to_size[thissp] = {}
+                for record in fasta.parse(config["species"][thissp]["genome"]):
+                    print("{}\t{}\t{}".format(thissp, record.id, len(record.seq)), file = outfile)
+        outfile.close()
+
+# import the plotting function from odp_rbh_to_ribbon
+# TODO we need to move ribbon_plot to odp_plotting_functions and also fix the pointer in
+#   odp_rbh_to_ribbon
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+scripts_path = os.path.join(snakefile_path, "../scripts")
+sys.path.insert(1, scripts_path)
+from odp_ribbon_plot import ribbon_plot
+
+rule unfiltered_ribbon_diagram:
+    """
+    plot the unfiltered ribbon diagram
+    """
+    input:
+        rbh = config["tool"] + "/step3-unwrap/{analysis}.unwrapped.rbh",
+        tsv = config["tool"] + "/step3-unwrap/{analysis}.sp_to_chr_to_size.tsv"
+    output:
+        pdf = config["tool"] + "/step4-ribbon_diagram/{analysis}.ribbon.pdf"
+    params:
+        sp_order = lambda wildcards: wildcards.analysis.split("_")
+    threads: 1
+    run:
+        sp_to_chr_to_size = {}
+        # read in the TSV that we already made since it is faster
+        with open(input.tsv, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    fields = line.split("\t")
+                    sp     = fields[0]
+                    chrom  = fields[1]
+                    chrlen = fields[2]
+                    if sp not in sp_to_chr_to_size:
+                        sp_to_chr_to_size[sp] = {}
+                    if chrom not in sp_to_chr_to_size[sp]:
+                        sp_to_chr_to_size[sp][chrom] = int(chrlen)
+
+        min_chr_size = {}
+        for sp in params.sp_order:
+            if "minscafsize" in config["species"][sp]:
+                min_chr_size[sp] = config["species"][sp]["minscafsize"]
+            else:
+                min_chr_size[sp] = 10000
+
+        species_order = params.sp_order
+        rbh_filelist = [input.rbh]
+        sp_min_chr_size = min_chr_size
+        outfile = output.pdf
+
+        ribbon_plot(species_order, rbh_filelist,
+                    sp_to_chr_to_size,
+                    sp_min_chr_size, outfile,
+                    sp_to_gene_order = None,
+                    chr_sort_order   = "custom",
+                    plot_all = False)
