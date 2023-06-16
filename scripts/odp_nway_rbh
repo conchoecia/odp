@@ -198,9 +198,9 @@ rule diamond_blast_x_to_y:
         pep1  = ancient(config["tool"] + "/db/{sample1}_prots.pep"),
         dmnd1 = ancient(config["tool"] + "/db/dmnd/{sample1}_prots.dmnd"),
         pep2  = ancient(config["tool"] + "/db/{sample2}_prots.pep"),
-        phr   = ancient(config["tool"] + "/db/{sample}_prots.pep.phr"),
-        pin   = ancient(config["tool"] + "/db/{sample}_prots.pep.pin"),
-        psq   = ancient(config["tool"] + "/db/{sample}_prots.pep.psq"),
+        phr   = ancient(config["tool"] + "/db/{sample2}_prots.pep.phr"),
+        pin   = ancient(config["tool"] + "/db/{sample2}_prots.pep.pin"),
+        psq   = ancient(config["tool"] + "/db/{sample2}_prots.pep.psq"),
         dmnd2 = ancient(config["tool"] + "/db/dmnd/{sample2}_prots.dmnd"),
     output:
         blastp = config["tool"] + "/step0-blastp_results/{sample1}_against_{sample2}.blastp"

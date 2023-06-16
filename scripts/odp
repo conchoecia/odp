@@ -229,7 +229,6 @@ rule make_diamond_and_blast_db:
 rule diamond_blast:
     input:
         pep1  = ancient(config["tool"] + "/db/{sample1}_prots.pep"),
-        dmnd1 = ancient(config["tool"] + "/db/dmnd/{sample1}_prots.dmnd"),
         pep2  = ancient(config["tool"] + "/db/{sample2}_prots.pep"),
         phr   = ancient(config["tool"] + "/db/{sample2}_prots.pep.phr"),
         pin   = ancient(config["tool"] + "/db/{sample2}_prots.pep.pin"),
