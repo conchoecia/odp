@@ -172,14 +172,23 @@ rule filter_prots:
         odpf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
 
 rule make_diamond_and_blast_db:
+    """
+    This version of makeblastdb works with blast 2.9.0+, before they changed
+      the output.
+    """
     input:
         pep = ancient(config["tool"] + "/db/{sample}_prots.pep")
     output:
         dmnd = config["tool"] + "/db/dmnd/{sample}_prots.dmnd",
-        pdb  = config["tool"] + "/db/{sample}_prots.pep.pdb"
+        phr  = config["tool"] + "/db/{sample}_prots.pep.phr",
+        pin  = config["tool"] + "/db/{sample}_prots.pep.pin",
+        psq  = config["tool"] + "/db/{sample}_prots.pep.psq"
+    params:
+        outdir = config["tool"] + "/db/dmnd"
     threads: workflow.cores - 1
     shell:
         """
+        mkdir -p {params.outdir}
         diamond makedb --in {input.pep} --db {output.dmnd}
         makeblastdb -in {input.pep} -dbtype prot
         """
@@ -189,7 +198,9 @@ rule diamond_blast_x_to_y:
         pep1  = ancient(config["tool"] + "/db/{sample1}_prots.pep"),
         dmnd1 = ancient(config["tool"] + "/db/dmnd/{sample1}_prots.dmnd"),
         pep2  = ancient(config["tool"] + "/db/{sample2}_prots.pep"),
-        pdb2  = ancient(config["tool"] + "/db/{sample2}_prots.pep.pdb"),
+        phr   = ancient(config["tool"] + "/db/{sample}_prots.pep.phr"),
+        pin   = ancient(config["tool"] + "/db/{sample}_prots.pep.pin"),
+        psq   = ancient(config["tool"] + "/db/{sample}_prots.pep.psq"),
         dmnd2 = ancient(config["tool"] + "/db/dmnd/{sample2}_prots.dmnd"),
     output:
         blastp = config["tool"] + "/step0-blastp_results/{sample1}_against_{sample2}.blastp"
