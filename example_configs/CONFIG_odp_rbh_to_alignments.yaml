@@ -1,0 +1,49 @@
+#
+# author: dts
+# github: @conchoecia
+# repository: @conchoecia/odp
+#   date: 2022
+#
+# This is the example config file for odp_rbh_to_alignments
+#
+# The goal of this program is to create protein alignments of the
+#  orthologs, and to set up a database to use for the rest of odp.
+#
+# The .rbh file should contain the `group` and the `color` columns for
+#  each of the rows. This creates groups and colors for each inferred ALG.
+#
+# The .rbh file you should use for this is most likely the output of
+#  the program odp_nway_rbh, and the file
+#  odp_nway_rbh/step3-unwrap/{analysis}.filt.unwrapped.rbh
+#
+# The rbh file mentioned above ^ will contain only the significantly large
+#  ALGs that are annotated with an abstract group name and color
+
+rbh_file: /path/to/your/filtered/and/annotated/rbhfile.rbh
+
+# Every species that is in the rbh file should also be specified
+#  below in the `species` section.
+species:
+  SP1:
+    proteins:    "/path/to/SP1.pep"
+    chrom:       "/path/to/SP1.chrom"
+    genome:      "/path/to/SP1.fasta"
+    minscafsize: 900000
+
+  SP2:
+    proteins:    "/path/to/SP2.pep"
+    chrom:       "/path/to/SP2.chrom"
+    genome:      "/path/to/SP2.fasta"
+    minscafsize: 1200000
+
+  SP3:
+    proteins:    "/path/to/SP3.pep"
+    chrom:       "/path/to/SP3.chrom"
+    genome:      "/path/to/SP3.fasta"
+    minscafsize: 800000
+
+  SP4:
+    proteins:    "/path/to/SP4.pep"
+    chrom:       "/path/to/SP4.chrom"
+    genome:      "/path/to/SP4.fasta"
+    minscafsize: 2000000
