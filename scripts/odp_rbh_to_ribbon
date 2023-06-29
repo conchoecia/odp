@@ -25,8 +25,12 @@ import matplotlib.path as mpath
 import matplotlib.patches as patches
 import pandas as pd
 
-
 configfile: "config.yaml"
+# Perform a general check on the run since there are some common errors that
+#  should be caught regardless of which program is run.
+import odp_functions as odpf
+odpf.general_legal_run()
+
 
 # plot_all has to be in the config file
 if "plot_all" not in config:

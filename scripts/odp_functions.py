@@ -27,6 +27,37 @@ import pandas as pd
 #    """
 #    # First check what the file extension is
 
+def general_legal_run():
+    """
+    imports required:
+      - os
+      - sys
+
+    Checks if the run itself is legal. We need to check for:
+
+    1. This program is not being run in a subdirectory of the odp install.
+       We do not allow this, as some of the outfiles may overwrite program files.
+    """
+    snakefile_path = os.path.dirname(os.path.abspath(__file__)) 
+    odp_path = os.path.abspath(os.path.join(snakefile_path, ".."))
+    cwd      = os.getcwd()
+
+    # test if we are in the odp directory
+    if odp_path in cwd:
+        # raise an error telling the user not to run the analysis in the odp directory
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  You are running this program in the odp install directory.\n"
+        outmessage += "*  The directory where odp is installed is: " + odp_path + "\n"
+        outmessage += "*  The directory where this analysis is being run is: " + cwd + "\n"
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that some of the output files\n"
+        outmessage += "*   may overwrite program files.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please run this analysis in a different directory.\n"
+        outmessage += "*********************************************************************\n"
+        # now use this message for the error and exit the program
+        raise ValueError(outmessage)
 
 def reciprocal_best_permissive_blastp_or_diamond_blastp(
         x_to_y_blastp_results, y_to_x_blastp_results, outfile):

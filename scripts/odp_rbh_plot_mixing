@@ -208,6 +208,9 @@ configfile: "config.yaml"
 config["tool"] = "odp_rbh_plot_mixing"
 
 OdpF.check_legality(config)
+# Perform a general check on the run since there are some common errors that
+#  should be caught regardless of which program is run.
+OdpF.general_legal_run()
 
 # make sure we have the right info in the config.yaml
 if "rbh_file" not in config:

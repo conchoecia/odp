@@ -25,10 +25,14 @@ import pandas as pd
 import statistics
 
 configfile: "config.yaml"
+OdpF.check_legality(config)
+# Perform a general check on the run since there are some common errors that
+#  should be caught regardless of which program is run.
+OdpF.general_legal_run()
+
 
 config["tool"] = "odp_rbh_to_HMM"
 
-OdpF.check_legality(config)
 
 if "missing_ok" not in config:
     config["missing_ok"] == False

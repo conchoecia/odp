@@ -63,6 +63,11 @@ from random import randrange
 import sys
 import time
 
+# ODP-specific imports
+scripts_path = os.path.join(snakefile_path, "../scripts")
+sys.path.insert(1, scripts_path)
+import odp_functions as odpf
+
 # non-standard dependencies
 # data stuff
 import pandas as pd
@@ -78,6 +83,10 @@ from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pylab as pl
 
 configfile: "config.yaml"
+# Perform a general check on the run since there are some common errors that
+#  should be caught regardless of which program is run.
+odpf.general_legal_run()
+
 
 config["tool"] = "odp_genome_rearrangement_simulation"
 
