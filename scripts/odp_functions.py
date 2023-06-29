@@ -268,9 +268,172 @@ def reciprocal_best_hits_jackhmmer(
     print(new_df)
     new_df.to_csv(outfile, sep="\t", index = False, header = False)
 
-
-def check_legality(config):# check for legal config entries. Useful fr finding misspelled entries
+def check_file_exists(filepath) -> bool:
     """
+    checks if a file exists.
+    If not, raises an error
+    """
+    if not os.path.isfile(filepath):
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  This file does not exist:" + filepath + "\n"
+        outmessage =  "*********************************************************************\n"
+        raise IOError(outmessage)
+    else:
+        return True 
+
+def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
+    """
+    This function checks that the input files are legal.
+    There are certain fields that are required,
+      and they must be in a specific format.
+    
+    First read in the genome assembly fasta file:
+      1. Check that the file exists
+      2. Check that each sequence ID exists only once
+    
+    Then read in the protein file:
+      1. Check that the file exists
+      2. Check that each sequence ID exists only once 
+      3. Check that there are no duplicate protein sequences
+    
+    Lastly, read in the .chrom file:
+      1. Check that the file exists
+      2. Check that the proteins in column 1 were seen in the protein fasta file
+      3. Check that the scaffolds were seen in the genome assembly fasta file
+    """
+
+    # PARSE AND CHECK THE GENOME ASSEMBLY
+    # 1. check that the file exists
+    check_file_exists(fastapath)
+    # 2. check that each sequence ID exists only once
+    genome_headers = set()
+    duplicates     = set()
+    for record in fasta.parse(fastapath):
+        if record.id not in genome_headers:
+            genome_headers.add(record.id)
+        else:
+            duplicates.add(record.id)
+    if len(duplicates) > 0:
+        dupstring = ""
+        for entry in sorted(duplicates):
+            dupstring += "*    - " + entry + "\n"
+
+        # raise an error because each ID should only occur once
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  There is a genome assembly with duplicate sequence headers.\n"
+        outmessage += "*  Each sequence in the genome assembly must have a unique ID.\n"
+        outmessage += "*\n"
+        outmessage += "*  The assembly with the problem is: " + fastapath + "\n"
+        outmessage += "*  The headers that are duplicates are:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that we cannot distinguish\n"
+        outmessage += "*   between two separate sequences with the same header.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please remove the duplicate sequence headers from the fasta file,\n"
+        outmessage += "*   regenerate the protein fasta and chrom files, and try again.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+
+    # PARSE AND CHECK THE PROTEIN FILE
+    # 1. check that the file exists
+    check_file_exists(peppath)
+    # 2. check that each sequence ID exists only once
+    protein_headers     = set()
+    duplicate_headers   = set()
+    protein_sequences   = set()
+    duplicate_sequences = set()
+    for record in fasta.parse(peppath):
+        if record.id not in protein_headers:
+            protein_headers.add(record.id)
+        else:
+            duplicate_headers.add(record.id)
+        if str(record.seq) not in protein_sequences:
+            protein_sequences.add(str(record.seq))
+        else:
+            duplicate_sequences.add(record.id)
+
+    if len(duplicate_headers) > 0:
+        dupstring = ""
+        for entry in sorted(duplicate_headers):
+            dupstring += "*    - " + entry + "\n"
+
+        # raise an error because each ID should only occur once
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  There is a protein fasta with duplicate sequence headers.\n"
+        outmessage += "*  Each sequence in the protein fasta must have a unique ID.\n"
+        outmessage += "*\n"
+        outmessage += "*  The protein pep with the problem is: " + peppath + "\n"
+        outmessage += "*  The headers that are duplicates are:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that we cannot distinguish\n"
+        outmessage += "*   between two separate sequences with the same header.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please remove the duplicate sequence headers from the protein fasta\n"
+        outmessage += "*   file, regenerate the chrom files, and try again.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+
+    # 3. Check that each sequence ID exists only once
+    if len(duplicate_sequences) > 0:
+        dupstring = ""
+        for entry in sorted(duplicate_sequences):
+            dupstring += "*    - " + entry + "\n"
+
+        # raise an error because each ID should only occur once
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  Some protein sequences in your file are identical.\n"
+        outmessage += "*  Each protein sequence must be unique.\n"
+        outmessage += "*\n"
+        outmessage += "*  The protein fasta with the problem is: " + peppath + "\n"
+        outmessage += "*  The sequences that are duplicates are:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that duplicate protein seqs\n"
+        outmessage += "*   may interfere with proper reciprocal blastp match detection.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please remove the identical sequences from the protein fasta\n"
+        outmessage += "*   file, regenerate the chrom files, and try again.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+
+    # PARSE AND CHECK THE CHROM FILE
+    # 1. check that the file exists
+    check_file_exists(chrompath)
+    proteins_not_in_pep    = set()
+    scaffolds_not_in_fasta = set()
+    for line in open(chrompath, 'r'):
+        line = line.strip()
+        if line:
+            fields = line.split("\t")
+            # check that the protein was seen in the protein fasta file 
+            protid = fields[0]
+            scaffold = fields[1]
+            if protid not in protein_headers:
+                proteins_not_in_pep.add(protid)
+            if scaffold not in genome_headers:
+                scaffolds_not_in_fasta.add(scaffold)
+
+    # 2. Check that the proteins in column 1 were seen in the protein fasta file
+    if len(proteins_not_in_pep) > 0:
+        # raise an error because the proteins should have been seen already
+        raise IOError("From chrom: " + chrompath + "\n The following proteins in the chrom were not seen in the protein fasta file:\n" + "\n".join(proteins_not_in_pep))
+    # 3. Check that the scaffolds were seen in the genome assembly fasta file
+    if len(scaffolds_not_in_fasta):
+        raise IOError("From chrom: " + chrompath + "\n The following scaffolds in the chrom were not seen in the genome assembly fasta file:\n" + "\n".join(scaffolds_not_in_fasta))
+    
+    # everything passed
+    return True
+    
+def check_legality(config):
+    """
+    This function checks for legal config entries.
+    This is useful for finding misspelled entries.
     Just checks to see if the arguments in this config file are legal.
     """
     # The following strings are illegal and may have been used in previous versions of the program
@@ -301,7 +464,6 @@ def check_legality(config):# check for legal config entries. Useful fr finding m
             for thissample in config[thisdirection]:
                 if "_" in thissample:
                     raise IOError("Sample names can't have '_' char: {}".format(thissample))
-
 
 def flatten(list_of_lists):
     """flatten a list of lists, unique only"""
@@ -593,19 +755,6 @@ def blast_plot_order_helper(coords, sample, xory, xprottoloc, yprottoloc, recip,
     df.reset_index(drop=True, inplace = True)
     #print(list(df.yscaf))
     return(list(df.yscaf))
-
-def config_legal(config):
-    """
-    Use this function to check for config legality
-    """
-    # make sure that plotorder and sort_by_x_coord_blast aren't there together
-    #  These are two conflicting sort order operations.
-    #  Specifically, sort_by_x_coord_blast will mess up plotorder.
-    if ("plotorder" in config["{}axisspecies".format(xory)][sample]) and \
-       ("sort_by_x_coord_blast" in config["{}axisspecies".format(xory)][sample]):
-        raise IOError("""can't have plotorder and sort_by_x_coord_blast in the
-        same sample.""")
-
 
 def parse_coords(coords_file, sample, xory,
                  xprottoloc=None, yprottoloc=None,
