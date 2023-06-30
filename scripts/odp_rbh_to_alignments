@@ -16,7 +16,7 @@ from itertools import groupby
 from itertools import product
 import math
 import numpy as np
-import odp_functions as OdpF
+import odp_functions as odpf
 from operator import itemgetter
 import pandas as pd
 import statistics
@@ -25,8 +25,8 @@ import time
 configfile: "config.yaml"
 # Perform a general check on the run since there are some common errors that
 #  should be caught regardless of which program is run.
-OdpF.general_legal_run() # checks that the program isn't being run in the install directory
-OdpF.check_legality(config)
+odpf.general_legal_run() # checks that the program isn't being run in the install directory
+odpf.check_legality(config)
 
 if not "rbh_file" in config:
     raise IOError("You must specify 'rbh_file' in config.")
@@ -68,8 +68,39 @@ rule all:
         #       other_species = other_species, rbh = rbh_entries),
         #config["tool"] + "/output/" + species_string + "_rbhhmm_plus_other_species.rbh"
 
+rule check_input_legality:
+    """
+    Determine whether the input files are formatted correctly.
+    We call a function that checks these files:
+      - The genome .fasta file
+      - The .chrom file
+      - The protein .fasta file
+    """
+    input:
+        fasta = lambda wildcards: [config["species"][x]["genome"]
+                                   for x in rbh_species],
+        chrom = lambda wildcards: [config["species"][x]["chrom"]
+                                   for x in rbh_species],
+        pep   = lambda wildcards: [config["species"][x]["proteins"]
+                                   for x in rbh_species]
+    output:
+        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
+    threads: 1
+    run:
+        for thissp in rbh_species:
+            thisfasta = config["species"][thissp]["genome"]
+            thispep   = config["species"][thissp]["proteins"]
+            thischrom = config["species"][thissp]["chrom"]
+            if odpf.check_species_input_legality(thisfasta, thispep, thischrom):
+                outfile = config["tool"] + "/db/input_check/{}_pass.txt".format(thissp)
+                with open(outfile, "w") as outf:
+                    outf.write("pass")
+
+
 rule generate_fasta_of_each_rbh:
     input:
+        pass_check = expand(config["tool"] + "/db/input_check/{sample}_pass.txt",
+                            sample = rbh_species),
         rbh = config["rbh_file"],
         proteins = lambda wildcards: [config["species"][x]["proteins"]
                     for x in rbh_species]

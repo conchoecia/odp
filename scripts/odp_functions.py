@@ -491,7 +491,7 @@ def check_legality(config):
             print("  - {}".format(key))
         sys.exit()
     if "species" in config:
-        for thissample in config[thisdirection]:
+        for thissample in config["species"]:
             if "_" in thissample:
                 raise IOError("Sample names can't have '_' char: {}".format(thissample))
 
