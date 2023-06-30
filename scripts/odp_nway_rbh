@@ -49,7 +49,7 @@ configfile: "config.yaml"
 config["tool"] = "odp_nway_rbh"
 # Perform a general check on the run since there are some common errors that
 #  should be caught regardless of which program is run.
-odpf.general_legal_run()
+odpf.general_legal_run() # checks that the program isn't being run in the install directory
 odpf.check_legality(config)
 
 # check diamond_or_blastp
@@ -96,8 +96,6 @@ for entry in analyses_list:
     for thisspecies in entry:
         if thisspecies not in config["species"]:
             raise IOError ("You specified {} in the analyses, but it isn't defined in species".format(thisspecies))
-
-config["yaxisspecies"] = config["species"]
 
 # come up with a list of blast/diamond jobs
 # we must have every combination that is in the analyses_list

@@ -42,7 +42,7 @@ import scipy.stats as stats
 configfile: "config.yaml"
 # Perform a general check on the run since there are some common errors that
 #  should be caught regardless of which program is run.
-odpf.general_legal_run()
+odpf.general_legal_run() # checks that the program isn't being run in the install directory
 
 # check for legal config entries. Useful for finding misspelled entries
 legal = ["proteins", "chrom", "genome", "minscafsize",

@@ -490,11 +490,10 @@ def check_legality(config):
         for key in illegal:
             print("  - {}".format(key))
         sys.exit()
-    for thisdirection in ["xaxisspecies", "yaxisspecies"]:
-        if thisdirection in config:
-            for thissample in config[thisdirection]:
-                if "_" in thissample:
-                    raise IOError("Sample names can't have '_' char: {}".format(thissample))
+    if "species" in config:
+        for thissample in config[thisdirection]:
+            if "_" in thissample:
+                raise IOError("Sample names can't have '_' char: {}".format(thissample))
 
 def flatten(list_of_lists):
     """flatten a list of lists, unique only"""

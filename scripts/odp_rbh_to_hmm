@@ -25,11 +25,10 @@ import pandas as pd
 import statistics
 
 configfile: "config.yaml"
-OdpF.check_legality(config)
 # Perform a general check on the run since there are some common errors that
 #  should be caught regardless of which program is run.
-OdpF.general_legal_run()
-
+OdpF.general_legal_run() # checks that the program isn't being run in the install directory
+OdpF.check_legality(config)
 
 config["tool"] = "odp_rbh_to_HMM"
 
@@ -77,8 +76,6 @@ rule all:
         #       other_species = other_species, rbh = rbh_entries),
         expand(config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.sorted.tsv",
                other_species = other_species, rbh = rbh_entries),
-        #expand("hmm/searches_agg_best/{species}_hmm_best.tsv",
-        #       species = config["yaxisspecies"]),
         config["tool"] + "/output/" + species_string + "_rbhhmm_plus_other_species.rbh"
 
 rule generate_fasta_of_each_rbh:
