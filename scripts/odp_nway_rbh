@@ -44,7 +44,6 @@ import fasta
 # we need a way to handle the colors
 from odp_color_manager import generate_random_color as grc
 
-
 configfile: "config.yaml"
 
 config["tool"] = "odp_nway_rbh"
@@ -159,6 +158,26 @@ rule all:
         [config["tool"] + "/step4-ribbon_diagram/{}.ribbon.pdf".format(
             "_".join(thisanalysis)) for thisanalysis in analyses_list]
 
+rule check_input_legality:
+    """
+    Determine whether the input files are formatted correctly.
+    We call a function that checks these files:
+      - The genome .fasta file
+      - The .chrom file
+      - The protein .fasta file
+    """
+    input:
+        fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
+        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"],
+        pep   = lambda wildcards: config["species"][wildcards.sample]["proteins"]
+    output:
+        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
+    threads: 1
+    run:
+        if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom):
+            with open(output.input_pass, "w") as outf:
+                outf.write("pass")
+
 rule filter_prots:
     """
     Sometimes the prot file with have sequences that are not present in
@@ -166,7 +185,8 @@ rule filter_prots:
     """
     input:
         prots = lambda wildcards: config["species"][wildcards.sample]["proteins"],
-        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"]
+        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"],
+        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
         pep = config["tool"] + "/db/{sample}_prots.pep"
     threads: 1
@@ -179,7 +199,8 @@ rule make_diamond_and_blast_db:
       the output.
     """
     input:
-        pep = ancient(config["tool"] + "/db/{sample}_prots.pep")
+        pep = ancient(config["tool"] + "/db/{sample}_prots.pep"),
+        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
         dmnd = config["tool"] + "/db/dmnd/{sample}_prots.dmnd",
         phr  = config["tool"] + "/db/{sample}_prots.pep.phr",

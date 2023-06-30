@@ -315,10 +315,7 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
         else:
             duplicates.add(record.id)
     if len(duplicates) > 0:
-        dupstring = ""
-        for entry in sorted(duplicates):
-            dupstring += "*    - " + entry + "\n"
-
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicates)[:3]])
         # raise an error because each ID should only occur once
         outmessage =  "*********************************************************************\n"
         outmessage += "* ERROR:\n"
@@ -326,7 +323,8 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
         outmessage += "*  Each sequence in the genome assembly must have a unique ID.\n"
         outmessage += "*\n"
         outmessage += "*  The assembly with the problem is: " + fastapath + "\n"
-        outmessage += "*  The headers that are duplicates are:\n"
+        outmessage += "*  There are " + str(len(duplicate)) + " duplicate sequence headers.\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
         outmessage += dupstring
         outmessage += "*\n"
         outmessage += "*  The reason this is problematic is that we cannot distinguish\n"
@@ -356,10 +354,7 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
             duplicate_sequences.add(record.id)
 
     if len(duplicate_headers) > 0:
-        dupstring = ""
-        for entry in sorted(duplicate_headers):
-            dupstring += "*    - " + entry + "\n"
-
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicate_headers)[:3]])
         # raise an error because each ID should only occur once
         outmessage =  "*********************************************************************\n"
         outmessage += "* ERROR:\n"
@@ -367,7 +362,8 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
         outmessage += "*  Each sequence in the protein fasta must have a unique ID.\n"
         outmessage += "*\n"
         outmessage += "*  The protein pep with the problem is: " + peppath + "\n"
-        outmessage += "*  The headers that are duplicates are:\n"
+        outmessage += "*  There are " + str(len(duplicate_headers)) + " duplicate sequence headers.\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
         outmessage += dupstring
         outmessage += "*\n"
         outmessage += "*  The reason this is problematic is that we cannot distinguish\n"
@@ -380,10 +376,7 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
 
     # 3. Check that each sequence ID exists only once
     if len(duplicate_sequences) > 0:
-        dupstring = ""
-        for entry in sorted(duplicate_sequences):
-            dupstring += "*    - " + entry + "\n"
-
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicate_sequences)[:3]])
         # raise an error because each ID should only occur once
         outmessage =  "*********************************************************************\n"
         outmessage += "* ERROR:\n"
@@ -391,7 +384,8 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
         outmessage += "*  Each protein sequence must be unique.\n"
         outmessage += "*\n"
         outmessage += "*  The protein fasta with the problem is: " + peppath + "\n"
-        outmessage += "*  The sequences that are duplicates are:\n"
+        outmessage += "*  There are " + str(len(duplicate_sequences)) + " duplicate sequences.\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
         outmessage += dupstring
         outmessage += "*\n"
         outmessage += "*  The reason this is problematic is that duplicate protein seqs\n"
@@ -422,10 +416,47 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
     # 2. Check that the proteins in column 1 were seen in the protein fasta file
     if len(proteins_not_in_pep) > 0:
         # raise an error because the proteins should have been seen already
-        raise IOError("From chrom: " + chrompath + "\n The following proteins in the chrom were not seen in the protein fasta file:\n" + "\n".join(proteins_not_in_pep))
-    # 3. Check that the scaffolds were seen in the genome assembly fasta file
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(proteins_not_in_pep)[:3]])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  Some proteins in the .chrom file were not seen in the protein\n"
+        outmessage += "*   .fasta file.\n"
+        outmessage += "*\n"
+        outmessage += "*  The chrom file with the problem is: " + chrompath + "\n"
+        outmessage += "*  There are " + str(len(proteins_not_in_pep)) + " proteins in the .chrom not seen in the protein .fasta\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that we need to access every\n"
+        outmessage += "*   protein specified in the .chrom file, but it is unavailable.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please investigate whether there are too many entries in the .chrom\n"
+        outmessage += "*   file, or if something is missing from the protein .fasta file.\n"
+        outmessage += "*   Then, fix your files and re-run this pipeline.\n"  
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+
+    # 3. Check that the scaffolds were seen in the genome assembly fasta file.
     if len(scaffolds_not_in_fasta):
-        raise IOError("From chrom: " + chrompath + "\n The following scaffolds in the chrom were not seen in the genome assembly fasta file:\n" + "\n".join(scaffolds_not_in_fasta))
+        # Error. Scaffolds specified in .chrom file but missing in the genome assembly fasta.
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(scaffolds_not_in_fasta)[:3]])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  Some scaffolds in the .chrom file were not seen in the genome\n"
+        outmessage += "*   assembly .fasta file.\n"
+        outmessage += "*\n"
+        outmessage += "*  The chrom file with the problem is: " + chrompath + "\n"
+        outmessage += "*  There are " + str(len(scaffolds_not_in_fasta)) + " scaffolds in the .chrom not seen in the genome .fasta\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that we need to access every\n"
+        outmessage += "*   scaffold specified in the .chrom file, but it is unavailable.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please investigate whether there are too many entries in the .chrom\n"
+        outmessage += "*   file, or if something is missing from the genome .fasta file.\n"
+        outmessage += "*   Then, fix your files and re-run this pipeline.\n"  
+        outmessage += "*********************************************************************\n"
     
     # everything passed
     return True
