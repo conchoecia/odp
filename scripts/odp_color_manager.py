@@ -19,6 +19,9 @@ import pandas as pd
 import random
 import sys
 
+def is_valid_hex_code(hex_code):
+    return len(hex_code) == 7 and all(c in '0123456789ABCDEFabcdef' for c in hex_code[1:])
+
 class LG_db:
     """
     This class ingests a directory of an odp linkage database,
