@@ -54,19 +54,55 @@ config["nways"] = len(rbh_species)
 rbhdf = pd.read_csv(config["rbh_file"], index_col = None, sep = "\t")
 rbh_entries = list(set(list(rbhdf["rbh"])))
 
-# come up with number of rbhs
+# The final files that we need are:
+#  - The aligned .fasta files for each rbh in directory aligned/
+#  - The .rbh file that contains the rbh entries and group annotation
+#  - The Snakefile with the way to regenerate the .hmm from the files
+#  - The concatenated .hmm file
+#  - The .check file to see if the concatenated .hmm file works
 rule all:
     input:
-        expand(config["tool"] + "/aligned/{rbh}.fasta",
-               rbh = rbh_entries),
+        # the aligned .fasta files
+        expand(config["tool"] + "/aligned/{rbh}.fasta", rbh = rbh_entries),
+        # the .rbh file
+        config["rbh_file"] + "/{}.rbh".format(config["tool"]),
+        # the Snakefile
+        config["tool"] + "/Snakefile",
+        # The .hmm file
+        config["tool"] + "/{}.hmm".format(config["tool"]),
+        # The check file
+        config["tool"] + "/{}.check".format(config["tool"])
 
-        expand(config["tool"] + "/hmms/{rbh}.hmm",
-               rbh = rbh_entries),
-        ##expand(config["tool"] + "/hmm/searches/{other_species}/{rbh}_against_{other_species}.tsv",
-        ##       other_species = other_species, rbh = rbh_entries),
-        #expand(config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.sorted.tsv",
-        #       other_species = other_species, rbh = rbh_entries),
-        #config["tool"] + "/output/" + species_string + "_rbhhmm_plus_other_species.rbh"
+rule copy_rbh_file:
+    """
+    Just copy the rbh file to the output directory.
+    No need to change anything.
+    """
+    input:
+        rbh = config["rbh_file"]
+    output:
+        rbh = config["tool"] + "/{}.hmm".format(config["tool"])
+    threads: 1
+    shell:
+        """
+        # copy a file with python
+        cp {input.rbh} {output.rbh}
+        """
+
+rule copy_snakefile:
+    """
+    We need to copy the snakefile to the output directory so that
+     it can easily be run later in case this database is distributed.
+    """
+    input:
+        snakefile = os.path.join(snakefile_path, "../dependencies/files_to_copy/LG_db_setup.snakefile")
+    output:
+        snakefile = config["tool"] + "/Snakefile"
+    threads: 1
+    shell:
+        """
+        cp {input.snakefile} {output.snakefile}
+        """
 
 rule check_input_legality:
     """
@@ -96,7 +132,6 @@ rule check_input_legality:
                 with open(outfile, "w") as outf:
                     outf.write("pass")
 
-
 rule generate_fasta_of_each_rbh:
     input:
         pass_check = expand(config["tool"] + "/db/input_check/{sample}_pass.txt",
@@ -105,8 +140,8 @@ rule generate_fasta_of_each_rbh:
         proteins = lambda wildcards: [config["species"][x]["proteins"]
                     for x in rbh_species]
     output:
-        MBH_fasta = expand(config["tool"] + "/unaligned/{rbh}.fasta",
-                           rbh = rbh_entries)
+        MBH_fasta = temp(expand(config["tool"] + "/unaligned/{rbh}.fasta",
+                           rbh = rbh_entries))
     params:
         fasta_dir = config["tool"] + "/unaligned"
     threads: 1
@@ -167,7 +202,7 @@ rule align_fasta_of_each_group:
     input:
         MBH_fasta = config["tool"] + "/unaligned/{rbh}.fasta"
     output:
-        aligned =   config["tool"] + "/aligned/{rbh}.fasta"
+        aligned   = config["tool"] + "/aligned/{rbh}.fasta"
     threads: 1
     shell:
         """
@@ -185,10 +220,41 @@ rule make_hmm:
         hmmbuild {output.hmm} {input.aligned}
         """
 
-rule make_final_db:
-    """
-    make the final hmm db that can be used later
-    """
+rule cat_hmm:
     input:
-        hmm     = expand(config["tool"] + "/hmms/{rbh}.hmm",
-                         rbh = rbh_entries),
+        hmms = expand(config["tool"] + "/hmms/{rbh}.hmm",
+                      rbh = rbh_entries)
+    output:
+        hmm  =    config["tool"]     + "/{}.hmm".format(config["tool"])
+    params:
+        hmm_dir = config["tool"]     + "/hmms"
+    threads: 1
+    shell:
+        """
+        cat {input.hmms} > {output.hmm}
+        rm -rf {params.hmm_dir}
+        """
+
+rule verify_hmm_complete:
+    input:
+        hmm   = config["tool"] + "/{}.hmm".format(config["tool"])
+    output:
+        check = config["tool"] + "/{}.check".format(config["tool"])
+    threads: 1
+    run:
+        unseen = [x for x in rbh_entries]
+        with open(input.hmm, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and line.startswith("NAME  "):
+                    entry = line.replace("NAME  ", "").strip()
+                    try:
+                        unseen.remove(entry)
+                    except:
+                        pass
+        if len(unseen) != 0:
+            raise IOError("There were some entries in the rbh file that were not in the hmm file: {}".format(unseen))
+        else:
+            outhandle = open(output.check, "w")
+            print("all entries present in the hmm", file = outhandle)
+            outhandle.close()
