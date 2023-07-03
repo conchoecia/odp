@@ -81,7 +81,7 @@ rule copy_rbh_file:
     input:
         rbh = config["rbh_file"]
     output:
-        rbh = config["tool"] + "/{}.hmm".format(config["tool"])
+        rbh = config["tool"] + "/{}.rbh".format(config["tool"])
     threads: 1
     shell:
         """
@@ -140,8 +140,8 @@ rule generate_fasta_of_each_rbh:
         proteins = lambda wildcards: [config["species"][x]["proteins"]
                     for x in rbh_species]
     output:
-        MBH_fasta = temp(expand(config["tool"] + "/unaligned/{rbh}.fasta",
-                           rbh = rbh_entries))
+        MBH_fasta = expand(config["tool"] + "/unaligned/{rbh}.fasta",
+                           rbh = rbh_entries)
     params:
         fasta_dir = config["tool"] + "/unaligned"
     threads: 1
@@ -225,14 +225,13 @@ rule cat_hmm:
         hmms = expand(config["tool"] + "/hmms/{rbh}.hmm",
                       rbh = rbh_entries)
     output:
-        hmm  =    config["tool"]     + "/{}.hmm".format(config["tool"])
+        hmm  =    config["tool"] + "/{}.hmm".format(config["tool"])
     params:
-        hmm_dir = config["tool"]     + "/hmms"
+        hmm_dir = config["tool"] + "/hmms"
     threads: 1
     shell:
         """
         cat {input.hmms} > {output.hmm}
-        rm -rf {params.hmm_dir}
         """
 
 rule verify_hmm_complete:
