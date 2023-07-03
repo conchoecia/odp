@@ -211,14 +211,38 @@ rule all:
     input:
         file_targets
 
+rule check_input_legality:
+    """
+    The very first thing that we must do is to check the input files.
+    Determine whether the input files are formatted correctly.
+    We call a function that checks these files:
+      - The genome .fasta file
+      - The .chrom file
+      - The protein .fasta file
+    """
+    input:
+        fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
+        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"],
+        pep   = lambda wildcards: config["species"][wildcards.sample]["proteins"]
+    output:
+        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
+    threads: 1
+    run:
+        if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom):
+            with open(output.input_pass, "w") as outf:
+                outf.write("pass")
+
 rule filter_prots:
     """
     Sometimes the prot file with have sequences that are not present in
      the chrom file. Make a prot file of only the proteins in the chrom file.
+    
+    We require that the file has passed the input checks first.
     """
     input:
         prots = lambda wildcards: config["species"][wildcards.sample]["proteins"],
-        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"]
+        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"],
+        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
         pep = config["tool"] + "/db/{sample}_prots.pep"
     threads: 1
@@ -226,8 +250,13 @@ rule filter_prots:
         odpf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
 
 rule make_diamond_and_blast_db:
+    """
+    We make both diamond and blastp databases for the proteins.
+    We only do this one the sample has passed the input QC checks.
+    """
     input:
-        pep = ancient(config["tool"] + "/db/{sample}_prots.pep")
+        pep = ancient(config["tool"] + "/db/{sample}_prots.pep"),
+        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
         dmnd = config["tool"] + "/db/dmnd/{sample}_prots.dmnd",
         phr  = config["tool"] + "/db/{sample}_prots.pep.phr",
@@ -250,7 +279,7 @@ rule diamond_blast:
         phr   = ancient(config["tool"] + "/db/{sample2}_prots.pep.phr"),
         pin   = ancient(config["tool"] + "/db/{sample2}_prots.pep.pin"),
         psq   = ancient(config["tool"] + "/db/{sample2}_prots.pep.psq"),
-        dmnd2 = ancient(config["tool"] + "/db/dmnd/{sample2}_prots.dmnd")
+        dmnd2 = ancient(config["tool"] + "/db/dmnd/{sample2}_prots.dmnd"),
     output:
         blastp = config["tool"] + "/step0-blastp_results/{sample1}_against_{sample2}.blastp"
     threads: (workflow.cores - 1)
@@ -1660,9 +1689,12 @@ rule get_chromsize_of_one_species:
     3rd col is the scaf length
 
     We filter out the scaffolds that are too small here.
+
+    We require that the sample pass the input file checks first
     """
     input:
-        fasta = lambda wildcards: config["species"][wildcards.sp]["genome"]
+        fasta = lambda wildcards: config["species"][wildcards.sp]["genome"],
+        input_pass = config["tool"] + "/db/input_check/{sp}_pass.txt"
     output:
         chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
     threads:
@@ -1884,7 +1916,7 @@ rule hmm_against_prots:
             [x for x in list(os.listdir(
             config["prot_to_color"][wildcards.coloredby]))
                                       if x.endswith(".hmm")][0]),
-        proteins = config["tool"] + "/db/{sample}_prots.pep"
+        proteins = config["tool"] + "/db/{sample}_prots.pep",
     output:
         hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"
     threads: min(10, int(workflow.cores/4))
