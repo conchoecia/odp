@@ -1733,8 +1733,8 @@ rule get_chromsize_of_analysis_pair:
     input:
         fastas = lambda wildcards: [config["species"][x]["genome"]
                             for x in config["analysispairs"][wildcards.analysis]],
-        pass1  = config["tool"] + "/db/input_check/{}_pass.txt".format(wildcards.analysis.split("_")[0]),
-        pass2  = config["tool"] + "/db/input_check/{}_pass.txt".format(wildcards.analysis.split("_")[1])
+        pass1  = lambda wildcards: config["tool"] + "/db/input_check/{}_pass.txt".format(wildcards.analysis.split("_")[0]),
+        pass2  = lambda wildcards: config["tool"] + "/db/input_check/{}_pass.txt".format(wildcards.analysis.split("_")[1])
     output:
         chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize"
     threads:
