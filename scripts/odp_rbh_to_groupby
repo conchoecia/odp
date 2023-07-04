@@ -24,9 +24,14 @@ import pandas as pd
 
 configfile: "config.yaml"
 
+# Perform a general check on the run since there are some common errors that
+#  should be caught regardless of which program is run.
+OdpF.general_legal_run()
+OdpF.check_legality(config)
+
 config["tool"] = "odp_rbh_to_groupby"
 
-OdpF.check_legality(config)
+
 
 # randomizations
 if not "num_permutations" in config:

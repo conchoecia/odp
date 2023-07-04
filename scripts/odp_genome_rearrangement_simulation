@@ -63,6 +63,11 @@ from random import randrange
 import sys
 import time
 
+# ODP-specific imports
+scripts_path = os.path.join(snakefile_path, "../scripts")
+sys.path.insert(1, scripts_path)
+import odp_functions as odpf
+
 # non-standard dependencies
 # data stuff
 import pandas as pd
@@ -78,10 +83,11 @@ from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pylab as pl
 
 configfile: "config.yaml"
+# Perform a general check on the run since there are some common errors that
+#  should be caught regardless of which program is run.
+odpf.general_legal_run() # checks that the program isn't being run in the install directory
 
 config["tool"] = "odp_genome_rearrangement_simulation"
-
-#OdpF.check_legality(config)
 
 # make sure the appropriate fields are present
 check_these = ["rbh_file",
@@ -662,7 +668,7 @@ rule randomization_simulation:
     It prints out the stats from each round onto a line.
     """
     input:
-        rbh_file = config["rbh_file"],
+        rbh_file = config["rbh_file"]
     output:
         random_sim = config["tool"] + "/sim_randomization/{spstr}/trials/{spstr}_random_sim_{species}_{randcore}.txt"
     threads: 1
@@ -800,8 +806,6 @@ rule randomization_initialization:
 
         # print out the annotated groupby dataframe
         stats[-1].to_csv(output.annotated_gb, sep = "\t", index = False)
-
-
 
 rule make_randomization_summary:
     """

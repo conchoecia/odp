@@ -16,15 +16,21 @@ from itertools import groupby
 from itertools import product
 import math
 import numpy as np
-import odp_functions as OdpF
+import odp_functions as odpf
 from operator import itemgetter
 import pandas as pd
+import shutil
 import statistics
 import time
 
-configfile: "config.yaml"
+# color checker
+from odp_color_manager import is_valid_hex_code as valid_color
 
-OdpF.check_legality(config)
+configfile: "config.yaml"
+# Perform a general check on the run since there are some common errors that
+#  should be caught regardless of which program is run.
+odpf.general_legal_run() # checks that the program isn't being run in the install directory
+odpf.check_legality(config)
 
 if not "rbh_file" in config:
     raise IOError("You must specify 'rbh_file' in config.")
@@ -52,30 +58,94 @@ config["nways"] = len(rbh_species)
 rbhdf = pd.read_csv(config["rbh_file"], index_col = None, sep = "\t")
 rbh_entries = list(set(list(rbhdf["rbh"])))
 
-# come up with number of rbhs
+# The final files that we need are:
+#  - The aligned .fasta files for each rbh in directory aligned/
+#  - The .rbh file that contains the rbh entries and group annotation
+#  - The Snakefile with the way to regenerate the .hmm from the files
+#  - The concatenated .hmm file
+#  - The .check file to see if the concatenated .hmm file works
 rule all:
     input:
-        expand(config["tool"] + "/aligned/{rbh}.fasta",
-               rbh = rbh_entries),
+        # the aligned .fasta files
+        expand(config["tool"] + "/aligned/{rbh}.fasta", rbh = rbh_entries),
+        # the .rbh file
+        config["tool"] + "/{}.rbh".format(config["tool"]),
+        # the Snakefile
+        config["tool"] + "/Snakefile",
+        # The .hmm file
+        config["tool"] + "/{}.hmm".format(config["tool"]),
+        # The check file
+        config["tool"] + "/{}.check".format(config["tool"])
 
-        expand(config["tool"] + "/hmms/{rbh}.hmm",
-               rbh = rbh_entries),
-        ##expand(config["tool"] + "/hmm/searches/{other_species}/{rbh}_against_{other_species}.tsv",
-        ##       other_species = other_species, rbh = rbh_entries),
-        #expand(config["tool"] + "/hmm/searches_agg/{other_species}_hmm_results.sorted.tsv",
-        #       other_species = other_species, rbh = rbh_entries),
-        ##expand("hmm/searches_agg_best/{species}_hmm_best.tsv",
-        ##       species = config["yaxisspecies"]),
-        #config["tool"] + "/output/" + species_string + "_rbhhmm_plus_other_species.rbh"
+rule copy_rbh_file:
+    """
+    Just copy the rbh file to the output directory.
+    No need to change anything.
+    """
+    input:
+        rbh = config["rbh_file"]
+    output:
+        rbh = config["tool"] + "/{}.rbh".format(config["tool"])
+    threads: 1
+    shell:
+        """
+        # copy a file with python
+        cp {input.rbh} {output.rbh}
+        """
+
+rule copy_snakefile:
+    """
+    We need to copy the snakefile to the output directory so that
+     it can easily be run later in case this database is distributed.
+    """
+    input:
+        snakefile = os.path.join(snakefile_path, "../dependencies/files_to_copy/LG_db_setup.snakefile")
+    output:
+        snakefile = config["tool"] + "/Snakefile"
+    threads: 1
+    shell:
+        """
+        cp {input.snakefile} {output.snakefile}
+        """
+
+rule check_input_legality:
+    """
+    Determine whether the input files are formatted correctly.
+    We call a function that checks these files:
+      - The genome .fasta file
+      - The .chrom file
+      - The protein .fasta file
+    """
+    input:
+        fasta = lambda wildcards: [config["species"][x]["genome"]
+                                   for x in rbh_species],
+        chrom = lambda wildcards: [config["species"][x]["chrom"]
+                                   for x in rbh_species],
+        pep   = lambda wildcards: [config["species"][x]["proteins"]
+                                   for x in rbh_species]
+    output:
+        input_pass = temp(config["tool"] + "/db/input_check/{sample}_pass.txt")
+    threads: 1
+    run:
+        for thissp in rbh_species:
+            thisfasta = config["species"][thissp]["genome"]
+            thispep   = config["species"][thissp]["proteins"]
+            thischrom = config["species"][thissp]["chrom"]
+            if odpf.check_species_input_legality(thisfasta, thispep, thischrom):
+                outfile = config["tool"] + "/db/input_check/{}_pass.txt".format(thissp)
+                with open(outfile, "w") as outf:
+                    outf.write("pass")
 
 rule generate_fasta_of_each_rbh:
     input:
+        pass_check = expand(config["tool"] + "/db/input_check/{sample}_pass.txt",
+                            sample = rbh_species),
         rbh = config["rbh_file"],
         proteins = lambda wildcards: [config["species"][x]["proteins"]
                     for x in rbh_species]
     output:
-        MBH_fasta = expand(config["tool"] + "/unaligned/{rbh}.fasta",
-                           rbh = rbh_entries)
+        MBH_fasta = temp(expand(config["tool"] + "/unaligned/{rbh}.fasta",
+                           rbh = rbh_entries)),
     params:
         fasta_dir = config["tool"] + "/unaligned"
     threads: 1
@@ -109,6 +179,23 @@ rule generate_fasta_of_each_rbh:
                     if thisrbh not in rbh_to_records:
                         rbh_to_records[thisrbh] = []
                     rbh_to_records[thisrbh].append(record)
+        
+        # make sure that all of the rbh rows have something in the "gene_group" column
+        print(" - Verifying that all of the rbh rows have something in the 'group' column.")
+        for index, row in df.iterrows():
+            if pd.isna(row["gene_group"]):
+                raise IOError("Row {} has no group".format(index))
+        
+        # Make sure that all of the rbh rows have something in the "color" column,
+        #  and that the color is a valid color.
+        print(" - Verifying that all of the rows have a valid color.")
+        for index, row in df.iterrows():
+            if pd.isna(row["color"]):
+                raise IOError("Row {} has no color".format(index))
+            
+            if not valid_color(row["color"]):
+                raise IOError("Row {} has an invalid color: {}".format(
+                    index, row["color"]))
 
         # make sure that all entries have as many sequences as species
         print(" - Verifying that the records are all complete.")
@@ -136,7 +223,7 @@ rule align_fasta_of_each_group:
     input:
         MBH_fasta = config["tool"] + "/unaligned/{rbh}.fasta"
     output:
-        aligned =   config["tool"] + "/aligned/{rbh}.fasta"
+        aligned   = config["tool"] + "/aligned/{rbh}.fasta"
     threads: 1
     shell:
         """
@@ -147,17 +234,68 @@ rule make_hmm:
     input:
         aligned = config["tool"] + "/aligned/{rbh}.fasta"
     output:
-        hmm     = config["tool"] + "/hmms/{rbh}.hmm"
+        hmm     = temp(config["tool"] + "/hmms/{rbh}.hmm")
     threads: 1
     shell:
         """
         hmmbuild {output.hmm} {input.aligned}
         """
 
-rule make_final_db:
+rule cat_hmm:
+    input:
+        hmms = expand(config["tool"] + "/hmms/{rbh}.hmm",
+                      rbh = rbh_entries)
+    output:
+        hmm  =    config["tool"] + "/{}.hmm".format(config["tool"])
+    params:
+        hmm_dir = config["tool"] + "/hmms"
+    threads: 1
+    shell:
+        """
+        cat {input.hmms} > {output.hmm}
+        """
+
+rule verify_hmm_complete:
     """
-    make the final hmm db that can be used later
+    When all the files are ready, check that everything is copacetic.
+
+    #  - The aligned .fasta files for each rbh in directory aligned/
+    #  - The .rbh file that contains the rbh entries and group annotation
+    #  - The Snakefile with the way to regenerate the .hmm from the files
+    #  - The concatenated .hmm file
+    #  - The .check file to see if the concatenated .hmm file works
+
     """
     input:
-        hmm     = expand(config["tool"] + "/hmms/{rbh}.hmm",
-                         rbh = rbh_entries),
+        aligned   = expand(config["tool"] + "/aligned/{rbh}.fasta", rbh = rbh_entries),
+        rbh       =        config["tool"] + "/{}.rbh".format(config["tool"]),
+        snakefile =        config["tool"] + "/Snakefile",
+        hmm       =        config["tool"] + "/{}.hmm".format(config["tool"])
+    output:
+        check = config["tool"] + "/{}.check".format(config["tool"])
+    params:
+        remove_these = [config["tool"] + "/unaligned/",
+                        config["tool"] + "/hmms/",
+                        config["tool"] + "/db/"]
+    threads: 1
+    run:
+        unseen = [x for x in rbh_entries]
+        with open(input.hmm, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and line.startswith("NAME  "):
+                    entry = line.replace("NAME  ", "").strip()
+                    try:
+                        unseen.remove(entry)
+                    except:
+                        pass
+        if len(unseen) != 0:
+            raise IOError("There were some entries in the rbh file that were not in the hmm file: {}".format(unseen))
+        else:
+            outhandle = open(output.check, "w")
+            print("all entries present in the hmm", file = outhandle)
+            outhandle.close()
+        # Now that we are sure that everything is OK, remove the intermediate directories
+        #  specified in params.
+        for thisdir in params.remove_these:
+            shutil.rmtree(thisdir)

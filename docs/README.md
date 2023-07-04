@@ -1,8 +1,10 @@
 <a href="https://www.nature.com/articles/s41586-023-05936-6"><img src="manuscript_DOI.svg" alt="Manuscript"  height="20"></a>
 [![DOI](https://zenodo.org/badge/329185461.svg)](https://zenodo.org/badge/latestdoi/329185461)
 
-
-<img src="https://github.com/conchoecia/odp/blob/main/docs/dotplot_fig_v2-01.jpg" width="250">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="odp_logo_black_400px.png">
+  <img      alt="logo for ODP"                    src="odp_logo_white_400px.jpg">
+</picture>
 
 # odp - Oxford dot plots
 
@@ -10,6 +12,10 @@
 ```sh
 #install
 git clone https://github.com/conchoecia/odp.git
+# NOTE: The make step will automatically use all of the cores on
+#       your current machine. If using a slurm cluster be sure to
+#       request all of the threads on that node. If you need to use
+#       fewer cores, run `make -f Makefile_1core` instead.
 cd odp && make
 # make a config.yaml file for your odp analysis
 cp odp/example_configs/CONFIG_odp.yaml ./config.yaml
@@ -20,9 +26,47 @@ snakemake -r -p --snakefile odp/scripts/odp
 # currently there is no man page, see https://github.com/conchoecia/odp/ for instructions
 ```
 
+## <a name="quickstart"></a>Quick Start
+
+-----
+
+### Oxford Dot Plots or ALG-genome comparisons
+
+<a href="https://github.com/conchoecia/odp#make-macrosynteny-plots-between-two-or-more-genomes">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="dotplot_black_small.png">
+    <img alt="Example Oxford Dot Plot report"       src="dotplot_white_small_300KB.jpg">
+  </picture>
+</a>
+
+[CLICK HERE or on THE FIGURE^](#macrosynuse) if your goal is to make an Oxford dot plot report between
+two or more combinations of genomes, OR you want to compare your
+genomes to:
+
+- the chordate linkage groups (CLGs) from [Simakov et al 2020](https://www.nature.com/articles/s41559-020-1156-z)
+- the BCnS ancestral linkage groups from [Simakov et al 2022](https://www.science.org/doi/10.1126/sciadv.abi5884)
+- or the pre-metazoan linkage groups from [Schultz et al 2023](https://www.nature.com/articles/s41586-023-05936-6)
+
+-----
+
+### Ribbon Diagrams
+
+<a href="https://github.com/conchoecia/odp#make-ribbon-diagrams-of-conserved-linkages-between-genomes">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="ribbon_diagram_black_1000px.png">
+    <img alt="Example ribbon diagram of animals with the BCnS ALGs" src="ribbon_diagram_white_1000px.jpeg">
+  </picture>
+</a>
+
+[CLICK HERE or on THE FIGURE^](#ribbondiagram) if your goal is to make ribbon
+diagrams of conserved linkages between genomes.
+
+-----
+
 ## Table of Contents
 
 - [Getting Started](#started)
+- [Quick Start](#quickstart)
 - [Users' Guide](#uguide)
   - [Installation](#install)
     - [Python Requirements](#python)
@@ -32,8 +76,10 @@ snakemake -r -p --snakefile odp/scripts/odp
     - [`.chrom` file specifications](#chromspec)
     - [Help generating `.chrom` files](#chromhelp)
   - [Use cases](#cases)
+    - [If you want to analyze chordate linkage groups](#clgsection)
     - [Make macrosynteny plots between two or more genomes](#macrosynuse)
-    - [Find and characterize ancestral linkage groups](#ALGanalysis)
+    - [Make ribbon diagrams of conserved linkages between genomes](#ribbondiagram)
+    - [Find and characterize ancestral linkage groups](#alganalysis)
       - [ALGs part 1 - Ortholog finding in 3+ species](#nwayreciprocalbest)
       - [ALGs part 2 - Find significantly numerous groups of orthologs](#groupby)
       - [ALGs part 3 - Filter groups of orthologs](#groupbyfilter)  
@@ -177,9 +223,37 @@ NP_001005221.2  NC_000001.11    -       450740  450740
 XP_011540840.1  NC_000001.11    -       586839  611112
 ```
 
+----
+
 ## <a name="cases"></a>Use cases
 
-### <a name="macrosynuse"></a>Make macrosynteny plots between two or more genomes
+### <a name="clgsection"></a> Use Case - If you want to analyze chordate linkage groups
+
+The preinstalled ALGs are the Bilaterian-Cnidarian-Sponge Linkage Groups (BCnS
+LGs) that are discussed in [Simakov et al.(2022)](https://www.science.org/doi/full/10.1126/sciadv.abi5884). If you want to
+analyze your genomes in the context of the Chordate Linkage Groups (CLGs), then
+please compile them first by changing directories to where you installed the software, then running this command.
+
+```sh
+cd odp && make CLGs_v1.0
+```
+
+Be warned that this will take a long time as there are 25 thousand gene groups
+for which HMMs must be built. The final directory will occupy 6.2Gb on disk. By
+default this command will use all of the threads available on the machine you
+are using: `make CLGs_v1.0`. To use only one core, run `make -f Makefile_1core
+CLGs_v1.0`.
+
+----
+
+### <a name="macrosynuse"></a>Use Case - Make macrosynteny plots between two or more genomes
+
+<a href="https://github.com/conchoecia/odp#make-macrosynteny-plots-between-two-or-more-genomes">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="dotplot_black_small.png">
+    <img alt="Example Oxford Dot Plot report"       src="dotplot_white_small_300KB.jpg">
+  </picture>
+</a>
 
 Program: `odp/scripts/odp`
 Input: `config.yaml` file with the species you wish to compare.
@@ -242,7 +316,82 @@ Run the pipeline with the command `snakemake -r -p --snakefile odp/scripts/odp`.
     - `synteny_nocolor`
       - Two-species synteny plots appear here regardless of what is in `LG_db`.
 
-### <a name="ALGanalysis"></a>Find and characterize ancestral linkage groups
+-----
+
+### <a name="ribbondiagram"></a>Use Case - Make ribbon diagrams of conserved linkages between genomes
+
+<a href="https://github.com/conchoecia/odp#make-ribbon-diagrams-of-conserved-linkages-between-genomes">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="ribbon_diagram_black_1000px.png">
+    <img alt="Example ribbon diagram of animals with the BCnS ALGs" src="ribbon_diagram_white_1000px.jpeg">
+  </picture>
+</a>
+
+Currently `odp` has a script that plots a ribbon diagram of conserved linkages
+between two species pairs. To make a ribbon plot, you first must follow the
+instructions above to run `odp` to [make macrosynteny plots between two or more genomes](#macrosynuse). 
+This will generate the `.rbh` files necessary to make the plots.
+
+```sh
+# make a new directory to store the ribbon plot
+mkdir new_ribbon_plot && cd new_ribbon_plot
+# copy the example ribbon plot config file to this directory
+cp ${YOUR_ODP_INSTALL_PATH}/odp/example_configs/CONFIG_rbh_to_ribbon.yaml ./config.yaml
+# edit the config file using the instructions you find there
+vim config.yaml
+# run the script to make your figure
+snakemake --snakefile ${YOUR_ODP_INSTALL_PATH}/odp/scripts/odp_rbh_to_ribbon
+# your file will be saved as output.pdf
+```
+
+A minimal working example of the config file is below. Again, more details are in 
+[`CONFIG_rbh_to_ribbon.yaml`](../example_configs/CONFIG_rbh_to_ribbon.yaml):
+
+```yaml
+# There are several options for how to sort the chromosomes.
+# More information is available in the config file.
+chr_sort_order: optimal-chr-or 
+
+# Tells the program whether to plot the non-significant interactions.
+plot_all: True
+
+# Specifies which species will be plotted from the top-to-bottom.
+species_order:
+  - BFI
+  - HCA
+  - BFL
+  - EMU
+  - CLA
+
+rbh_directory: <YOUR_PATH_TO_ODP_RESULTS>/step2-figures/synteny_coloredby_BCnS_LGs/
+
+# Only two species are shown here for brevity,
+#  but please include the species information for all the species you wish to plot.
+species:
+  BFI:
+    proteins: "/path/to/BFI.pep"
+    chrom:    "/path/to/BFI.chrom"
+    genome:   "/path/to/BFI.fasta"
+
+  HCA:
+    proteins:  "/path/to/HCA.pep"
+    chrom:     "/path/to/HCA.chrom"
+    genome:    "/path/to/HCA.fasta"
+```
+
+RIBBON DIAGRAM CAVEATS:
+- This script plots pairwise reciprocal-best blastp hits between species pairs,
+  even if this ortholog does not include a gene in the next species to be plotted.
+  For example, in the plot above there are fewer conserved orthologs between the
+  ctenophore _Hormiphora_ and the cnidarian _Rhopilema_ than between the two
+  ctenophores _Hormiphora_ and _Bolinopsis_.
+- Given the above point, it is not currently possible to plot only orthologs
+  that have a sequence in every species in the figure, such as seen here in
+  [Figure 1 of Simakov et al 2022](https://www.science.org/doi/10.1126/sciadv.abi5884#F1).
+  Please open a feature request if you would like this feature.
+-----
+
+### <a name="alganalysis"></a>Use Case - Find and characterize ancestral linkage groups
 
 Finding ancestral linkage groups of proteins for a group of species is a useful
 way to characterize what the genome at the ancestral node of that clade may have

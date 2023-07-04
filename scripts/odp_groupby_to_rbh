@@ -26,6 +26,9 @@ configfile: "config.yaml"
 
 config["tool"] = "odp_groupby_to_rbh"
 
+# Perform a general check on the run since there are some common errors that
+#  should be caught regardless of which program is run.
+odpf.general_legal_run()
 odpf.check_legality(config)
 
 if "groupby_files" not in config:

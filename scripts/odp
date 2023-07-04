@@ -21,6 +21,9 @@ import odp_functions as odpf
 import odp_plotting_functions as odp_plot
 import odp_color_manager as oc
 
+# We need to generate random colors
+from odp_color_manager import generate_random_color as grc
+
 # other standard python libraries
 from itertools import permutations
 from itertools import combinations
@@ -37,6 +40,9 @@ import pandas as pd
 import scipy.stats as stats
 
 configfile: "config.yaml"
+# Perform a general check on the run since there are some common errors that
+#  should be caught regardless of which program is run.
+odpf.general_legal_run() # checks that the program isn't being run in the install directory
 
 # check for legal config entries. Useful for finding misspelled entries
 legal = ["proteins", "chrom", "genome", "minscafsize",
@@ -64,6 +70,15 @@ for thissample in config["species"]:
 # make sure there are at least 2 samples
 if len(config["species"]) < 2:
     raise IOError("There must be at least 2 samples")
+
+# check if we have specified how to handle duplicate protein sequences
+if "duplicate_proteins" not in config:
+    config["duplicate_proteins"] = "fail"
+#else:
+#    options_list = ["fail", "best"]
+#    outstring = ", ".join(options_list)
+#    if config["duplicate_proteins"] not in options_list:
+#        raise IOError("duplicate_proteins must be set to one of the following: {}".format(outstring))
 
 # see if we have included any illegal arguments
 illegal = set()
@@ -139,34 +154,45 @@ file_targets = []
 # if we want to plot more than LGs, add those special file 
 if "plot_sp_sp" not in config:
     config["plot_sp_sp"] = True
+
 if config["plot_sp_sp"]:
     #blast_jobs
     # find the reciprocal best hits
     file_targets += [config["tool"] + "/step1-rbh/{}_reciprocal_best_hits.rbh".format(x)
-     for x in config["analysispairs"]]
+        for x in config["analysispairs"]]
+
+    # Make a final filtered rbh plot that only has the FET-significant orthologs. Keep only p-values <= 0.05.
+    #  Assign a group name and color to each set
+    file_targets += [config["tool"] + "/step1-rbh-filtered/{}_reciprocal_best_hits.D.FET.filt.rbh".format(x)
+        for x in config["analysispairs"]]
+
     # no color here
     file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_xy_reciprocal_best_hits.plotted.rbh".format(x)
-     for x in config["analysispairs"]]
+        for x in config["analysispairs"]]
     file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_xy_synteny.pdf".format(x)
-     for x in config["analysispairs"]]
+        for x in config["analysispairs"]]
     file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_yx_synteny.pdf".format(x)
-     for x in config["analysispairs"]]
+        for x in config["analysispairs"]]
+    
+    # Make a final filtered rbh plot that only has the FET-significant orthologs. Keep only p-values <= 0.05.
+    #  Assign a group name and color to each set
 
 # file targets are what we want to plot
 # if we want to plot more than LGs, add those special file 
 if "plot_LGs" not in config:
     config["plot_LGs"] = True
+
 if config["plot_LGs"]:
     # This set of files plots the installed LGs against all of the datasets
     file_targets += [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(hmm, sp)
-     for sp in config["analysisspecies"] for hmm in config["prot_to_color"]]
+      for sp in config["analysisspecies"] for hmm in config["prot_to_color"]]
     # color by the things in the chrom settings
     file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
-     for x in config["analysispairs"] for y in config["prot_to_color"]]
+      for x in config["analysispairs"] for y in config["prot_to_color"]]
     file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
-     for x in config["analysispairs"] for y in config["prot_to_color"]]
+      for x in config["analysispairs"] for y in config["prot_to_color"]]
     file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
-     for x in config["analysispairs"] for y in config["prot_to_color"]]
+      for x in config["analysispairs"] for y in config["prot_to_color"]]
 
     # We also want to plot the ALGs as if they were genomes, against the individual species
     # This line specifically is for testing the RBH-as-a-species analysis
@@ -203,16 +229,38 @@ rule all:
     input:
         file_targets
 
-
+rule check_input_legality:
+    """
+    The very first thing that we must do is to check the input files.
+    Determine whether the input files are formatted correctly.
+    We call a function that checks these files:
+      - The genome .fasta file
+      - The .chrom file
+      - The protein .fasta file
+    """
+    input:
+        fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
+        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"],
+        pep   = lambda wildcards: config["species"][wildcards.sample]["proteins"]
+    output:
+        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
+    threads: 1
+    run:
+        if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom):
+            with open(output.input_pass, "w") as outf:
+                outf.write("pass")
 
 rule filter_prots:
     """
     Sometimes the prot file with have sequences that are not present in
      the chrom file. Make a prot file of only the proteins in the chrom file.
+    
+    We require that the file has passed the input checks first.
     """
     input:
         prots = lambda wildcards: config["species"][wildcards.sample]["proteins"],
-        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"]
+        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"],
+        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
         pep = config["tool"] + "/db/{sample}_prots.pep"
     threads: 1
@@ -220,8 +268,13 @@ rule filter_prots:
         odpf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
 
 rule make_diamond_and_blast_db:
+    """
+    We make both diamond and blastp databases for the proteins.
+    We only do this one the sample has passed the input QC checks.
+    """
     input:
-        pep = ancient(config["tool"] + "/db/{sample}_prots.pep")
+        pep = ancient(config["tool"] + "/db/{sample}_prots.pep"),
+        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
         dmnd = config["tool"] + "/db/dmnd/{sample}_prots.dmnd",
         phr  = config["tool"] + "/db/{sample}_prots.pep.phr",
@@ -240,12 +293,11 @@ rule make_diamond_and_blast_db:
 rule diamond_blast:
     input:
         pep1  = ancient(config["tool"] + "/db/{sample1}_prots.pep"),
-        dmnd1 = ancient(config["tool"] + "/db/dmnd/{sample1}_prots.dmnd"),
         pep2  = ancient(config["tool"] + "/db/{sample2}_prots.pep"),
         phr   = ancient(config["tool"] + "/db/{sample2}_prots.pep.phr"),
         pin   = ancient(config["tool"] + "/db/{sample2}_prots.pep.pin"),
         psq   = ancient(config["tool"] + "/db/{sample2}_prots.pep.psq"),
-        dmnd2 = ancient(config["tool"] + "/db/dmnd/{sample2}_prots.dmnd")
+        dmnd2 = ancient(config["tool"] + "/db/dmnd/{sample2}_prots.dmnd"),
     output:
         blastp = config["tool"] + "/step0-blastp_results/{sample1}_against_{sample2}.blastp"
     threads: (workflow.cores - 1)
@@ -1655,9 +1707,12 @@ rule get_chromsize_of_one_species:
     3rd col is the scaf length
 
     We filter out the scaffolds that are too small here.
+
+    We require that the sample pass the input file checks first
     """
     input:
-        fasta = lambda wildcards: config["species"][wildcards.sp]["genome"]
+        fasta = lambda wildcards: config["species"][wildcards.sp]["genome"],
+        input_pass = config["tool"] + "/db/input_check/{sp}_pass.txt"
     output:
         chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
     threads:
@@ -1695,7 +1750,9 @@ rule get_chromsize_of_analysis_pair:
     """
     input:
         fastas = lambda wildcards: [config["species"][x]["genome"]
-                            for x in config["analysispairs"][wildcards.analysis]]
+                            for x in config["analysispairs"][wildcards.analysis]],
+        pass1  = lambda wildcards: config["tool"] + "/db/input_check/{}_pass.txt".format(wildcards.analysis.split("_")[0]),
+        pass2  = lambda wildcards: config["tool"] + "/db/input_check/{}_pass.txt".format(wildcards.analysis.split("_")[1])
     output:
         chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize"
     threads:
@@ -1744,6 +1801,45 @@ rule analysis_D_and_FET:
             params.xsample, params.ysample), file = sys.stderr)
         df = calc_D_for_y_and_x(df, params.xsample, params.ysample)
         df.to_csv(output.rbh, sep ="\t", header = True, index = None)
+
+rule filtered_D_FET_rbh:
+    """
+    This rule filters the RBH file with D and FET calculated to generate an RBH with just the FET significant hits.
+
+    grc
+
+    We also should assign a group name to these significant groups.
+    """
+    input:
+        rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.D.FET.rbh"
+    output:
+        filt = config["tool"] + "/step1-rbh-filtered/{analysis}_reciprocal_best_hits.D.FET.filt.rbh"
+    threads: 1
+    run:
+        # read in the rbh file
+        df = pd.read_csv(input.rbh, delimiter="\t")
+        sp_order = wildcards.analysis.split("_")
+
+        # filter out the rows where the whole_FET is less than or equal to 0.05
+        df = df[df["whole_FET"] <= 0.05]
+        # groupby the x and y scaf column values
+        scaf_cols = ["{}_scaf".format(x) for x in sp_order]
+        df["color"] = "#000000"
+
+        gb = df.groupby(scaf_cols)
+        # iterate through the groups and assign a group name
+        for name, group in gb:
+            gene_group = "{}_{}".format(name[0], name[1])
+            # change the gene_group value of this group in the group, not the df
+            group["gene_group"] = gene_group
+            group["color"] = grc()
+        # unwrap the groups back into a df
+        df = gb.agg().first().reset_index(drop=True)
+
+        print(df)
+        sys.exit()
+        df = df[df["FET"]] <= 0.05
+        df.to_csv(output.filt, sep ="\t", header = True, index = None)
 
 rule species_HMM_D_and_FET:
     """
@@ -1840,7 +1936,7 @@ rule hmm_against_prots:
             [x for x in list(os.listdir(
             config["prot_to_color"][wildcards.coloredby]))
                                       if x.endswith(".hmm")][0]),
-        proteins = config["tool"] + "/db/{sample}_prots.pep"
+        proteins = config["tool"] + "/db/{sample}_prots.pep",
     output:
         hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"
     threads: min(10, int(workflow.cores/4))

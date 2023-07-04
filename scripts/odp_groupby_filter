@@ -11,6 +11,9 @@ configfile: "config.yaml"
 
 config["tool"] = "odp_groupby_filter"
 
+# Perform a general check on the run since there are some common errors that
+#  should be caught regardless of which program is run.
+OdpF.general_legal_run()
 OdpF.check_legality(config)
 
 for this in ["groupby_files", "alpha"]:
