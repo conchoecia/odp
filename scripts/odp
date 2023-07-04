@@ -71,6 +71,15 @@ for thissample in config["species"]:
 if len(config["species"]) < 2:
     raise IOError("There must be at least 2 samples")
 
+# check if we have specified how to handle duplicate protein sequences
+if "duplicate_proteins" not in config:
+    config["duplicate_proteins"] = "fail"
+#else:
+#    options_list = ["fail", "best"]
+#    outstring = ", ".join(options_list)
+#    if config["duplicate_proteins"] not in options_list:
+#        raise IOError("duplicate_proteins must be set to one of the following: {}".format(outstring))
+
 # see if we have included any illegal arguments
 illegal = set()
 for this_sample in config["species"]:

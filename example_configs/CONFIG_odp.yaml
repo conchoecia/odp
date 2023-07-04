@@ -11,6 +11,7 @@
 
 ignore_autobreaks: True       # Skip steps to find breaks in synteny blocks
 diamond_or_blastp: "diamond"  # "diamond" or "blastp"
+duplicate_proteins: "fail"    # currently only "fail" or "best". Fail doesn't allow duplicate names or seqs
 plot_LGs: True                # Plot the ALGs based on the installed databases
 plot_sp_sp: True              # Plot the synteny between two species, if False just generates .rbh files
 
