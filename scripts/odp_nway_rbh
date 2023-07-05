@@ -64,9 +64,19 @@ for thissample in config["species"]:
     if "_" in thissample:
         raise IOError("Sample names can't have '_' char: {}".format(thissample))
 
+# check if we have specified how to handle duplicate protein sequences
+if "duplicate_proteins" not in config:
+    config["duplicate_proteins"] = "fail"
+else:
+    options_list = ["fail", "pass"] #best is not yet implemented
+    outstring = ", ".join(options_list)
+    if config["duplicate_proteins"] not in options_list:
+        raise IOError("duplicate_proteins must be set to one of the following: {}".format(outstring))
+
 # make sure there are at least 2 samples
 if len(config["species"]) < 2:
     raise IOError("There must be at least 2 samples")
+
 # make sure that nways is there
 if not "nways" in config:
     raise IOError("you must specify nways in the config file. must be at least 2.")
@@ -170,11 +180,22 @@ rule check_input_legality:
         pep   = lambda wildcards: config["species"][wildcards.sample]["proteins"]
     output:
         input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
+    params:
+        duplicate_handling = config["duplicate_proteins"]
     threads: 1
     run:
-        if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom):
+        if params.duplicate_handling == "fail":
+            # We want to enforce that the input files are legal
+            # See the odpf.check_species_input_legality function for more details
+            if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom):
+                with open(output.input_pass, "w") as outf:
+                    outf.write("pass")
+        elif params.duplicate_handling == "pass":
+            # we just assume that everything is copacetic and let the program continue
             with open(output.input_pass, "w") as outf:
                 outf.write("pass")
+        else:
+            raise IOError("Right now we can only handle fail and pass cases. Sorry.")
 
 rule filter_prots:
     """
