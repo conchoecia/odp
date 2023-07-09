@@ -267,7 +267,6 @@ rule filter_prots:
         pep = config["tool"] + "/db/{sample}_prots.pep"
     threads: 1
     run:
-
         odpf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
 
 rule make_diamond_and_blast_db:

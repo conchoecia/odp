@@ -69,8 +69,8 @@ if "duplicate_proteins" not in config:
     config["duplicate_proteins"] = "fail"
 else:
     options_list = ["fail", "pass"] #best is not yet implemented
-    outstring = ", ".join(options_list)
     if config["duplicate_proteins"] not in options_list:
+        outstring = ", ".join(options_list)
         raise IOError("duplicate_proteins must be set to one of the following: {}".format(outstring))
 
 # make sure there are at least 2 samples
