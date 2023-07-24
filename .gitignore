@@ -1,6 +1,6 @@
 .DS_Store
 .Rhistory
-LG_temp/*
+LG_TEMP/*
 *.fasta
 *.snakemake.log
 *.fastq.gz
