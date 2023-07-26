@@ -1,5 +1,19 @@
 #!/usr/bin/env python
 
+"""
+The point of this script is to redefine the rbh significant group detection testing by using a combination of chromosomes
+rather than testing the group size against a whole genome.
+
+Previously the assumption was that by using the whole genome shuffling, that the size of rbh groups wasn't dependent on 
+the chromsize or number of genes on chromosomes.
+
+This corrects that by looking at the specific set of chromosomes.
+
+Realistically this needs to be simulated against a distribution for each set of chromosomes rather than a number. Use the
+size of the RBH groups in the simulation as a one-tailed permutation test checking if it is larger than most of the randomized mass
+for that set of chromosomes.
+"""
+
 import itertools
 import pandas as pd
 import numpy as np
