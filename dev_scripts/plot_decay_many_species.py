@@ -67,6 +67,8 @@ def plot_decay_log(ax, df_dict):
     # Loop through each line and plot
     for thisfile in df_dict:
         df = df_dict[thisfile]
+        # sort by the x_column
+        df = df.sort_values(by=[x_column])
         # make a line plot of each line
         ax.plot(df[x_column], df[y_column], label = thisfile,
                  alpha=0.25, color ="black", lw = 0.5)
@@ -78,31 +80,6 @@ def plot_decay_log(ax, df_dict):
         # Using log scale for x-axis
         # plt.xscale('log')
         ax.set_yscale('log', base=2)
-    return ax    
-
-def plot_decay_median(ax, df_dict):
-    """
-    makes a plot of the decay values, with the values based on difference from median.
-
-    The y-axis is linear
-    """
-    # Extract two columns from the dataframe
-    x_column = "total"
-    y_column = "diff_from_median"
-
-    # Loop through each line and plot
-    for thisfile in df_dict:
-        df = df_dict[thisfile]
-        # make a line plot of each line
-        ax.plot(df[x_column], df[y_column], label = thisfile,
-                 alpha=0.25, color ="black", lw = 1.0)
-    
-        # Add labels and legend
-        ax.set_xlabel('ALG size (total genes)')
-        ax.set_ylabel('difference from median of fraction conserved')
-    
-    ax.set_ylim(-1, 1)
-
     return ax    
 
 def filelist_to_plot_data_structure(filelist, bins):
@@ -121,6 +98,8 @@ def filelist_to_plot_data_structure(filelist, bins):
     We make an exception if mindif is 0.0, in which case we do not filter the ALGs at all.
     We also make an exception if maxdif is 1.0, in which case we allow including everything up to 1.0.
     """
+    # first go through the filelist and infer the max size of each ALG.
+    ALG_sizes = parse_all_ALGs_to_size_df(filelist)
 
     # convert the number of bins into a set of min cutoff values scaled between 0 and 1
     min_cutoffs = [x / bins for x in range(bins)]
@@ -139,13 +118,33 @@ def filelist_to_plot_data_structure(filelist, bins):
         plot_these[(min_cutoffs[i], min_cutoffs[i+1])] = {}
     plot_these[(min_cutoffs[-1], 1.0)] = {}
 
-
+    printed = False
     # go through the files and add the plottable info to a data structure
     for thisfile in filelist:
         # get the basename of the file
         basename = os.path.basename(thisfile)
         # load the results
         thisdf = pd.read_csv(thisfile, sep="\t")
+
+        # add ALGs from ALG_sizes to the column "ALG" if they are missing from that column now
+        # this is to make sure that we have all of the ALGs in the dataset
+        #  even if they have 0 genes in them
+        for thisALG in ALG_sizes:
+            if thisALG not in thisdf["ALG"].tolist():
+                thisdf = thisdf.append({"ALG": thisALG, "total": ALG_sizes[thisALG]}, ignore_index=True)
+                print_now = True
+        
+        # assert that the length of the dataframe is the length of the ALG_sizes dictionary
+        if not len(thisdf) == len(ALG_sizes):
+            raise Exception("The length of the dataframe is not the same as the length of the ALG_sizes dictionary. thisfile: {}".format(thisfile))
+        
+        # now we add a new column of the ALG_size from the dictionary
+        thisdf["ALG_size_all"] = thisdf["ALG"].map(ALG_sizes)
+
+        # Add a decreasing rank value, largest being the largest ALG
+        thisdf["rank"] = thisdf["ALG_size_all"].rank()
+
+        # make some calculations about the ALGs
         thisdf["fraction_conserved"] = (thisdf["conserved"] / thisdf["total"]) + 0.000000001
         #get the median conservation value for this species 
         median_conservation = thisdf["fraction_conserved"].median()
@@ -164,13 +163,108 @@ def filelist_to_plot_data_structure(filelist, bins):
         for thismin, thismax in sorted(plot_these.keys(), reverse= True):
             if large_ALG_median_conservation >= thismin and large_ALG_median_conservation <= thismax:
                 plot_these[(thismin, thismax)][basename] = thisdf.copy()
-                break
-    
-    # now that we have classified everything, print out which genomes end up in which group
-    for thismin, thismax in sorted(plot_these.keys(), reverse= True):
-        print (thismin, thismax, plot_these[(thismin, thismax)].keys())
-        print()
+                break    
+
+        # just print one df for debugging
+        if not printed:
+            print(thisdf)
+            printed = True
+
+
     return plot_these
+
+def parse_all_ALGs_to_size_df(filelist):
+    """
+    Read in dataframes from a list of files.
+       and returns a dataframe of all of the ALGs in the dataset.
+    
+    The thing that is returned is a dictionary where the keys are the
+     ALG ids, and the values are the size of that ALG.
+
+    For now we calculate the size of the ALG by finding its max value
+     in all of the dataframes. In the future it would be better to just
+     record it in the decay .tsv files when we save them. 
+    """
+    # make a dictionary of all of the ALGs and their sizes
+    alg_to_size_dict = {}
+
+    for thisfile in filelist:
+        # open the file as a dataframe
+        thisdf = pd.read_csv(thisfile, sep="\t")
+        # get the ALG ids
+        ALG_ids = thisdf["ALG"].tolist()
+        # get the sizes
+        ALG_sizes = thisdf["total"].tolist()
+        # make a dictionary of the ALG ids and sizes
+        thisdict = dict(zip(ALG_ids, ALG_sizes))
+        # add the dictionary to the main dictionary
+        alg_to_size_dict.update(thisdict)
+
+    return alg_to_size_dict
+
+def plot_decay(ax, df_dict, y_column="diff_from_median", x_column = "total",
+               ymin = -1, ymax = 1,
+               x_axis_label = ""):
+    """
+    makes a plot of the decay values, with the values based on difference from median.
+
+    The y-axis is linear
+    """
+    # Extract two columns from the dataframe
+
+    # Loop through each line and plot
+    for thisfile in df_dict:
+        df = df_dict[thisfile]
+        # sort by the x_column
+        df = df.sort_values(by=[x_column])
+        # make a line plot of each line
+        ax.plot(df[x_column], df[y_column], label = thisfile,
+                 alpha=0.25, color ="black", lw = 1.0)
+    
+        # Add labels and legend
+        ax.set_xlabel('ALG size (total genes)')
+        ax.set_ylabel('difference from median of fraction conserved')
+
+        # set the xaxis label
+        ax.set_xlabel(x_axis_label)
+    
+    ax.set_ylim(ymin, ymax)
+
+    return ax    
+
+def fig1(plot_these = {}, index_to_bin = []):
+    """
+    outputs an exploratory figure using the data
+    """
+    # now we plot the results as many lines
+    # use matplotlib plt
+
+    # Each column of plotting is a single bin with a minimum and maximum cutoff for the ALG conservation values
+    # We must label each column with the bins.
+    # COORDINATE SYSTEM:
+    #  x-axis: Bins in decreasing value, can access
+    NUMBER_OF_BINS = len(index_to_bin)
+    NUMBER_OF_FIGS = 6
+    fig, axes = plt.subplots(NUMBER_OF_FIGS, NUMBER_OF_BINS, figsize = (8 * NUMBER_OF_BINS, 10*NUMBER_OF_FIGS))
+    fig.suptitle('Horizontally stacked subplots')
+
+    # now we make the individual plots for each cutoff
+    for i in range(NUMBER_OF_BINS-1, -1, -1):
+        print("We are in bin {}. Bin values are {}".format(i, index_to_bin[i]))
+        plotdfs = plot_these[index_to_bin[i]]
+        if len(plotdfs) > 0:
+            axes[0, i] = plot_decay_log( axes[0, i], plotdfs)
+            axes[1, i] = plot_decay(     axes[1, i], plotdfs, y_column = "diff_from_median",   x_column = "total",        x_axis_label = "ALG size based on genes found in blast)")
+            axes[2, i] = plot_decay(     axes[2, i], plotdfs, y_column = "diff_from_median",   x_column = "ALG_size_all", x_axis_label = "Absolute ALG size")
+            axes[3, i] = plot_decay(     axes[3, i], plotdfs, y_column = "fraction_conserved", x_column = "ALG_size_all", x_axis_label = "Absolute ALG size", ymin = 0, ymax = 1)
+            axes[4, i] = plot_decay(     axes[4, i], plotdfs, y_column = "fraction_conserved", x_column = "total",        x_axis_label = "ALG size based on genes found in blast", ymin = 0, ymax = 1)
+            axes[5, i] = plot_decay(     axes[5, i], plotdfs, y_column = "fraction_conserved", x_column = "rank",         x_axis_label = "Rank of absolute ALG size", ymin = 0, ymax = 1)
+
+    # Save the plot as a jpeg
+    plt.savefig('output_plot.jpg', format='jpeg')
+    
+    # Show the plot (optional, you can comment this line if you don't want to display the plot)
+    plt.show()
 
 
 def main():
@@ -184,33 +278,12 @@ def main():
 
     NUMBER_OF_BINS = 5
     plot_these = filelist_to_plot_data_structure(filelist, NUMBER_OF_BINS)
+
     # use i = 0 to get the highest-value cutoff, -1 is no cutoff
     index_to_bin = [x for x in sorted(plot_these.keys(), reverse=True)]
 
-    # now we plot the results as many lines
-    # use matplotlib plt
-
-    # Each column of plotting is a single bin with a minimum and maximum cutoff for the ALG conservation values
-    # We must label each column with the bins.
-    # COORDINATE SYSTEM:
-    #  x-axis: Bins in decreasing value, can access
-    fig, axes = plt.subplots(2, NUMBER_OF_BINS, figsize = (5 * NUMBER_OF_BINS, 15))
-    fig.suptitle('Horizontally stacked subplots')
-
-
-    # now we make the individual plots for each cutoff
-    for i in range(NUMBER_OF_BINS-1, -1, -1):
-        print("We are in bin {}. Bin values are {}".format(i, index_to_bin[i]))
-        plotdfs = plot_these[index_to_bin[i]]
-        if len(plotdfs) > 0:
-            axes[0, i] = plot_decay_log(    axes[0, i], plotdfs)
-            axes[1, i] = plot_decay_median( axes[1, i], plotdfs)
-
-    # Save the plot as a jpeg
-    plt.savefig('output_plot.jpg', format='jpeg')
-    
-    # Show the plot (optional, you can comment this line if you don't want to display the plot)
-    plt.show()
+    # make the exploratory
+    fig1(plot_these, index_to_bin)
 
 if __name__ == "__main__":
     main()
