@@ -151,7 +151,7 @@ for tup in list(permutations(config["species"], 2)):
 
 # file targets are what we want to plot
 file_targets = []
-# if we want to plot more than LGs, add those special file 
+# if we want to plot more than LGs, add those special file
 if "plot_sp_sp" not in config:
     config["plot_sp_sp"] = True
 
@@ -173,12 +173,12 @@ if config["plot_sp_sp"]:
         for x in config["analysispairs"]]
     file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_yx_synteny.pdf".format(x)
         for x in config["analysispairs"]]
-    
+
     # Make a final filtered rbh plot that only has the FET-significant orthologs. Keep only p-values <= 0.05.
     #  Assign a group name and color to each set
 
 # file targets are what we want to plot
-# if we want to plot more than LGs, add those special file 
+# if we want to plot more than LGs, add those special file
 if "plot_LGs" not in config:
     config["plot_LGs"] = True
 
@@ -254,7 +254,7 @@ rule filter_prots:
     """
     Sometimes the prot file with have sequences that are not present in
      the chrom file. Make a prot file of only the proteins in the chrom file.
-    
+
     We require that the file has passed the input checks first.
     """
     input:
@@ -354,12 +354,12 @@ rule n_ways_reciprocal_best:
     Gets reciprocal best hits from 3 or more samples
     For a protein to be retained, it must be a reciprocal-best hit in three samples.
 
-              A      B 
+              A      B
              / \    /|\
             B___C  A-+-C , --et cetera
                     \|/
                      D
-    
+
     # Here I need to draw an ascii pentagram with lines connected to each element A, B, C, D, E
 
 
@@ -737,7 +737,7 @@ def FET_sample_to_chrom_to_CC(components, xsample, ysample, splitter):
                 raise ValueError("ERROR: we have seen this chrom before, but it is in a different CC. This should not happen. We saw {}.".format(echrom))
             sample_to_chrom_to_CC[esample][echrom] = cc_counter
         cc_counter += 1
-    return sample_to_chrom_to_CC 
+    return sample_to_chrom_to_CC
 
 def synteny_plot_sheet(df_file, plotdf_file, synplot,
                  xsample, ysample,
@@ -765,11 +765,11 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
       - xbreaks - the x breaks for the plot. Could be centromeres, breaks in synteny, et cetera.
       - ybreaks - the y breaks for the plot. See above comment.
       - orthology_method - the orthology method used to generate the rbh file. Diamond or blastp.
-      - sort_y_by_x - if True, then the y scaffolds will be sorted by the best match with x scaffolds. 
-      - prot_to_color_name - TODO finish this comment. 
+      - sort_y_by_x - if True, then the y scaffolds will be sorted by the best match with x scaffolds.
+      - prot_to_color_name - TODO finish this comment.
       - prot_to_color_dir - TODO finish this comment.
       - prot_to_color_hmm_results - TODO finish this comment.
-    
+
     TODO: this function needs a parameter where the user passes a chrom-to-size file, or a dict of chroms to sizes.
           This would replace species_to_chrom_to_size() and would be much faster.
     """
@@ -789,7 +789,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     # read in the rbh file. This will already have the Dx, Dy, and FET
     df = pd.read_csv(df_file, delimiter="\t")
-       
+
     # now make a df to figure out the sort order
     sort_df = df.copy()
     # We keep the scaf, the index to figure out the center of mass on the other chrom,
@@ -817,7 +817,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     # The column "size" is the number of genes in the x-chrom and y-chrom pair
     sort_df = sort_df.merge(size_df, on=["{}_scaf".format(xsample), "{}_scaf".format(ysample)], how="left").sort_values(
         by = ["size", "whole_FET"], ascending = [False, True]).reset_index(drop=True)
-    
+
     # We still need to add the total number of genes on each chrom
     ysample_chrom_to_size = df.groupby("{}_scaf".format(ysample)).size().to_frame("{}_size".format(xsample)).reset_index()
     xsample_chrom_to_size = df.groupby("{}_scaf".format(xsample)).size().to_frame("{}_size".format(ysample)).reset_index()
@@ -2189,12 +2189,12 @@ rule plot_synteny_of_ALGs_plus_species:
     """
     This makes a synteny plot specifically with the ALG pseudo-genomes
      and the species in the analysis.
-    
+
      For example the BCnS ALGs will be plotted on the x-axis as if they
       are a genome assembly, and the real genome from the species being
       analyzed will be plotted on the y-axis. This will be repeated, so the
       ALGs and species will be on the y and x axes.
-    
+
     In this case, we don't need to compare the plot to the hmm samples because
       the rbh file we are using has already been treated to have the columns
       "gene_group" and "color" from the ALG folder's information.
@@ -2218,7 +2218,6 @@ rule plot_synteny_of_ALGs_plus_species:
         yorder  = config["species"][ysample]["plotorder"] if "plotorder" in config["species"][ysample] else []
         xbreaks = []
         ybreaks = config["species"][ysample]["manual_breaks"] if "manual_breaks" in config["species"][ysample] else []
-
 
         s2c2s = chromsize_to_s2c2s(input.chromsize)
         # In this case we look in the dataframe and for each scaffold, just get the largest
@@ -2291,7 +2290,7 @@ def plot_decay(datastruct, outpath, outtsv):
     df.to_csv(outtsv, sep="\t", index=False)
 
     fig, ax1 = plt.subplots()
-    
+
     color = 'tab:red'
     ax1.set_xlabel('ALG size')
     ax1.set_ylabel('Distribution size', color=color)
@@ -2305,16 +2304,15 @@ def plot_decay(datastruct, outpath, outtsv):
         ax1.plot([x1,x2],[y1,y2],'k-')
     ax1.plot(df["total"], df["total"],'ro')
     ax1.plot(df["total"], df["scattered"],'bo')
- 
+
     ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
     ax2.set_ylim([0, 100])
 
-    
     color = 'tab:blue'
     ax2.set_ylabel('percent conserved on ALGs', color=color)  # we already handled the x-label with ax1
     ax2.plot(df["total"], 100*(df["conserved"]/df["total"]), "b-")
     ax2.tick_params(axis='y', labelcolor=color)
-    
+
     fig.tight_layout()  # otherwise the right y-label is slightly clipped
     plt.savefig(outpath)
 
@@ -2323,10 +2321,10 @@ rule ALG_decay_plot:
     This rule creates the ALG decay plot
     |
     | X
-    | X X X X X 
-    | X X X X X X X X X X 
+    | X X X X X
+    | X X X X X X X X X X
     | X.X.X.X.X.X.X.X.X.X.X.X.X.X.X........
-    | X X X X X X X X X X X X X X X X X X X 
+    | X X X X X X X X X X X X X X X X X X X
     +----------------------------------------
     """
     input:
@@ -2342,7 +2340,6 @@ rule ALG_decay_plot:
         rbhdf = rbhdf.sort_values(by = "whole_FET")
         # groupby the HMM scaf 
         hmmgroupby = rbhdf.groupby(["{}_scaf".format(wildcards.hmm)])
-
 
         # ALG dataframe
         #  - key: the ALG name
@@ -2361,7 +2358,7 @@ rule ALG_decay_plot:
             results[1] = others["{}_scaf".format(wildcards.sp)].value_counts().to_dict()
             # add the results to the ALG_results dict with the hmm name as the key
             ALG_results[name] = results
-        
+
         # plot the results with this dataframe
         plot_decay(ALG_results, output.plot, output.data)
 
