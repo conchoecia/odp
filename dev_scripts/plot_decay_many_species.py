@@ -32,7 +32,6 @@ import matplotlib.pyplot as plt
 import argparse
 import os
 import pandas as pd
-import sys
 
 # set up argparse method to get the directory of the .tsv files we want to plot
 def parse_args():
@@ -209,6 +208,7 @@ def plot_decay(ax, df_dict, y_column="diff_from_median", x_column = "total",
                y_axis_label = "y_axis_label_me",
                x_axis_label = "x_axis_label_me",
                x_axis_labels_on = True,
+               x_axis_labels_are_ALGs = False,
                plot_bars = False):
     """
     makes a plot of the decay values, with the values based on difference from median.
@@ -237,6 +237,11 @@ def plot_decay(ax, df_dict, y_column="diff_from_median", x_column = "total",
         # set the yaxis label
         ax.set_ylabel(y_axis_label)
 
+    # DON'T TOUCH THIS DICTIONARY
+    # xvaldict
+    # we need this for both the case where we want to plot bars or if we want to label the x-axis with the ALGs
+    xvaldict = dict(zip(df["ALG"], df[x_column]))
+    # DON'T TOUCH THIS ^^^
     if plot_bars:
         if len(alg_to_size_dict) == 0:
             raise Exception("You must provide a dictionary of ALG ids to sizes if you want to plot bars.")
@@ -250,7 +255,6 @@ def plot_decay(ax, df_dict, y_column="diff_from_median", x_column = "total",
         ax2.set_ylabel('ALG size', color=color)  # we already handled the x-label with ax1
         x_vals = []
         y_vals = []
-        xvaldict = dict(zip(df["ALG"], df[x_column]))
         for thisALG in alg_to_size_dict:
             x_vals.append(xvaldict[thisALG])
             y_vals.append(alg_to_size_dict[thisALG])
@@ -266,6 +270,20 @@ def plot_decay(ax, df_dict, y_column="diff_from_median", x_column = "total",
     # turn off the text of the xaxis if we must
     if not x_axis_labels_on:
         ax.set_xticklabels([])
+
+    # If we want to label the x-axis with the ALG ids.
+    # To do this we must have the alg_to_size_dict
+    if x_axis_labels_are_ALGs:
+        if len(alg_to_size_dict) == 0:
+            raise Exception("We must have something in alg_to_size_dict to plot as the axis labels.")
+        # get the sorted x ALG sizes as a list, and also save the labels to another list
+        alg_ID_smallest_to_largest    = sorted(xvaldict, key=xvaldict.get)
+        alg_value_smallest_to_largest = [xvaldict[x] for x in alg_ID_smallest_to_largest]
+        # now set the tick positions and their labels
+        ax.set_xticks(alg_value_smallest_to_largest)
+        # make the text a little smaller and the horizontal alignment to right
+        #ax.set_xticklabels(alg_ID_smallest_to_largest, rotation=45)
+        ax.set_xticklabels(alg_ID_smallest_to_largest, rotation=45, ha='right')
 
     ax.set_ylim(ymin, ymax)
 
