@@ -201,19 +201,13 @@ def rbh_files_to_sp_to_chr_to_size(rbh_filelist):
                     sp_to_chr_to_size[sp][k] = dict_of_maxes[k]
     return sp_to_chr_to_size
 
-def plot_pairwise_decay_single_species(sp1, config, sp_to_chr_to_size):
+def calculate_pairwise_decay_sp1_vs_many(sp1, config, sp_to_chr_to_size, outdir="./"):
     """
-    Outputs a plot wherein each source species has its own figure.
-    There will be two subplots per figures.
-    The left subplot will have the whole-genome conservation vs divergence time.
-    The right subplot will have the per-chromosome conservation vs divergence time.
+    Calculates the pairwise chromosomal decay between two species.
+    Saves the decay dataframes to files. Each file is sp1 vs sp2.
     """
-    # We start by making a subplot array to make the two variants. A two-column, one-row plot.
-    NUMBER_OF_ROWS = 1
-    NUMBER_OF_FIGS = 2
-    fig, axes = plt.subplots(NUMBER_OF_ROWS, NUMBER_OF_FIGS, figsize = (7.5 * NUMBER_OF_FIGS, 6*NUMBER_OF_ROWS))
-    fig.suptitle("{} decay versus divergence time".format(sp1))
-
+    # just hold onto these until the end to avoid writing only some files
+    sp_to_decay_df = {}
     # iterate through the pairs of species
     for sp2 in config["analyses"][sp1].keys():
         analysis_pair = tuple(sorted((sp1, sp2)))
@@ -227,39 +221,177 @@ def plot_pairwise_decay_single_species(sp1, config, sp_to_chr_to_size):
         # Add the divergence times to the dataframe
         sp1_sp2_decay["divergence_time"] = config["analyses"][sp1][sp2]
 
-        print(sp2, "\n", sp1_sp2_decay)
-        print("ABOUT TO CRASH")
-
         # Add a percent conserved column
         sp1_sp2_decay["fraction_conserved"] = sp1_sp2_decay["conserved"] / sp1_sp2_decay["sp1_scaf_genecount"]
 
+        # stash this to save to a file later
+        sp_to_decay_df[sp2] = sp1_sp2_decay
+        print("\n", sp2, "\n", sp1_sp2_decay, file = sys.stderr)
+
+    # safely make the outdir if it doesn't exist
+    os.makedirs(outdir, exist_ok=True)
+
+    sp_to_file_df = {}
+    # now save the files and save the paths to a structure
+    for sp2 in config["analyses"][sp1].keys():
+        outprefix = "{}_vs_{}_chromosomal_decay.tsv".format(sp1, sp2)
+        outdir_prefix = os.path.join(outdir, outprefix)
+        # save the decay dataframe
+        sp_to_decay_df[sp2].to_csv(outdir_prefix, sep="\t", index=False)
+        # save the path to the decay dataframe
+        sp_to_file_df[sp2] = outdir_prefix
+
+    return {sp1: sp_to_file_df}
+
+def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./"):
+    """
+    This takes a list of files and plots the decay of sp1 vs all the other species
+      Does this for whole chromosomes and for whole genomes (chromosomes summed).
+
+    The left subplot will have the whole-genome conservation vs divergence time.
+    The right subplot will have the per-chromosome conservation vs divergence time.
+
+    sp1 is the focal species that appears in every pairwise comparison
+    filestruct is a dictionary of dictionaries. The first key is the focal species.
+      The second keys are the species to which the focal species is being compared.
+      The value of the second key is the path to the tsv file to use for the comparison.
+    """
+    # We start by making a subplot array to make the two variants. A two-column, one-row plot.
+    NUMBER_OF_ROWS = 1
+    NUMBER_OF_FIGS = 2
+    fig, axes = plt.subplots(NUMBER_OF_ROWS, NUMBER_OF_FIGS, figsize = (7.5 * NUMBER_OF_FIGS, 6*NUMBER_OF_ROWS))
+    fig.suptitle("{} decay versus divergence time".format(sp1))
+
+    for sp2 in filestruct[sp1].keys():
+        sp1_sp2_decay = pd.read_csv(filestruct[sp1][sp2], sep="\t")
+        # get the most abundant divergence time from sp1_sp2_decay
+        # They should all be the same, but this is the most robust thing to do.
+        divergence_time = sp1_sp2_decay["divergence_time"].mode()[0]
         # Make a whole-genome version of the dataframe. Just sum up the columns and recalculate the percent conserved
         sp1_sp2_whole = sp1_sp2_decay.sum(axis=0).to_frame().transpose()
         # only keep certain columns
         sp1_sp2_whole = sp1_sp2_whole[["sp1_scaf_genecount", "conserved", "scattered"]]
-        sp1_sp2_whole["divergence_time"] = config["analyses"][sp1][sp2]
+        sp1_sp2_whole["divergence_time"] = divergence_time
         sp1_sp2_whole["fraction_conserved"] = sp1_sp2_whole["conserved"] / sp1_sp2_whole["sp1_scaf_genecount"]
 
-        print(sp1_sp2_decay)
-        print(sp1_sp2_whole)
-
-        # on the left-plot just do a scatterplot of the fraction conserved vs divergence time
+        #on the left-plot just do a scatterplot of the fraction conserved vs divergence time
         axes[0].scatter(sp1_sp2_whole["divergence_time"], sp1_sp2_whole["fraction_conserved"], label = "{}".format(sp2))
         axes[0].set_xlabel("Divergence time (MYA)")
         axes[0].set_ylabel("Fraction conserved on orthologous chromosomes")
         axes[0].set_title("Whole-genome conservation vs divergence time")
 
         # the right plot is per-chromosome. Add a little jitter to the x-axis so we can see the points
-        axes[1].scatter(jitter(sp1_sp2_decay["divergence_time"], 20), sp1_sp2_decay["fraction_conserved"], label = "{}".format(sp2), alpha = 0.25)
+        axes[1].scatter(jitter(sp1_sp2_decay["divergence_time"], 20), sp1_sp2_decay["fraction_conserved"],
+                        label = "{}".format(sp2), alpha = 0.25, edgecolors='none')
         axes[1].set_xlabel("Divergence time (MYA) (+- 20 MYA jitter)")
         axes[1].set_ylabel("Fraction conserved on orthologous chromosomes")
         axes[1].set_title("Orthologous chromosome conservation vs divergence time")
 
-
-
+    # safely make the output directory if it does not yet exist
+    os.makedirs(outdir, exist_ok=True)
     # Save the plot as a jpeg
     outprefix = "{}_decay_plot_vs_divergence_time".format(sp1)
-    plt.savefig("{}.jpg".format(outprefix), format='jpeg')
+    outdir_prefix = os.path.join(outdir, outprefix)
+    plt.savefig("{}.pdf".format(outdir_prefix), format='pdf')
+
+
+def plot_decay_twospecies(sp1, sp2, path_to_tsv, outdir):
+    """
+    This plots the decay of an ALG between number of genes in the main chromosome,
+    and the number of genes in smaller chromosomes
+
+    Parameters:
+        TODO
+
+    The input is the tsv output by calculate_pairwise_decay_sp1_vs_many:
+    For example, here is one df with PMA (scallop) as sp1 and PFI (sponge) as sp2:
+
+        sp1_scaf        sp2_scaf  sp1_scaf_genecount  conserved  scattered  divergence_time  fraction_conserved
+     0      PMA1    [PFI8, PFI1]                 552        322        230              800            0.583333
+     1     PMA10   [PFI13, PFI1]                 310        182        128              800            0.587097
+     2     PMA11          [PFI7]                 376        262        114              800            0.696809
+
+    The output is one figure with two subplots.
+    The left subplot is the ranked sizes of the chromosomes in sp1. The right subplot is the actual size of the chromosomes in sp1
+    """
+    df = pd.read_csv(path_to_tsv, sep="\t")
+    # rank the chromosomes based on their size and sort by the rank
+    df["sp1_ranked"] = df["sp1_scaf_genecount"].rank(ascending=True, method="first")
+    df = df.sort_values(by="sp1_ranked")
+
+
+    # set up the two panels of the plot
+    NUMBER_OF_ROWS = 1
+    NUMBER_OF_FIGS = 2
+    fig, axes = plt.subplots(NUMBER_OF_ROWS, NUMBER_OF_FIGS, figsize = (7.5 * NUMBER_OF_FIGS, 6*NUMBER_OF_ROWS))
+    fig.suptitle("{} and {} chromosome conservation vs {} chromosome size".format(sp1, sp2, sp1))
+
+    # plot the chromosome sizes by rank on the left
+    axes[0].plot(df["sp1_ranked"], df["sp1_scaf_genecount"], "ro")
+    # plot the chromosomes by actual size on the right
+    axes[1].plot(df["sp1_scaf_genecount"], df["sp1_scaf_genecount"], "ro")
+
+    # add some horizontal space between axes[0] and axes[1]
+    fig.subplots_adjust(wspace=0.5)
+
+    # make vertical lines on the left and the right plot. Do it by iterating through the dataframe
+    for index, row in df.iterrows():
+        axes[0].plot([row["sp1_ranked"], row["sp1_ranked"]], [0, row["sp1_scaf_genecount"]], "k-", alpha = 0.33)
+        axes[1].plot([row["sp1_scaf_genecount"], row["sp1_scaf_genecount"]], [0, row["sp1_scaf_genecount"]], "k-", alpha = 0.33)
+
+    # now we plot blue points for number of genes degraded
+    axes[0].plot(df["sp1_ranked"], df["scattered"], "bo")
+    axes[1].plot(df["sp1_scaf_genecount"], df["scattered"], "bo")
+
+    # add some yaxis labels. make the color red to match the dots. Then make the tick labels red too
+    color = "red"
+    axes[0].set_ylabel("Number of orthologs on chromosome", color=color)
+    axes[1].set_ylabel("Number of orthologs on chromosome", color=color)
+    axes[0].tick_params(axis='y', labelcolor=color)
+    axes[1].tick_params(axis='y', labelcolor=color)
+
+    # add some xaxis labels
+    axes[0].set_xlabel("Chromosome ranked by ortholog count")
+    axes[1].set_xlabel("Number of orthologs on chromosome")
+
+    # on the left side we will add x-axis ticks that at the sp1 chromosome names, and rotate everything 45 degrees
+    axes[0].set_xticks(df["sp1_ranked"])
+    axes[0].set_xticklabels(df["sp1_scaf"], rotation=45, ha="center")
+
+    # get the y-axis limits for the left plot
+    left_ylim = axes[0].get_ylim()
+    # get the max value of the sp1_scaf_genecount
+    left_maxgene = df["sp1_scaf_genecount"].max()
+    # print out the ratios of the total limits to the max gene count
+    ylim_scale_factor = abs(1 - (left_ylim[1]/left_maxgene))
+
+    # now we clone the axes and plot the percent conserved on the y-axes
+    axL = axes[0].twinx()  # instantiate a second axes that shares the same x-axis
+    axR = axes[1].twinx()
+    ylim_scale_number = 100 * ylim_scale_factor
+    axL.set_ylim([0 - ylim_scale_number, 100 + ylim_scale_number])
+    axR.set_ylim([0 - ylim_scale_number, 100 + ylim_scale_number])
+    color = 'black'
+    axL.set_ylabel('percent conserved on ALGs', color=color)  # we already handled the x-label with ax1
+    axR.set_ylabel('percent conserved on ALGs', color=color)
+    # set color of axL and axR yaxis ticks to blue
+    axL.tick_params(axis='y', labelcolor=color)
+    axR.tick_params(axis='y', labelcolor=color)
+    axL.plot(df["sp1_ranked"], 100*(df["conserved"]/df["sp1_scaf_genecount"]), color = color, lw = 1)
+    axR.plot(df["sp1_scaf_genecount"], 100*(df["conserved"]/df["sp1_scaf_genecount"]), color = color, lw = 1)
+
+    # adjust the bounding to fit text that went outside the limit of the plot
+    plt.tight_layout()
+    # safe make the directory
+    os.makedirs(outdir, exist_ok=True)
+    outprefix = "{}_and_{}_chromosome_conservation".format(sp1, sp2)
+    outdir_prefix = os.path.join(outdir, outprefix)
+    plt.savefig("{}.pdf".format(outdir_prefix), format='pdf')
+    plt.close()
+
+    if sp2 == "RES":
+        print(df)
+        sys.exit()
 
 
 def main():
@@ -278,9 +410,26 @@ def main():
     rbh_filelist = list(rbh_filelist)
     sp_to_chr_to_size = rbh_files_to_sp_to_chr_to_size(rbh_filelist)
 
+    # safely make the directory called 'odp_pairwise_decay'
+    os.makedirs("odp_pairwise_decay", exist_ok=True)
     # make a plot using the data
     for sp1 in config["analyses"].keys():
-        plot_pairwise_decay_single_species(sp1, config, sp_to_chr_to_size)
+        outdir = os.path.join("odp_pairwise_decay", sp1)
+        outdir = os.path.join(outdir, "decay_dataframes")
+        # calculate the pairwise decay in chromosomes, save the files, get the list of files
+        filestruct = calculate_pairwise_decay_sp1_vs_many(sp1, config, sp_to_chr_to_size, outdir)
+
+        # make the summary plot of all the chromosomes
+        outdir = os.path.join("odp_pairwise_decay", sp1)
+        outdir = os.path.join(outdir, "plot_overview_sp_sp")
+        plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir=outdir)
+
+        # make individual sp-sp scatterplots
+        outdir = os.path.join("odp_pairwise_decay", sp1)
+        outdir = os.path.join(outdir, "plot_individual_sp_sp")
+        for sp2 in filestruct[sp1].keys():
+            plot_decay_twospecies(sp1, sp2, filestruct[sp1][sp2], outdir)
+
 
 if __name__ == '__main__':
     main()
