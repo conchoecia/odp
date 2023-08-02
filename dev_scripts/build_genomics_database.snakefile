@@ -40,6 +40,6 @@ rule install_dataformat:
     shell:
         """
         curl -o dataformat 'https://ftp.ncbi.nlm.nih.gov/pub/datasets/command-line/v2/linux-amd64/dataformat'
-        mv dataformat {dataformat}
-        chmod +x {dataformat}
+        mv dataformat {output.dataformat}
+        chmod +x {output.dataformat}
         """
