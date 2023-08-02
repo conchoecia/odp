@@ -26,18 +26,18 @@ rule install_datasets:
         mem_mb = 1000
         """
         curl -o datasets 'https://ftp.ncbi.nlm.nih.gov/pub/datasets/command-line/v2/linux-amd64/datasets'
-        mv datasets {output}
-        chmod +x {output}
+        mv datasets {output.datasets}
+        chmod +x {output.datasets}
         """
 
 rule install_dataformat:
     output:
-        datasets = os.path.join(bin_path, "dataformat")
+        dataformat = os.path.join(bin_path, "dataformat")
     threads: 1
     resources:
         mem_mb = 1000
         """
         curl -o dataformat 'https://ftp.ncbi.nlm.nih.gov/pub/datasets/command-line/v2/linux-amd64/dataformat'
-        mv dataformat {output}
-        chmod +x {output}
+        mv dataformat {dataformat}
+        chmod +x {dataformat}
         """
