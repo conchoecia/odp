@@ -28,7 +28,11 @@ The observed number of genes from the ALG will not be the same in all of the spe
 In this dataset we should probably also record the chromosome on which this ALG was found, the size of that chromosome, and the number of genes on that chromosome.
 """
 
+# plotting options
 import matplotlib.pyplot as plt
+import odp_plotting_functions as odp_plot
+
+# other imports
 import argparse
 import os
 import pandas as pd
@@ -162,12 +166,12 @@ def filelist_to_plot_data_structure(filelist, bins):
         for thismin, thismax in sorted(plot_these.keys(), reverse= True):
             if large_ALG_median_conservation >= thismin and large_ALG_median_conservation <= thismax:
                 plot_these[(thismin, thismax)][basename] = thisdf.copy()
-                break    
+                break
 
-        # just print one df for debugging
-        if not printed:
-            print(thisdf)
-            printed = True
+        ## just print one df for debugging
+        #if not printed:
+        #    print(thisdf)
+        #    printed = True
 
 
     return plot_these
@@ -323,6 +327,8 @@ def fig1(plot_these = {}, index_to_bin = []):
             axes[4, i] = plot_decay(     axes[4, i], plotdfs, y_column = "fraction_conserved", x_column = "total",        x_axis_label = "ALG size based on genes found in blast", ymin = 0, ymax = 1)
             axes[5, i] = plot_decay(     axes[5, i], plotdfs, y_column = "fraction_conserved", x_column = "rank",         x_axis_label = "Rank of absolute ALG size", ymin = 0, ymax = 1)
 
+    # CALL THIS TO GET THE VISUAL STYLE WE NEED
+    odp_plot.format_matplotlib()
     # Save the plot as a jpeg
     plt.savefig('output_plot.jpg', format='jpeg')
 
@@ -398,12 +404,11 @@ def fig2(plot_these = {}, index_to_bin = [],  alg_to_size_dict = {}):
             axes[2, i].axis('off')
 
 
+    # CALL THIS TO GET THE VISUAL STYLE WE NEED
+    odp_plot.format_matplotlib()
     # Save the plot as a jpeg
     plt.savefig('decay_plots_final.jpg', format='jpeg')
     plt.savefig('decay_plots_final.pdf', format='pdf')
-
-    # Show the plot (optional, you can comment this line if you don't want to display the plot)
-    #plt.show()
 
 def main():
     # parse the arguments

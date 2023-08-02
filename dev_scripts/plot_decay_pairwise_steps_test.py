@@ -13,8 +13,12 @@ Description:
      on a phylogenetic tree.
 """
 
-import argparse
+# plotting options
 import matplotlib.pyplot as plt
+import odp_plotting_functions as odp_plot
+
+#
+import argparse
 import pandas as pd
 import os
 import random
@@ -226,7 +230,7 @@ def calculate_pairwise_decay_sp1_vs_many(sp1, config, sp_to_chr_to_size, outdir=
 
         # stash this to save to a file later
         sp_to_decay_df[sp2] = sp1_sp2_decay
-        print("\n", sp2, "\n", sp1_sp2_decay, file = sys.stderr)
+        #print("\n", sp2, "\n", sp1_sp2_decay, file = sys.stderr)
 
     # safely make the outdir if it doesn't exist
     os.makedirs(outdir, exist_ok=True)
@@ -286,6 +290,9 @@ def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./"):
         axes[1].set_xlabel("Divergence time (MYA) (+- 20 MYA jitter)")
         axes[1].set_ylabel("Fraction conserved on orthologous chromosomes")
         axes[1].set_title("Orthologous chromosome conservation vs divergence time")
+
+    # CALL THIS TO GET THE VISUAL STYLE WE NEED
+    odp_plot.format_matplotlib()
 
     # safely make the output directory if it does not yet exist
     os.makedirs(outdir, exist_ok=True)
@@ -379,6 +386,9 @@ def plot_decay_twospecies(sp1, sp2, path_to_tsv, outdir):
     axR.tick_params(axis='y', labelcolor=color)
     axL.plot(df["sp1_ranked"], 100*(df["conserved"]/df["sp1_scaf_genecount"]), color = color, lw = 1)
     axR.plot(df["sp1_scaf_genecount"], 100*(df["conserved"]/df["sp1_scaf_genecount"]), color = color, lw = 1)
+
+    # CALL THIS TO GET THE VISUAL STYLE WE NEED
+    odp_plot.format_matplotlib()
 
     # adjust the bounding to fit text that went outside the limit of the plot
     plt.tight_layout()
