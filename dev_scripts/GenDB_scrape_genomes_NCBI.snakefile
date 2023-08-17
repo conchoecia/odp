@@ -20,7 +20,7 @@ configfile: "config.yaml"
 if "datetime" not in config:
     config["datetime"] = datetime.now().strftime('%Y%m%d%H%M')
 
-config["tool"] = "odp_database_builder"
+config["tool"] = "odp_ncbi_genome_scraper"
 
 wildcard_constraints:
     taxid="[0-9]+",
