@@ -6,17 +6,11 @@ The program requires that either a directory of the annotated and unannotated ge
 Otherwise the user has to specify specific paths to those tsv files.
 """
 
-configfile: "config.yaml"
-
-config["tool"] = "odp_ncbi_genome_db"
-
-wildcard_constraints:
-    taxid="[0-9]+",
-
 import os
 import pandas as pd
 import sys
 from datetime import datetime
+import GenDB
 
 #if "datetime" not in config:
 #    config["datetime"] = datetime.now().strftime('%Y%m%d%H%M')
@@ -25,54 +19,10 @@ from datetime import datetime
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
 bin_path = os.path.join(snakefile_path, "../bin")
 
-def contains_date(string_to_check):
-    """
-    From the string in question, just see if it contains a date in the format YYYYMMDDHHMM
-    """
-    # split the string on the underscore
-    split_string = string_to_check.replace(".tsv","").split("_")
-    # check if any of the elements are a date
-    string_contains_date = False
-    for element in split_string:
-        if element.isdigit() and len(element) == 12:
-            string_contains_date = True
-    return string_contains_date
-
-def return_latest_accession_tsvs(directory_path):
-    """
-    Given a directory, we have to do some parsing of the file names to figure out what is the most recent accession tsv file.
-    """
-    # check that the directory exists
-    if not os.path.isdir(directory_path):
-        raise IOerror("The directory of TSV files you provided does not exist. {}".format(directory_path))
-    # get a list of files in this directory that start with ["annotated", "unannotated"]
-    files = os.listdir(directory_path)
-    annotated_files   = [f for f in files if f.startswith("annotated") and f.endswith(".tsv") and contains_date(f)]
-    unannotated_files = [f for f in files if f.startswith("unannotated") and f.endswith(".tsv") and contains_date(f)]
-    # sort the files by date, using YYYYMMDDHHMM as the sorting key
-    annotated_files.sort(key=lambda x: int(x.split("_")[-1].split(".")[0]),    reverse=True)
-    unannotated_files.sort(key=lambda x: int(x.split("_")[-1].split(".")[0]) , reverse=True)
-    # get the most recent annotated file
-    most_recent_annotated_file = annotated_files[0]
-    most_recent_unannotated_file = unannotated_files[0]
-    return os.path.join(directory_path, most_recent_annotated_file), os.path.join(directory_path, most_recent_unannotated_file)
-
-def determine_genome_accessions(tsv_filepath):
-    """
-    Reads in the TSV file that has the information about the genomes,
-    and returns a data structure (TBD) of which sequences to download.
-
-    This generic function can be used to get information both about the unannotated and annotated genomes.
-
-    Just returns the "Assembly Accession" column of the TSV file as a list.
-    This assembly accession number is all that is needed to download the genome and the annotation.
-    """
-    df = pd.read_csv(tsv_filepath, sep="\t")
-    # strip leading and trailing whitespace from the column names because pandas can screw up sometimes 
-    df.columns = df.columns.str.strip()
-    return df["Assembly Accession"].tolist()
-
-# Do some logic to see if the user has procided enough informatoin for us to analyse the genomes
+configfile: "config.yaml"
+config["tool"] = "odp_ncbi_genome_db"
+config["API_key"] = "-1"
+# Do some logic to see if the user has procided enough information for us to analyse the genomes
 if ("directory" not in config) and ("accession_tsvs" not in config): 
     raise IOerror("You must provide either a directory of the annotated and unannotated genome lists, or a list of the paths to those tsv files. Read the config file.")
 if "directory" in config:
@@ -83,9 +33,9 @@ if "directory" in config:
     if not os.path.isdir(config["directory"]):
         raise IOerror("The directory of TSV files you provided does not exist. {}".format(config["directory"]))
     # get the paths to the tsv files
-    config["annotated_genome_tsv"], config["unannotated_genome_tsv"] = return_latest_accession_tsvs(config["directory"])
+    config["annotated_genome_tsv"], config["unannotated_genome_tsv"] = GenDB.return_latest_accession_tsvs(config["directory"])
     # now add the entries to the config file so we can download them or not
-    config["assemAnn"] = determine_genome_accessions(config["annotated_genome_tsv"])
+    config["assemAnn"] = GenDB.determine_genome_accessions(config["annotated_genome_tsv"])
 
 elif "accession_tsvs" in config:
     # ensure that the user also hasn't specified the directory
@@ -93,6 +43,33 @@ elif "accession_tsvs" in config:
         raise IOerror("You cannot provide both a directory of tsv files ('directory') and specify the exact path of the TSVs ('accession_tsvs'). Read the config file.")
     # we haven't implemented this yet. I haven't found a use case where I would want to specifially pick a file path rather than just get the most recent one.
     raise NotImplementedError("We haven't implemented this yet. I haven't found a use case where I would want to specifially pick a file path rather than just get the most recent one.")
+
+onstart:
+    # NOTE: onstart doesn't execute if the workflow is run with the -n flag
+    print("Running setup. executed must have been false")
+    print(config)
+
+    # If we need to build a big database, we likely will need to use an API key
+    if "API_recorded" not in config:
+        if "require_API" not in config:
+            config["require_API"] = False
+        else:
+            if config["require_API"] in [True, "true", "True", "TRUE", 1]:
+                config["require_API"] = True
+                # now that we're sure that we want to use an API key, make sure that the user has not saved
+                #  one to their file. This is not a secure way to do this. Instead we will prompt the user to type it in.
+                if ("API_key" in config) and ("API_recorded" not in config) and (config["API_key"] != "-1"):
+                    raise ValueError("You have specified that you want to use an API key, but you have saved one to your config file. This is not secure. Please remove the API key from your config file and run the program again. You will be prompted to enter your API key.")
+                else:
+                    # prompt the user to enter their API key
+                    config["API_key"] = input("Please enter your NCBI API key then press enter: ")
+                    config["API_recorded"] = True
+                    print(config)
+            else:
+                config["require_API"] = False
+
+wildcard_constraints:
+    taxid="[0-9]+",
 
 # first we must load in all of the files. Only do it once
 rule all:
@@ -109,14 +86,15 @@ rule download_annotated_genomes:
     output:
         assembly = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/ncbi_dataset.zip")
     params:
-        outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/"
+        outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/",
+        APIstring = "" if config["require_API"] == False else "--api-key {}".format(config["API_key"])
     threads: 1
     resources:
         mem_mb = 1000
     shell:
         """
         cd {params.outdir}
-        {input.datasets} download genome accession {wildcards.assemAnn} --include genome,protein,gff3,gtf
+        {input.datasets} download genome accession {wildcards.assemAnn} {params.APIstring} --include genome,protein,gff3,gtf
         """
 
 rule unzip_annotated_genomes:
@@ -126,10 +104,10 @@ rule unzip_annotated_genomes:
     input:
         assembly = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/ncbi_dataset.zip"
     output:
-        genome  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.fasta",
-        protein = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.pep",
-        gff     = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gff",
-        gtf     = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gtf"
+        genome   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.fasta",
+        protein  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.pep",
+        gff      = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gff",
+        gtf      = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gtf"
     threads: 1
     resources:
         mem_mb = 1000
