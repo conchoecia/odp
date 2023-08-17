@@ -28,3 +28,5 @@ LG_db/*/
 ._*
 slurm-*
 make_submit.sh
+dataformat
+datasets
