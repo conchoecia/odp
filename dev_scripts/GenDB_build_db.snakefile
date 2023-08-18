@@ -21,7 +21,6 @@ bin_path = os.path.join(snakefile_path, "../bin")
 
 configfile: "config.yaml"
 config["tool"] = "odp_ncbi_genome_db"
-config["API_key"] = "-1"
 # Do some logic to see if the user has procided enough information for us to analyse the genomes
 if ("directory" not in config) and ("accession_tsvs" not in config): 
     raise IOerror("You must provide either a directory of the annotated and unannotated genome lists, or a list of the paths to those tsv files. Read the config file.")
@@ -46,25 +45,17 @@ elif "accession_tsvs" in config:
 
 onstart:
     # NOTE: onstart doesn't execute if the workflow is run with the -n flag
-
     # If we need to build a big database, we likely will need to use an API key
-    if "API_recorded" not in config:
-        if "require_API" not in config:
-            config["require_API"] = False
+    if config["require_API"] in [True, "true", "True", "TRUE", 1]:
+        # now that we're sure that we want to use an API key, make sure that the user has not saved
+        #  one to their file. This is not a secure way to do this. Instead we will prompt the user to type it in.
+        if "API_key" in config:
+            raise ValueError("You have specified that you want to use an API key, but you have saved one to your config file. This is not secure. Please remove the API key from your config file and run the program again. You will be prompted to enter your API key.")
         else:
-            if config["require_API"] in [True, "true", "True", "TRUE", 1]:
-                config["require_API"] = True
-                # now that we're sure that we want to use an API key, make sure that the user has not saved
-                #  one to their file. This is not a secure way to do this. Instead we will prompt the user to type it in.
-                if ("API_key" in config) and ("API_recorded" not in config) and (config["API_key"] != "-1"):
-                    raise ValueError("You have specified that you want to use an API key, but you have saved one to your config file. This is not secure. Please remove the API key from your config file and run the program again. You will be prompted to enter your API key.")
-                else:
-                    # prompt the user to enter their API key
-                    config["API_key"] = input("Please enter your NCBI API key then press enter: ")
-                    config["API_recorded"] = True
-                    print(config)
-            else:
-                config["require_API"] = False
+            # prompt the user to enter their API key
+            API_key = input("Please enter your NCBI API key then press enter: ")
+    else:
+        config["require_API"] = False
 
 wildcard_constraints:
     taxid="[0-9]+",
@@ -85,7 +76,7 @@ rule download_annotated_genomes:
         assembly = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/ncbi_dataset.zip")
     params:
         outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/",
-        APIstring = "" if config["require_API"] == False else "--api-key {}".format(config["API_key"])
+        APIstring = "" if API_key not in locals() else "--api-key {}".format(API_key)
     threads: 1
     resources:
         mem_mb = 1000
