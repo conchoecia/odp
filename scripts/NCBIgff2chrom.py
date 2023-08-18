@@ -6,12 +6,17 @@ see https://github.com/conchoecia/odp for the specification.
 #NW_011887297.1	RefSeq	CDS	1566678	1566739	.	+	2	ID=cds-XP_004348322.1;Parent=rna-XM_004348272.1;Dbxref=GeneID:14898863,Genbank:XP_004348322.1;Name=XP_004348322.1;gbkey=CDS;locus_tag=CAOG_04494;product=hypothetical protein;protein_id=XP_004348322.1
 
 import argparse
-from Bio import SeqIO
 import datetime
 import gzip
 import os
 import pandas as pd
 import sys
+
+# use the fasta package included with this repo
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
 
 def create_directories_recursive_notouch(path):
     """
@@ -70,7 +75,7 @@ def get_fasta_headers_and_lengths(fastapath):
     # use SeqIO to get the headers and lengths
     # raise an error if the scaffold name appears more than once in the fasta file
     with open(fastapath, "r") as handle:
-        for record in SeqIO.parse(handle, "fasta"):
+        for record in fasta.parse(handle, "fasta"):
             if record.id not in scaf_to_len:
                 scaf_to_len[record.id] = len(record.seq)
             else:
