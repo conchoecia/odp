@@ -13,7 +13,7 @@ import pandas as pd
 import sys
 
 # use the fasta package included with this repo
-snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+snakefile_path = os.path.dirname(os.path.realpath(__file__))
 dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
 import fasta
