@@ -186,6 +186,21 @@ def format_prots_to_df(prots):
     df = df.sort_values(by=["scaf", "start", "stop"])
     return df
 
+def fields_has_legal_protein_id(fields):
+    """
+    This tests if an iterable has a protein id.
+    It uses the idiosyncracies of the NCBI GFF format.
+
+    The strings that start with 'protein_id=' will have a valid protein ID that exists in the protein fasta file.
+    However, the strings that start with 'orig_protein_id=' will not have a valid protein ID.
+
+    returns the legal protein ID as a string if the fields has it, and None otherwise.
+    """
+    for entry in fields:
+        if entry.startswith("protein_id="):
+            return entry.replace("protein_id=", "")
+    return None
+
 def gff_to_chrom(gffhandle, genome_headers_to_size, protein_headers_to_size, outprefix):
     """
     A chrom file has the following format:
@@ -214,27 +229,40 @@ def gff_to_chrom(gffhandle, genome_headers_to_size, protein_headers_to_size, out
     # PARSE THE GFF FILE
     for line in gffhandle:
         line = line.strip()
-        splitd=line.split("\t")
-        if line and len(splitd) > 7 and splitd[2] == "CDS" and "protein_id=" in line:
-            pid = [x for x in splitd[8].split(";") if x.startswith("protein_id=")][0].replace("protein_id=", "")
-            scaf = splitd[0]
-            # if this protein isn't in the protein fasta file, raise an error
-            if pid not in protein_headers_to_size:
-                raise IOError("The protein {} is not in the protein fasta file! Did you get the same annotation and protein file from NCBI?".format(pid))
-            if scaf not in genome_headers_to_size:
-                raise IOError("The scaffold {} is not in the genome fasta file! Did you get the same annotation and genome file from NCBI?".format(scaf))
-            strand = splitd[6]
-            start = int(splitd[3])
-            stop = int(splitd[3])
-            if pid not in prots:
-                prots[pid] = {"scaf": scaf, "strand": strand,
-                              "start": start, "stop": stop}
-            else:
-                if start < prots[pid]["start"]:
-                    prots[pid]["start"] = start
-                if stop > prots[pid]["stop"]:
-                    prots[pid]["stop"] = stop
-    # we don't need the gff file anymore
+        # Let's walk through the different conditions that I am screening for here to see if the line is suitable.
+        # The nesting of the if statements is not very readable, but prevents all of the conditions from being tested every time.
+        #  line ::: This makes sure that the line is not empty.
+        #  len(splitd) > 7  ::: This makes sure that the line has annotation information, where we'll find the prot name.
+        #  splitd[2] == "CDS" ::: This makes sure that the line is a CDS annotation. These have the prot names.
+        #  "protein_id=" in line ::: This makes sure that the line has the protein name in it.
+        if line:
+            splitd=line.split("\t")
+            # coupling these two together because they should be relatively fast
+            if (len(splitd) > 7) and (splitd[2] == "CDS"):
+                # this is the slowest check, so we do it last
+                pid = fields_has_legal_protein_id(splitd[8].split(";"))
+                if pid is not None:
+                    scaf = splitd[0]
+                    # if this protein isn't in the protein fasta file, raise an error
+                    if pid not in protein_headers_to_size:
+                        raise IOError("The protein {} is not in the protein fasta file! Did you get the same annotation and protein file from NCBI?".format(pid))
+                    if scaf not in genome_headers_to_size:
+                        raise IOError("The scaffold {} is not in the genome fasta file! Did you get the same annotation and genome file from NCBI?".format(scaf))
+                    strand = splitd[6]
+                    start = int(splitd[3])
+                    stop = int(splitd[3])
+                    if pid not in prots:
+                        prots[pid] = {"scaf": scaf, "strand": strand,
+                                      "start": start, "stop": stop}
+                    else:
+                        if start < prots[pid]["start"]:
+                            prots[pid]["start"] = start
+                        if stop > prots[pid]["stop"]:
+                            prots[pid]["stop"] = stop
+    # If the length of the prots dictionary is 0, then something has gone very wrong.
+    # There should be proteins detected in the GFF file.
+    if len(prots) == 0:
+        raise IOError("No proteins were detected in the gff file! Something went very wrong.")
     gffhandle.close()
 
     # print the report
@@ -261,6 +289,13 @@ def gff_to_chrom(gffhandle, genome_headers_to_size, protein_headers_to_size, out
 def main():
     # first parse the args
     args = parse_args()
+
+    # check if any of the output files already exist. Just quit if they do.
+    chrom_path = "{}.chrom".format(args.outprefix) 
+    report_path = "{}.report.txt".format(args.outprefix)
+    for filetype, filename in {"chrom": chrom_path, "report": report_path}.items():
+        if os.path.exists(filename):
+            raise IOError("The {} file {} already exists! This program will not overwrite existing files.".format(filetype, filename))
 
     # get the scaffold names from the fasta file 
     scafnames = get_fasta_headers_and_lengths(args.fasta)
