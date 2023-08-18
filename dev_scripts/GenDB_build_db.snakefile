@@ -76,7 +76,7 @@ rule download_annotated_genomes:
         assembly = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/ncbi_dataset.zip")
     params:
         outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/",
-        APIstring = "" if API_key not in locals() else "--api-key {}".format(API_key)
+        APIstring = "" if "API_key" not in locals() else "--api-key {}".format(locals()["API_key"])
     threads: 1
     resources:
         mem_mb = 1000
