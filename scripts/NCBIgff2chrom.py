@@ -75,7 +75,7 @@ def get_fasta_headers_and_lengths(fastapath):
     # use SeqIO to get the headers and lengths
     # raise an error if the scaffold name appears more than once in the fasta file
     with open(fastapath, "r") as handle:
-        for record in fasta.parse(handle, "fasta"):
+        for record in fasta.parse(handle):
             if record.id not in scaf_to_len:
                 scaf_to_len[record.id] = len(record.seq)
             else:
