@@ -19,8 +19,8 @@ import GenDB
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
 bin_path = os.path.join(snakefile_path, "../bin")
 
-if "API_key" not in locals():
-    API_key = ""
+#if "API_key" not in locals():
+#    API_key = ""
 
 configfile: "config.yaml"
 config["tool"] = "odp_ncbi_genome_db"
