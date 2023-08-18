@@ -74,12 +74,11 @@ def get_fasta_headers_and_lengths(fastapath):
     scaf_to_len = {}
     # use SeqIO to get the headers and lengths
     # raise an error if the scaffold name appears more than once in the fasta file
-    with open(fastapath, "r") as handle:
-        for record in fasta.parse(handle):
-            if record.id not in scaf_to_len:
-                scaf_to_len[record.id] = len(record.seq)
-            else:
-                raise IOError("The sequence name {} appears more than once in the fasta file!".format(record.id))
+    for record in fasta.parse(fastapath):
+        if record.id not in scaf_to_len:
+            scaf_to_len[record.id] = len(record.seq)
+        else:
+            raise IOError("The sequence name {} appears more than once in the fasta file!".format(record.id))
     return scaf_to_len
 
 def print_chrom_report(prots, scafnames_to_size, protnames_to_size, outprefix):
