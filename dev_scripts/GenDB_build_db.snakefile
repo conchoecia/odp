@@ -46,8 +46,6 @@ elif "accession_tsvs" in config:
 
 onstart:
     # NOTE: onstart doesn't execute if the workflow is run with the -n flag
-    print("Running setup. executed must have been false")
-    print(config)
 
     # If we need to build a big database, we likely will need to use an API key
     if "API_recorded" not in config:
