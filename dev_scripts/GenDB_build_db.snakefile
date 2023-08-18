@@ -19,6 +19,9 @@ import GenDB
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
 bin_path = os.path.join(snakefile_path, "../bin")
 
+if "API_key" not in locals():
+    API_key = ""
+
 configfile: "config.yaml"
 config["tool"] = "odp_ncbi_genome_db"
 # Do some logic to see if the user has procided enough information for us to analyse the genomes
@@ -53,6 +56,7 @@ onstart:
             raise ValueError("You have specified that you want to use an API key, but you have saved one to your config file. This is not secure. Please remove the API key from your config file and run the program again. You will be prompted to enter your API key.")
         else:
             # prompt the user to enter their API key
+            global API_key
             API_key = input("Please enter your NCBI API key then press enter: ")
     else:
         config["require_API"] = False
