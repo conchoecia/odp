@@ -1,0 +1,29 @@
+# This config file is used for what is currently called
+#  GenDB_build_db and GenDB_scrape_genomes_NCBI
+
+# To run this set up the taxids to use, then run the
+#   "GenDB_scrape_genomes_NCBI.snakefile" on however many cores you want.
+#   Number of cores doesn't matter here.
+# Then, IN THE SAME DIRECTORY, immediately run "GenDB_build_db.snakefile"
+#   with only a single core. Just use a single core to avoid hammering the
+#   NCBI servers with big download requests and getting your API key deactivated.
+
+# The taxids are the IDs we want to get genomes from.
+# It's OK if they overlap or are nested for some reason. The algorithm
+#  will just remove the duplicates. The ones included below are just examples.
+# This part of the config file is used by GenDB_scrape_genomes_NCBI
+taxids:
+  - 6462
+  - 6643
+  #- 6447
+  #- 33208
+
+# This part of the config is used by GenDB_build_db
+# The directory specified here is where the output of GenDB_scrape_genomes_NCBI
+#  will be saved, and where GenDB_build_db will look for the output.
+directory: "odp_ncbi_genome_scraper/output/"
+
+# Set this to True if you plan to download a lot of genomes
+#  (You probably are so best just leave it set to True.)
+# This is your NCBI API key that you can find in your NCBI account information
+require_API: True
