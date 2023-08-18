@@ -46,20 +46,20 @@ elif "accession_tsvs" in config:
     # we haven't implemented this yet. I haven't found a use case where I would want to specifially pick a file path rather than just get the most recent one.
     raise NotImplementedError("We haven't implemented this yet. I haven't found a use case where I would want to specifially pick a file path rather than just get the most recent one.")
 
-onstart:
-    # NOTE: onstart doesn't execute if the workflow is run with the -n flag
-    # If we need to build a big database, we likely will need to use an API key
-    if config["require_API"] in [True, "true", "True", "TRUE", 1]:
-        # now that we're sure that we want to use an API key, make sure that the user has not saved
-        #  one to their file. This is not a secure way to do this. Instead we will prompt the user to type it in.
-        if "API_key" in config:
-            raise ValueError("You have specified that you want to use an API key, but you have saved one to your config file. This is not secure. Please remove the API key from your config file and run the program again. You will be prompted to enter your API key.")
-        else:
-            # prompt the user to enter their API key
-            global API_key
-            API_key = input("Please enter your NCBI API key then press enter: ")
-    else:
-        config["require_API"] = False
+#onstart:
+#    # NOTE: onstart doesn't execute if the workflow is run with the -n flag
+#    # If we need to build a big database, we likely will need to use an API key
+#    if config["require_API"] in [True, "true", "True", "TRUE", 1]:
+#        # now that we're sure that we want to use an API key, make sure that the user has not saved
+#        #  one to their file. This is not a secure way to do this. Instead we will prompt the user to type it in.
+#        if "API_key" in config:
+#            raise ValueError("You have specified that you want to use an API key, but you have saved one to your config file. This is not secure. Please remove the API key from your config file and run the program again. You will be prompted to enter your API key.")
+#        else:
+#            # prompt the user to enter their API key
+#            global API_key
+#            API_key = input("Please enter your NCBI API key then press enter: ")
+#    else:
+#        config["require_API"] = False
 
 wildcard_constraints:
     taxid="[0-9]+",
