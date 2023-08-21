@@ -115,7 +115,6 @@ rule unzip_annotated_genomes:
         find {params.outdir} -name "*.fna" -exec mv {{}} {output.genome} \;
         find {params.outdir} -name "*.faa" -exec mv {{}} {output.protein} \;
         find {params.outdir} -name "*.gff" -exec mv {{}} {output.gff} \;
-        #find {params.outdir} -name "*.gtf" -exec mv {{}} {output.gtf} \;
         """
 
 rule prep_chrom_file_from_NCBI:
