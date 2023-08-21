@@ -11,6 +11,7 @@ import pandas as pd
 import sys
 from datetime import datetime
 import GenDB
+import yaml
 
 #if "datetime" not in config:
 #    config["datetime"] = datetime.now().strftime('%Y%m%d%H%M')
