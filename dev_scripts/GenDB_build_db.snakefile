@@ -68,7 +68,8 @@ wildcard_constraints:
 rule all:
     input:
         #expand(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.yaml.part", assemAnn=config["assemAnn"]),
-        "NCBI_odp_db.yaml"
+        "NCBI_odp_db.yaml",
+        "NCBI_odp_sp_list.txt"
 
 rule download_annotated_genomes:
     """
@@ -226,5 +227,28 @@ rule collate_assembled_config_entries:
         mem_mb  = 1000
     shell:
         """
-        cat {input.yaml_parts} > {output.yaml}
+        echo "species:" > {output.yaml}
+        cat {input.yaml_parts} >> {output.yaml}
         """
+
+rule generate_species_list_for_timetree:
+    """
+    Generates a list of species that are in this database.
+    One species per line.
+    """
+    input:
+        yaml    = "NCBI_odp_db.yaml"
+    output:
+        sp_list = "NCBI_odp_sp_list.txt"
+    threads: 1
+    resources:
+        mem_mb  = 1000
+    run:
+        # open the yaml file into a dictionary
+        with open(input.yaml, "r") as f:
+            yaml_dict = yaml.load(f, Loader=yaml.FullLoader)
+        # open the output file for writing
+        with open(output.sp_list, "w") as f:
+            # loop through the dictionary and write the species names to the file
+            for sp in yaml_dict["species"]:
+                f.write("{}\t{}\n".format(yaml_dict["species"][sp]["genus"], yaml_dict["species"][sp]["species"]))
