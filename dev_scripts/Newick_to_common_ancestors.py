@@ -5,8 +5,11 @@ This script takes a newick tree and identifies the divergence time of various no
 """
 
 import argparse
+from Bio import Entrez
 import os
 import sys
+import yaml
+import time
 # we need the special newick package to parse this file type
 from newick import read
 
@@ -19,7 +22,7 @@ def create_directories_recursive_notouch(path):
     # Determine whether to remove the last part of the path.
     # Basically we have to determine if the last part is intended to be a path or a file.
     # If it is a file, then we need to remove it.
-    file_endings = [".txt", ".tsv", ".csv"]
+    file_endings = [".txt", ".tsv", ".csv", ".yaml"]
     end_is_file = False
     for ending in file_endings:
         if parts[-1].endswith(ending):
@@ -159,9 +162,20 @@ def report_divergence_time_all_vs_all(tree, output_prefix):
         for sp1, sp2, age in get_divergence_time_all_vs_all(tree):
             f.write("{}\t{}\t{}\n".format(sp1, sp2, age))
 
-
-# Replace with your own email address
-Entrez.email = "your.email@example.com"
+def convert_ncbi_entry_to_dict(ncbi_entry):
+    entries = []
+    for entry in ncbi_entry["LineageEx"]:
+        tempdict = {}
+        tempdict["TaxID"] =          int(entry["TaxId"])
+        tempdict["ScientificName"] = str(entry["ScientificName"])
+        tempdict["Rank"] =           str(entry["Rank"])
+        entries.append(tempdict)
+    new_dict = {"TaxID":          int(ncbi_entry["TaxId"]),
+                "ScientificName": str(ncbi_entry["ScientificName"]),
+                "Lineage":        str(ncbi_entry["Lineage"]),
+                "LineageEx":      entries,
+                }
+    return new_dict
 
 def get_taxonomy_info(binomial_name):
     handle = Entrez.esearch(db="taxonomy", term=binomial_name, retmode="xml")
@@ -175,15 +189,116 @@ def get_taxonomy_info(binomial_name):
     handle = Entrez.efetch(db="taxonomy", id=taxon_id, retmode="xml")
     record = Entrez.read(handle)
     handle.close()
+    resultsdict = convert_ncbi_entry_to_dict(record[0])
+    return resultsdict
 
-    return record[0]
+def taxinfo_download_or_load(binomial_name, taxinfo_filepath):
+    """
+    This looks to see if a yaml file exists with the taxinfo for this species.
+    If it does not, it will download the taxinfo from NCBI and save it to that yaml file.
+    
+    Sometimes the download from NCBI doesn't work, so we need to allow for failures.
+
+    If it doesn't work, returns a 1.
+    If the file exists, returns a 0.
+    """
+    if not os.path.exists(taxinfo_filepath):
+        # safely make the directory if it doesn't exist
+        create_directories_recursive_notouch(taxinfo_filepath)
+        try:
+            sp_tax_info = get_taxonomy_info(binomial_name)
+            # now we need to write this to a yaml file
+            with open(taxinfo_filepath, "w") as f:
+                yaml.dump(sp_tax_info, f)
+            # we need to pause if we had a successful download to avoid overloading the NCBI servers
+            time.sleep(3)
+            # return success
+            return 0
+        except:
+            # return failure
+            print("           ^^^ THE DOWNLOAD FOR THIS SPECIES DIDN'T WORK IN THIS ROUND.")
+            return 1
+    else:
+        # read in the file and check if it has any contents.
+        # If not, this hasn't worked, we delete the file, then return 1
+        with open(taxinfo_filepath, "r") as f:
+            contents = f.read()
+            if len(contents) == 0:
+                os.remove(taxinfo_filepath)
+                return 1
+            else:
+                # in theory the file should be good, so return success
+                return 0 
+
+def yaml_file_legal(filepath):
+    """
+    Returns True if the yaml file exists and has contents.
+    Returns False otherwise.
+    """
+    with open(filepath, "r") as f:
+        contents = f.read()
+        if len(contents) == 0:
+            return False
+        else:
+            # in theory the file should be good, so return success
+            return True
+
+def download_all_taxinfo(config, output_prefix, email):
+    """
+    This controls a loop that handles downloading all of the taxinfo
+    for all of the species in the config file. Returns a dict of the taxinfo when
+    done, and a path to the file where the taxinfo is stored.
+    """
+    # set up email for Entrez
+    Entrez.email = email
+    # for now we just want to investigate the best way to get the lineage information
+    taxinfo_yaml = {"taxinfo": {}}
+    taxinfo_yaml_filepath = "{}.taxid.yaml".format(output_prefix)
+
+    # We will make a temporary folder to store the taxid information for each species.
+    #  Maybe there are files there already, so don't overwrite them.
+    tempdir = "{}.taxid.temp".format(output_prefix)
+    create_directories_recursive_notouch(tempdir)
+
+    species_remaining = set(config["species"].keys())
+    species_completed_this_round = set()
+    downloading_round = 0
+    # now we need to loop through all of the species in the config file
+    print("DOWNLOADING ROUND {}".format(downloading_round), file = sys.stderr)
+    while len(species_remaining) > 0:
+        for thissp in config["species"]:
+            binomial = "{} {}".format(config["species"][thissp]["genus"], config["species"][thissp]["species"])
+            sp_remaining = len(species_remaining) - len(species_completed_this_round)
+            print("downloading", binomial, "- {} species remaining".format(sp_remaining))
+            taxinfo_filepath = os.path.join(tempdir, "{}.taxinfo.yaml".format(thissp))
+            success_value = taxinfo_download_or_load(binomial, taxinfo_filepath)
+            if success_value == 0:
+                species_completed_this_round.add(thissp)
+        species_remaining = species_remaining - species_completed_this_round
+        species_completed_this_round = set()
+    # Now that we know that all the yaml files exist, just run that round of checks again
+    for thissp in config["species"]:
+        taxinfo_filepath = os.path.join(tempdir, "{}.taxinfo.yaml".format(thissp))
+        if not yaml_file_legal(taxinfo_filepath):
+            # There is a problem with this file, so we should make the game through an error
+            raise ValueError("The yaml file for {} is not legal.".format(thissp))
+        # if the file is legal, read it in and add it to the dict 
+        with open(taxinfo_filepath, 'r') as file:
+            thissptax = yaml.load(file, Loader=yaml.Loader )
+            taxinfo_yaml["taxinfo"][thissp] = thissptax
+
+    # save all of the taxinfo to a yaml file
+    # Fine to overwrite
+    create_directories_recursive_notouch(taxinfo_yaml_filepath)
+    with open(taxinfo_yaml_filepath, "w") as f:
+        yaml.dump(taxinfo_yaml, f)
 
 def main():
     # first we need to parse the arguments from the comand line
     args = parse_args()
     print(args)
 
-    ## now we need to load in the newick file   
+    ## now we need to load in the newick file
     tree = read(args.newick)[0]
 
     ## get the all vs all time divergence
@@ -197,13 +312,21 @@ def main():
     #   that is close.
     # check if the prefix exists in the config file
     if "config" in args:
-        import yaml
-        from Bio import Entrez
         with open(args.config, 'r') as file:
             config = yaml.safe_load(file)
-
-        print(config)
-
+        
+        # we may have already saved a yaml file with the taxonomy information, so check for that
+        taxinfo_filepath = "{}.taxinfo.yaml".format(args.prefix)
+        # safely make the directories if they don't exist
+        create_directories_recursive_notouch(taxinfo_filepath)
+        taxinfo_yaml = {}
+        # open the taxinfo file for writing if it doesn't exist
+        if os.path.exists(taxinfo_filepath):
+            with open(taxinfo_filepath, "r") as f:
+                taxinfo_yaml = yaml.safe_load(f)
+        # if the file doesn't exist yet we have to parse the info from NCBI
+        else:
+            download_all_taxinfo(config, args.prefix, args.email)
     # This is all debug code
     #print(dir(tree))
     #print("descendants", tree.descendants)
