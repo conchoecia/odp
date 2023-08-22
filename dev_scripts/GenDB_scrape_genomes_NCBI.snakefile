@@ -33,12 +33,25 @@ def create_directories_recursive_notouch(path):
     This is useful for snakemake because it will not re-run a rule if the output already exists.
     """
     parts = os.path.normpath(path).split(os.path.sep)
-    current_path = ""
+    # Determine whether to remove the last part of the path.
+    # Basically we have to determine if the last part is intended to be a path or a file.
+    # If it is a file, then we need to remove it.
+    file_endings = [".txt", ".tsv", ".csv"]
+    end_is_file = False
+    for ending in file_endings:
+        if parts[-1].endswith(ending):
+            end_is_file = True
+            break
+    if end_is_file:
+        parts = parts[:-1]
 
+    current_path = ""
     for part in parts:
         current_path = os.path.join(current_path, part)
         if not os.path.exists(current_path):
             os.mkdir(current_path)
+    # safe return code if done
+    return 0
  
 def get_assembly_datapacks(wildcards):
     checkpoint_results = list(checkpoints.split_into_annotated_and_unannotated.get(**wildcards).output)
