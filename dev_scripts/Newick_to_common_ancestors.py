@@ -243,10 +243,17 @@ def yaml_file_legal(filepath):
             # in theory the file should be good, so return success
             return True
 
-def download_all_taxinfo(config, output_prefix, email):
+def download_all_taxinfo(sp_binomials, output_prefix, email):
     """
+    Inputs:
+      - sp_binomials: a dict of keys for the species names
+        - the keys are the special string for that species
+        - the values are the binomial "Genus species" string
+      - The output prefix is what the files will be saved as
+      - the email is the email address to use for programmatic access to NCBI
+      
     This controls a loop that handles downloading all of the taxinfo
-    for all of the species in the config file. Returns a dict of the taxinfo when
+    for all of the species in the sp_binomials object. Returns a dict of the taxinfo when
     done, and a path to the file where the taxinfo is stored.
     """
     # set up email for Entrez
@@ -260,14 +267,14 @@ def download_all_taxinfo(config, output_prefix, email):
     tempdir = "{}.taxid.temp".format(output_prefix)
     create_directories_recursive_notouch(tempdir)
 
-    species_remaining = set(config["species"].keys())
+    species_remaining = set(sp_binomials.keys())
     species_completed_this_round = set()
     downloading_round = 0
-    # now we need to loop through all of the species in the config file
+    # now we need to loop through all of the species in the sp_binomials_object
     print("DOWNLOADING ROUND {}".format(downloading_round), file = sys.stderr)
     while len(species_remaining) > 0:
-        for thissp in config["species"]:
-            binomial = "{} {}".format(config["species"][thissp]["genus"], config["species"][thissp]["species"])
+        for thissp in sp_binomials.keys():
+            binomial = sp_binomials[thissp]
             sp_remaining = len(species_remaining) - len(species_completed_this_round)
             print("downloading", binomial, "- {} species remaining".format(sp_remaining))
             taxinfo_filepath = os.path.join(tempdir, "{}.taxinfo.yaml".format(thissp))
@@ -277,7 +284,7 @@ def download_all_taxinfo(config, output_prefix, email):
         species_remaining = species_remaining - species_completed_this_round
         species_completed_this_round = set()
     # Now that we know that all the yaml files exist, just run that round of checks again
-    for thissp in config["species"]:
+    for thissp in sp_binomials.keys():
         taxinfo_filepath = os.path.join(tempdir, "{}.taxinfo.yaml".format(thissp))
         if not yaml_file_legal(taxinfo_filepath):
             # There is a problem with this file, so we should make the game through an error
@@ -292,6 +299,36 @@ def download_all_taxinfo(config, output_prefix, email):
     create_directories_recursive_notouch(taxinfo_yaml_filepath)
     with open(taxinfo_yaml_filepath, "w") as f:
         yaml.dump(taxinfo_yaml, f)
+    
+    return taxinfo_yaml, taxinfo_yaml_filepath
+
+def download_config_data(config_filepath, prefix, email):
+    """
+    Handles the download of the taxinfo in the config file.
+
+    Returns a yaml file of the taxonomy info,
+      and the filepath that also has all of the taxonomy information.
+    """
+    with open(config_filepath, 'r') as file:
+        config = yaml.safe_load(file)
+    
+    # we may have already saved a yaml file with the taxonomy information, so check for that
+    taxinfo_filepath = "{}.taxinfo.yaml".format(prefix)
+    # safely make the directories if they don't exist
+    create_directories_recursive_notouch(taxinfo_filepath)
+    taxinfo_yaml = {}
+    # open the taxinfo file for writing if it doesn't exist
+    if os.path.exists(taxinfo_filepath):
+        with open(taxinfo_filepath, "r") as f:
+            taxinfo_yaml = yaml.safe_load(f)
+    # if the file doesn't exist yet we have to parse the info from NCBI
+    else:
+        binomial_dict = {k: "{} {}".format(config["species"][k]["genus"],
+                                                config["species"][k]["species"]) \
+                                                    for k in config["species"]}
+
+        taxinfo_yaml, taxinfo_filepath = download_all_taxinfo(binomial_dict, prefix, email)
+    return taxinfo_yaml, taxinfo_filepath
 
 def main():
     # first we need to parse the arguments from the comand line
@@ -312,21 +349,15 @@ def main():
     #   that is close.
     # check if the prefix exists in the config file
     if "config" in args:
-        with open(args.config, 'r') as file:
-            config = yaml.safe_load(file)
-        
-        # we may have already saved a yaml file with the taxonomy information, so check for that
-        taxinfo_filepath = "{}.taxinfo.yaml".format(args.prefix)
-        # safely make the directories if they don't exist
-        create_directories_recursive_notouch(taxinfo_filepath)
-        taxinfo_yaml = {}
-        # open the taxinfo file for writing if it doesn't exist
-        if os.path.exists(taxinfo_filepath):
-            with open(taxinfo_filepath, "r") as f:
-                taxinfo_yaml = yaml.safe_load(f)
-        # if the file doesn't exist yet we have to parse the info from NCBI
-        else:
-            download_all_taxinfo(config, args.prefix, args.email)
+        # download the taxinfo from the config file
+        taxinfo_yaml, taxinfo_filepath = download_config_data(args.config,
+                                                              args.prefix,
+                                                              args.email)
+        # now we download the taxinfo for the species in the tree
+        # first we need to get all of the leaves
+        leaves = tree.get_leaves()
+        print(leaves)
+
     # This is all debug code
     #print(dir(tree))
     #print("descendants", tree.descendants)
