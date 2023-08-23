@@ -350,14 +350,20 @@ def main():
     # check if the prefix exists in the config file
     if "config" in args:
         # download the taxinfo from the config file
-        taxinfo_yaml, taxinfo_filepath = download_config_data(args.config,
-                                                              args.prefix,
-                                                              args.email)
+        #taxinfo_yaml, taxinfo_filepath = download_config_data(args.config,
+        #                                                      args.prefix,
+        #                                                      args.email)
         # now we download the taxinfo for the species in the tree
         # first we need to get all of the leaves
         leaves = tree.get_leaves()
-        print(leaves)
-
+        print(dir(leaves[0]))
+        binomial_dict = {k.name: "{} {}".format(k.name.split("_")[0],
+                                                k.name.split("_")[1]
+                                                ) \
+                                                for k in leaves}
+        treetax_yaml, treetax_filepath = download_all_taxinfo(binomial_dict,
+                                                              args.prefix + ".tree",
+                                                              args.email)
     # This is all debug code
     #print(dir(tree))
     #print("descendants", tree.descendants)
