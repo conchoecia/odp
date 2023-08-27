@@ -47,7 +47,7 @@ odpf.general_legal_run() # checks that the program isn't being run in the instal
 # check for legal config entries. Useful for finding misspelled entries
 legal = ["proteins", "chrom", "genome", "minscafsize",
          "manual_breaks", "plotorder", "sort_by_x_coord_blast",
-         "noylines", "noxlines", "genus", "species"]
+         "noylines", "noxlines", "genus", "species", "taxid"]
 
 config["tool"] = "odp"
 
@@ -140,14 +140,19 @@ config["blastjobs"] = {}
 config["analysisspecies"] = set()
 config["analysispairs"] = {}
 for tup in list(permutations(config["species"], 2)):
-    # all the blast analyses
-    config["blastjobs"]["{}_{}".format(tup[0], tup[1])] = list(tup)
-    # the individual species
-    config["analysisspecies"].add(tup[0])
-    config["analysisspecies"].add(tup[1])
-    # get the sorted reciprocal analyses
-    t = list(sorted(tup))
-    config["analysispairs"]["{}_{}".format(t[0], t[1])] = t
+    keep_pair = True
+    if "only_analyses_with_these_sp" in config:
+        if (tup[0] not in config["only_analyses_with_these_sp"]) or (tup[1] not in config["only_analyses_with_these_sp"]):
+            keep_pair = False
+    if keep_pair:
+        # all the blast analyses
+        config["blastjobs"]["{}_{}".format(tup[0], tup[1])] = list(tup)
+        # the individual species
+        config["analysisspecies"].add(tup[0])
+        config["analysisspecies"].add(tup[1])
+        # get the sorted reciprocal analyses
+        t = list(sorted(tup))
+        config["analysispairs"]["{}_{}".format(t[0], t[1])] = t
 
 # file targets are what we want to plot
 file_targets = []
