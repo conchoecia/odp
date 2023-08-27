@@ -30,3 +30,6 @@ slurm-*
 make_submit.sh
 dataformat
 datasets
+DELETEME*
+DELETE*
+dev_scripts/*/*.yaml
