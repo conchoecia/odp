@@ -103,7 +103,17 @@ def get_all_lineages(tree):
 
 def find_common_ancestor_age(sp1_lineage, sp2_lineage):
     """
-    Takes two lineages and finds the common ancestor
+    Takes two lineages and finds the common ancestor.
+    Does this with a Newick lineage that was extracted from two species.
+
+    The lineage data structure for Newick looks like this:
+       [Node("'414'"), Node("'421'"), Node("'327'"), Node("'358'"), Node("'329'"), Node("'349'"), Node("'330'"), Node("'286'"),
+        Node("'320'"), Node("'321'"), Node("'323'"), Node("'287'"), Node("'297'"), Node("'294'"), Node("'143'"), Node("'144'"),
+        Node("'146'"), Node("'22'"), Node("'23'"), Node("Abscondita_terminalis")]
+    
+    These lineage data structures are extracted from the get_all_lineages() function.
+
+    The return type of this function is a tuple of the common ancestor and the age of the species.
     """
 
     # first we need to find the common ancestor.
@@ -152,15 +162,23 @@ def report_divergence_time_all_vs_all(tree, output_prefix):
     """
     This method gets the divergence times and writes them to a file with the prefix.
     Also safely makes a directory if it does not yet exist.
+
+    Makes a dictionary of the divergence times for all the species
     """
     # first come up with the outfile path
     outfile_path = "{}.divergence_times.txt".format(output_prefix)
+    # data structure to save the divergence times
+    divergence_times = {}
     # safely make the directories if they don't exist
     create_directories_recursive_notouch(outfile_path)
     # open the outfile for writing
     with open(outfile_path, "w") as f:
         for sp1, sp2, age in get_divergence_time_all_vs_all(tree):
+            entry = (sp1, sp2)
+            if entry not in divergence_times:
+                divergence_times[entry] = age
             f.write("{}\t{}\t{}\n".format(sp1, sp2, age))
+    return divergence_times
 
 def convert_ncbi_entry_to_dict(ncbi_entry):
     entries = []
@@ -330,6 +348,131 @@ def download_config_data(config_filepath, prefix, email):
         taxinfo_yaml, taxinfo_filepath = download_all_taxinfo(binomial_dict, prefix, email)
     return taxinfo_yaml, taxinfo_filepath
 
+class TaxNode:
+    """
+    one node of the taxonomy tree
+    """
+    def __init__(self, taxid, name, rank) -> None:
+        self.taxid = taxid
+        self.name = name
+        self.rank = rank
+        self.children = {}
+
+class TaxIDtree:
+    """
+    This is a datastructure to quickly search for the most closely related species
+      given search species 1 and a tree of species 2...N.
+    """
+    def __init__(self, taxinfoyaml = None) -> None:
+        self.tree = TaxNode(taxid = -1, name = "root", rank = "root")
+        if taxinfoyaml:
+            self.taxinfoyaml = taxinfoyaml["taxinfo"] 
+            self.build_tree_from_yaml(self.taxinfoyaml)
+    
+    def __str__(self) -> str:
+        newoutstring = "- root\n"
+        # now make a recursive algorithm to print the whole tree
+        def print_tree(node, outstring, level):
+            for child in node.children:
+                outstring += "{}|_ {}: {}\n".format("  "*level, child, node.children[child].name)
+                outstring = print_tree(node.children[child], outstring, level+1)
+            return outstring
+        outstring = print_tree(self.tree, newoutstring, 1)
+        return outstring
+
+    def build_tree_from_yaml(self, taxinfoyaml):
+        """
+        Takes a yaml file of the taxinfo and builds a tree from it.
+        """
+        # go through all of the entries in the yaml
+        for entry in taxinfoyaml:
+            self.add_to_tree_from_yaml_entry(taxinfoyaml[entry])
+    
+    def add_to_tree_from_yaml_entry(self, entry):
+        """
+        Takes a yaml entry and builds a tree from it.
+
+        The entries look like this:
+        {'Lineage': 'cellular organisms; Eukaryota; Opisthokonta; Metazoa; Porifera; Hexactinellida; Hexasterophora; Lyssacinosida; Leucopsacidae; Oopsacas',
+         'LineageEx': [{'Rank': 'no rank', 'ScientificName': 'cellular organisms', 'TaxID': 131567}, {'Rank': 'superkingdom', 'ScientificName': 'Eukaryota', 'TaxID': 2759}, {'Rank': 'clade', 'ScientificName': 'Opisthokonta', 'TaxID': 33154}, {'Rank': 'kingdom', 'ScientificName': 'Metazoa', 'TaxID': 33208}, {'Rank': 'phylum', 'ScientificName': 'Porifera', 'TaxID': 6040}, {'Rank': 'class', 'ScientificName': 'Hexactinellida', 'TaxID': 60882}, {'Rank': 'subclass', 'ScientificName': 'Hexasterophora', 'TaxID': 60883}, {'Rank': 'order', 'ScientificName': 'Lyssacinosida', 'TaxID': 60884}, {'Rank': 'family', 'ScientificName': 'Leucopsacidae', 'TaxID': 472148}, {'Rank': 'genus', 'ScientificName': 'Oopsacas', 'TaxID': 111877}],
+         'ScientificName': 'Oopsacas minuta', 'TaxID': 111878
+         }
+        """
+        # Get the longform taxonomic info of this entry
+        sciname = entry["ScientificName"]
+        taxid   = entry["TaxID"]
+        lineage = entry["LineageEx"]
+        # now we iterate through the longform lineage to add to the tree
+        # start ancestor at -1 for the root
+        ancestor = self.tree
+        for i in range(len(lineage)):
+            thistaxid = lineage[i]["TaxID"]
+            thisname = None
+            if "ScientificName" in lineage[i]:
+                thisname  = lineage[i]["ScientificName"]
+            thisrank =  "None"
+            if "Rank" in lineage[i]:
+                thisrank = lineage[i]["Rank"]
+            # now we add this to the tree
+            # first we check if this is in the tree
+            if thistaxid in ancestor.children:
+                # this taxid is already in the tree, so we just need to move on
+                ancestor = ancestor.children[thistaxid]
+            else:
+                # this taxid isn't in the tree, so we need to add it.
+                ancestor = self.add_to_tree(thistaxid, thisname, thisrank, ancestor)
+        # now we add the final entry to the tree
+        ancestor = self.add_to_tree(taxid, sciname, "species", ancestor)
+
+    def add_to_tree(self, taxid, name, rank, ancestor) -> TaxNode:
+        """
+        Takes a taxid, name, and lineage and adds it to the tree.
+        """
+        if taxid in ancestor.children:
+            raise IOError("This taxid is already in the tree: {}".format(taxid)) 
+        ancestor.children[taxid] = TaxNode(taxid, name, rank)
+        # return the new node
+        return ancestor.children[taxid]
+    
+    def find_closest_relative(self, yaml_entry) -> TaxNode:
+        """
+        Uses a taxonomy entry to get the closest lineage. Returns a TaxNode object
+
+        {'Lineage': 'cellular organisms; Eukaryota; Opisthokonta; Metazoa; Porifera; Hexactinellida; Hexasterophora; Lyssacinosida; Leucopsacidae; Oopsacas',
+         'LineageEx': [{'Rank': 'no rank', 'ScientificName': 'cellular organisms', 'TaxID': 131567}, {'Rank': 'superkingdom', 'ScientificName': 'Eukaryota', 'TaxID': 2759}, {'Rank': 'clade', 'ScientificName': 'Opisthokonta', 'TaxID': 33154}, {'Rank': 'kingdom', 'ScientificName': 'Metazoa', 'TaxID': 33208}, {'Rank': 'phylum', 'ScientificName': 'Porifera', 'TaxID': 6040}, {'Rank': 'class', 'ScientificName': 'Hexactinellida', 'TaxID': 60882}, {'Rank': 'subclass', 'ScientificName': 'Hexasterophora', 'TaxID': 60883}, {'Rank': 'order', 'ScientificName': 'Lyssacinosida', 'TaxID': 60884}, {'Rank': 'family', 'ScientificName': 'Leucopsacidae', 'TaxID': 472148}, {'Rank': 'genus', 'ScientificName': 'Oopsacas', 'TaxID': 111877}],
+         'ScientificName': 'Oopsacas minuta', 'TaxID': 111878
+         }
+        """
+        # first we need to get the lineage of this entry
+        lineage = yaml_entry["LineageEx"]
+        # now we need to iterate through the lineage to find the closest relative
+        # start ancestor at -1 for the root
+        ancestor = self.tree
+        for i in range(len(lineage)):
+            thistaxid = lineage[i]["TaxID"]
+            # now we check if this taxid is in the tree
+            if thistaxid in ancestor.children:
+                # this taxid is already in the tree, so keep going down the tree
+                ancestor = ancestor.children[thistaxid]
+            else:
+                # We have reached a point where this taxid is not in the tree.
+                break
+        # We check if the ancestor node has children.
+        # If it does, that means we haven't reached the target species or a closely related species yet.
+        done = False
+        if len(ancestor.children) == 0:
+            done = True
+        else:
+            # we need to find the closest relative in the tree
+            while done == False:
+                # greedily take the first child until we get to a leaf
+                # this is a closest relative
+                if len(ancestor.children) == 0:
+                    done = True
+                else:
+                    ancestor = ancestor.children[list(ancestor.children.keys())[0]]
+        return ancestor
+
 def main():
     # first we need to parse the arguments from the comand line
     args = parse_args()
@@ -338,8 +481,8 @@ def main():
     ## now we need to load in the newick file
     tree = read(args.newick)[0]
 
-    ## get the all vs all time divergence
-    #report_divergence_time_all_vs_all(tree, args.prefix)
+    # get the all vs all time divergence
+    divergence_times = report_divergence_time_all_vs_all(tree, args.prefix)
 
     # If there is an odp config file, we will try to link the species of the config file to
     #   the species in the tree. Timetree.org obviously doesn't have all of the species, so
@@ -350,9 +493,9 @@ def main():
     # check if the prefix exists in the config file
     if "config" in args:
         # download the taxinfo from the config file
-        #taxinfo_yaml, taxinfo_filepath = download_config_data(args.config,
-        #                                                      args.prefix,
-        #                                                      args.email)
+        taxinfo_yaml, taxinfo_filepath = download_config_data(args.config,
+                                                              args.prefix,
+                                                              args.email)
         # now we download the taxinfo for the species in the tree
         # first we need to get all of the leaves
         leaves = tree.get_leaves()
@@ -364,20 +507,39 @@ def main():
         treetax_yaml, treetax_filepath = download_all_taxinfo(binomial_dict,
                                                               args.prefix + ".tree",
                                                               args.email)
-    # This is all debug code
-    #print(dir(tree))
-    #print("descendants", tree.descendants)
-    #print("capsaspora_name", tree.descendants[0].name)
-    #print("capsaspora_length", tree.descendants[0].length)
-    #print("tree", tree)
-    #print("comment", tree.comment)
-    #print("length", tree.length)
-    #print("root name", tree.name)
-    #print(tree.get_leaves())
-    #print(tree.get_leaves()[-1].ancestor)
-    #print(tree.get_leaves()[0].ancestor)
-    #print(tree.get_leaves()[0].ancestor == tree)
-    #print(get_lineage(tree, tree.get_leaves()[4]))
-    
+        
+        # For each species in the config file, we need to find the closest species in the tree
+        # We only need to map config -> tree for these reasons:
+        #  - The point of the program is to get a list of genomes from the config file.
+        #  - That list of genomes is fed to timetree.org
+        #  - Timetree.org doesn't have all species, so it finds the closest species.
+        #  - The tree we get from Timetree.org has some species that are not in the config file.
+        #  - We need to go back and figure out what species in the config file are closest to those in the tree.
+        TreeTaxStruct = TaxIDtree(taxinfoyaml = treetax_yaml)
+
+        # go through each species in the config file and find the closest species from the timetree
+        closest_relative_dict = {}
+        for sp in taxinfo_yaml["taxinfo"]:
+            # get the closest relative to this species
+            closest_relative = TreeTaxStruct.find_closest_relative(taxinfo_yaml["taxinfo"][sp])
+            closest_relative_dict[sp] = closest_relative.name
+            print("{}: {}".format(sp, closest_relative.name))
+        
+        # Now construct the divergence_times_config dict with the species translated 
+        divergence_times_config = {}
+        sp_names = list(sorted(closest_relative_dict.keys()))
+        for i in range(len(sp_names)-1):
+            for j in range(i+1, len(sp_names)):
+                sp1 = sp_names[i]
+                sp2 = sp_names[j]
+                tree_sp1 = "_".join(closest_relative_dict[sp1].split(" "))
+                tree_sp2 = "_".join(closest_relative_dict[sp2].split(" "))
+                if tree_sp1 == tree_sp2:
+                    age = 0
+                else:
+                    age = divergence_times[tuple(sorted((tree_sp1, tree_sp2)))]
+                divergence_times_config[(sp1, sp2)] = age
+                print("{}\t{}\t{}".format(sp1, sp2, divergence_times_config[(sp1, sp2)]))
+ 
 if __name__ == "__main__":
     main()
