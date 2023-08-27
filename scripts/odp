@@ -142,6 +142,7 @@ config["analysisspecies"] = set()
 config["analysispairs"] = {}
 for tup in list(permutations(config["species"], 2)):
     keep_pair = True
+    print(tup)
     if "only_analyses_with_these_sp" in config:
         if (tup[0] not in config["only_analyses_with_these_sp"]) or (tup[1] not in config["only_analyses_with_these_sp"]):
             keep_pair = False
