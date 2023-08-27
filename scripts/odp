@@ -254,9 +254,18 @@ rule check_input_legality:
         input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     threads: 1
     run:
-        if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom):
+        if params.duplicate_handling == "fail":
+            # We want to enforce that the input files are legal
+            # See the odpf.check_species_input_legality function for more details
+            if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom):
+                with open(output.input_pass, "w") as outf:
+                    outf.write("pass")
+        elif params.duplicate_handling == "pass":
+            # we just assume that everything is copacetic and let the program continue
             with open(output.input_pass, "w") as outf:
                 outf.write("pass")
+        else:
+            raise IOError("Right now we can only handle fail and pass cases. Sorry.")
 
 rule filter_prots:
     """
