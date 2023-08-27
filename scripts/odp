@@ -47,7 +47,8 @@ odpf.general_legal_run() # checks that the program isn't being run in the instal
 # check for legal config entries. Useful for finding misspelled entries
 legal = ["proteins", "chrom", "genome", "minscafsize",
          "manual_breaks", "plotorder", "sort_by_x_coord_blast",
-         "noylines", "noxlines", "genus", "species", "taxid"]
+         "noylines", "noxlines", "genus", "species", "taxid",
+         "assembly_accession"]
 
 config["tool"] = "odp"
 
