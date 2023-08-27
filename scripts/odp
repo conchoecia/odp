@@ -252,6 +252,8 @@ rule check_input_legality:
         pep   = lambda wildcards: config["species"][wildcards.sample]["proteins"]
     output:
         input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
+    params:
+        duplicate_handling = config["duplicate_proteins"]
     threads: 1
     run:
         if params.duplicate_handling == "fail":
