@@ -523,10 +523,10 @@ def main():
             # get the closest relative to this species
             closest_relative = TreeTaxStruct.find_closest_relative(taxinfo_yaml["taxinfo"][sp])
             closest_relative_dict[sp] = closest_relative.name
-            print("{}: {}".format(sp, closest_relative.name))
+            #print("{}: {}".format(sp, closest_relative.name))
         
         # Now construct the divergence_times_config dict with the species translated 
-        divergence_times_config = {}
+        divergence_times_config = {"divergence_times": {}}
         sp_names = list(sorted(closest_relative_dict.keys()))
         for i in range(len(sp_names)-1):
             for j in range(i+1, len(sp_names)):
@@ -538,8 +538,20 @@ def main():
                     age = 0
                 else:
                     age = divergence_times[tuple(sorted((tree_sp1, tree_sp2)))]
-                divergence_times_config[(sp1, sp2)] = age
-                print("{}\t{}\t{}".format(sp1, sp2, divergence_times_config[(sp1, sp2)]))
+                if sp1 not in divergence_times_config["divergence_times"]:
+                    divergence_times_config["divergence_times"][sp1] = {}
+                if sp2 not in divergence_times_config["divergence_times"][sp1]:
+                    divergence_times_config["divergence_times"][sp1][sp2] = age
+                #print("{}\t{}\t{}".format(sp1, sp2, divergence_times_config[(sp1, sp2)]))
+
+        # make a new config file where we will write the divergence times
+        outconfig = args.prefix + ".divTimeAdded.yaml"
+        with open(outconfig, "w") as f:
+            # copy the yaml from args to this new file
+            with open(args.config, "r") as f2:
+                config = yaml.safe_load(f2)
+                yaml.dump(config, f)
+            yaml.dump(divergence_times_config, f)
  
 if __name__ == "__main__":
     main()
