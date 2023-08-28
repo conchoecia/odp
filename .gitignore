@@ -1,5 +1,7 @@
 .DS_Store
 .Rhistory
+LG_TEMP/*
+*.fasta
 *.snakemake.log
 *.fastq.gz
 *.fq.gz
@@ -26,3 +28,9 @@ LG_db/*/
 ._*
 slurm-*
 make_submit.sh
+dataformat
+datasets
+DELETEME*
+DELETE*
+dev_scripts/*/*.yaml
+run_script.sh

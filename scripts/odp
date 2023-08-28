@@ -31,8 +31,9 @@ import logging
 
 # non-standard dependencies
 import matplotlib
-from matplotlib.patches import Patch
-from matplotlib.lines   import Line2D
+from matplotlib              import font_manager # https://github.com/conchoecia/odp/issues/34#issuecomment-1636475654
+from matplotlib.patches      import Patch
+from matplotlib.lines        import Line2D
 from matplotlib.font_manager import FontProperties
 import networkx as nx
 import numpy as np
@@ -47,7 +48,8 @@ odpf.general_legal_run() # checks that the program isn't being run in the instal
 # check for legal config entries. Useful for finding misspelled entries
 legal = ["proteins", "chrom", "genome", "minscafsize",
          "manual_breaks", "plotorder", "sort_by_x_coord_blast",
-         "noylines", "noxlines", "genus", "species"]
+         "noylines", "noxlines", "genus", "species", "taxid",
+         "assembly_accession"]
 
 config["tool"] = "odp"
 
@@ -74,11 +76,11 @@ if len(config["species"]) < 2:
 # check if we have specified how to handle duplicate protein sequences
 if "duplicate_proteins" not in config:
     config["duplicate_proteins"] = "fail"
-else:
-    options_list = ["fail", "pass"] #best is not yet implemented
-    outstring = ", ".join(options_list)
-    if config["duplicate_proteins"] not in options_list:
-        raise IOError("duplicate_proteins must be set to one of the following: {}".format(outstring))
+#else:
+#    options_list = ["fail", "best"]
+#    outstring = ", ".join(options_list)
+#    if config["duplicate_proteins"] not in options_list:
+#        raise IOError("duplicate_proteins must be set to one of the following: {}".format(outstring))
 
 # see if we have included any illegal arguments
 illegal = set()
@@ -140,18 +142,25 @@ config["blastjobs"] = {}
 config["analysisspecies"] = set()
 config["analysispairs"] = {}
 for tup in list(permutations(config["species"], 2)):
-    # all the blast analyses
-    config["blastjobs"]["{}_{}".format(tup[0], tup[1])] = list(tup)
-    # the individual species
-    config["analysisspecies"].add(tup[0])
-    config["analysisspecies"].add(tup[1])
-    # get the sorted reciprocal analyses
-    t = list(sorted(tup))
-    config["analysispairs"]["{}_{}".format(t[0], t[1])] = t
+    keep_pair = True
+    if "only_analyses_with_these_sp" in config:
+        if (tup[0] in config["only_analyses_with_these_sp"]) or (tup[1] in config["only_analyses_with_these_sp"]):
+            pass # we keep it
+        else:
+            keep_pair = False
+    if keep_pair:
+        # all the blast analyses
+        config["blastjobs"]["{}_{}".format(tup[0], tup[1])] = list(tup)
+        # the individual species
+        config["analysisspecies"].add(tup[0])
+        config["analysisspecies"].add(tup[1])
+        # get the sorted reciprocal analyses
+        t = list(sorted(tup))
+        config["analysispairs"]["{}_{}".format(t[0], t[1])] = t
 
 # file targets are what we want to plot
 file_targets = []
-# if we want to plot more than LGs, add those special file 
+# if we want to plot more than LGs, add those special file
 if "plot_sp_sp" not in config:
     config["plot_sp_sp"] = True
 
@@ -173,12 +182,12 @@ if config["plot_sp_sp"]:
         for x in config["analysispairs"]]
     file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_yx_synteny.pdf".format(x)
         for x in config["analysispairs"]]
-    
+
     # Make a final filtered rbh plot that only has the FET-significant orthologs. Keep only p-values <= 0.05.
     #  Assign a group name and color to each set
 
 # file targets are what we want to plot
-# if we want to plot more than LGs, add those special file 
+# if we want to plot more than LGs, add those special file
 if "plot_LGs" not in config:
     config["plot_LGs"] = True
 
@@ -203,6 +212,15 @@ if config["plot_LGs"]:
     file_targets += expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_synteny.pdf",
            hmm = config["prot_to_color"], sp = config["species"])
     file_targets += expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_yx_synteny.pdf",
+           hmm = config["prot_to_color"], sp = config["species"])
+
+# plot the decay blocks
+if "plot_LG_decay" not in config:
+    config["plot_LG_decay"] = False
+if config["plot_LG_decay"]:
+    file_targets += expand(config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.pdf",
+           hmm = config["prot_to_color"], sp = config["species"])
+    file_targets += expand(config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.tsv",
            hmm = config["prot_to_color"], sp = config["species"])
 
 wildcard_constraints:
@@ -256,7 +274,7 @@ rule filter_prots:
     """
     Sometimes the prot file with have sequences that are not present in
      the chrom file. Make a prot file of only the proteins in the chrom file.
-    
+
     We require that the file has passed the input checks first.
     """
     input:
@@ -356,22 +374,21 @@ rule n_ways_reciprocal_best:
     Gets reciprocal best hits from 3 or more samples
     For a protein to be retained, it must be a reciprocal-best hit in three samples.
 
-              A      B 
+              A      B
              / \    /|\
             B___C  A-+-C , --et cetera
                     \|/
                      D
-    
+
     # Here I need to draw an ascii pentagram with lines connected to each element A, B, C, D, E
 
 
     The output of this rule is a yaml file with admissible proteins from each sample
     """
     input:
-        xtoyblastp = [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_recip.temp.blastp".format(
-            "_and_".join(config["analysispairs"][this])) for this in config["analysispairs"]],
-        chrom = lambda wildcards: [config["species"][x]["chrom"]
-                    for x in config["analysisspecies"]]
+        xtoyblastp = lambda wildcards: [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(
+                      config["analysispairs"][wildcards.analysis][0], config["analysispairs"][wildcards.analysis][1])],
+        chrom      = lambda wildcards: [config["species"][x]["chrom"] for x in config["analysispairs"][wildcards.analysis]]
     output:
         acceptable_prots = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_acceptable_prots.txt",
         blast_network    = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_edges.txt",
@@ -507,7 +524,6 @@ rule n_ways_reciprocal_best:
                 "{}_gene".format(thisspecies)].astype(str)
 
         # now add the other info
-        column_add = []
         for thisspecies in sorted(all_species):
             genesdf["{}_scaf".format(thisspecies)] = genesdf[
                 "{}_gene".format(thisspecies)].map(
@@ -517,9 +533,9 @@ rule n_ways_reciprocal_best:
                 "{}_gene".format(thisspecies)].map(
                     dict(zip(chrom_dicts[thisspecies].prot,
                              chrom_dicts[thisspecies].start)))
-            column_add = column_add + ["{}_gene".format(thisspecies),
-                                       "{}_scaf".format(thisspecies),
-                                       "{}_pos".format(thisspecies)]
+            # convert the pos column to type int
+            genesdf["{}_pos".format(thisspecies)] = genesdf[
+                "{}_pos".format(thisspecies)].astype(int)
 
         # add the gene_group info
         for index, row in genesdf.iterrows():
@@ -543,12 +559,24 @@ rule n_ways_reciprocal_best:
             # now we modify the cells
             genesdf["{}_breakchrom".format(thisspecies)] = ""
             for index, row in genesdf.iterrows():
-                thisscaf = row["{}_scaf".format(thisspecies)]
-                thispos  = row["{}_pos".format(thisspecies)]
+                thisscaf = str(row["{}_scaf".format(thisspecies)])
+                thispos  = int(row["{}_pos".format(thisspecies)])
                 if thisscaf not in chrom_to_breaks:
                     chrom_to_breaks[thisscaf] = [0, 9999999999]
                 breakpoints = sorted(chrom_to_breaks[thisscaf])
+                # Debugging messages - can delete if you see this. Aug 28 2023
+                #print(thisspecies, breakpoints)
+                #print(thisscaf, thispos)
+                #print('breakpoints[i] type:', type(breakpoints[0]))
+                #print("CRASH")
                 for i in range(len(breakpoints) - 1):
+                    # Debugging messages - can delete if you see this. Aug 28 2023
+                    # print('breakpoints[i] type:',   type(breakpoints[i]))
+                    # print('breakpoints[i] value:',  breakpoints[i])
+                    # print('breakpoints[i+1] type:', type(breakpoints[i+1]))
+                    # print('breakpoints[i+1] value:', breakpoints[i+1])
+                    # print('thispos type:', type(thispos))
+                    # print('thispos value:', thispos)
                     if (breakpoints[i] <= thispos) and (thispos < breakpoints[i+1]):
                         genesdf.loc[index, "{}_breakchrom".format(thisspecies)] = "{}:{}-{}".format(
                             thisscaf, breakpoints[i], breakpoints[i+1]).replace("9999999999", "end")
@@ -739,7 +767,7 @@ def FET_sample_to_chrom_to_CC(components, xsample, ysample, splitter):
                 raise ValueError("ERROR: we have seen this chrom before, but it is in a different CC. This should not happen. We saw {}.".format(echrom))
             sample_to_chrom_to_CC[esample][echrom] = cc_counter
         cc_counter += 1
-    return sample_to_chrom_to_CC 
+    return sample_to_chrom_to_CC
 
 def synteny_plot_sheet(df_file, plotdf_file, synplot,
                  xsample, ysample,
@@ -767,11 +795,11 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
       - xbreaks - the x breaks for the plot. Could be centromeres, breaks in synteny, et cetera.
       - ybreaks - the y breaks for the plot. See above comment.
       - orthology_method - the orthology method used to generate the rbh file. Diamond or blastp.
-      - sort_y_by_x - if True, then the y scaffolds will be sorted by the best match with x scaffolds. 
-      - prot_to_color_name - TODO finish this comment. 
+      - sort_y_by_x - if True, then the y scaffolds will be sorted by the best match with x scaffolds.
+      - prot_to_color_name - TODO finish this comment.
       - prot_to_color_dir - TODO finish this comment.
       - prot_to_color_hmm_results - TODO finish this comment.
-    
+
     TODO: this function needs a parameter where the user passes a chrom-to-size file, or a dict of chroms to sizes.
           This would replace species_to_chrom_to_size() and would be much faster.
     """
@@ -791,7 +819,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     # read in the rbh file. This will already have the Dx, Dy, and FET
     df = pd.read_csv(df_file, delimiter="\t")
-       
+
     # now make a df to figure out the sort order
     sort_df = df.copy()
     # We keep the scaf, the index to figure out the center of mass on the other chrom,
@@ -819,7 +847,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     # The column "size" is the number of genes in the x-chrom and y-chrom pair
     sort_df = sort_df.merge(size_df, on=["{}_scaf".format(xsample), "{}_scaf".format(ysample)], how="left").sort_values(
         by = ["size", "whole_FET"], ascending = [False, True]).reset_index(drop=True)
-    
+
     # We still need to add the total number of genes on each chrom
     ysample_chrom_to_size = df.groupby("{}_scaf".format(ysample)).size().to_frame("{}_size".format(xsample)).reset_index()
     xsample_chrom_to_size = df.groupby("{}_scaf".format(xsample)).size().to_frame("{}_size".format(ysample)).reset_index()
@@ -1783,6 +1811,8 @@ rule analysis_D_and_FET:
         xsample = lambda wildcards: config["analysispairs"][wildcards.analysis][0], 
         ysample = lambda wildcards: config["analysispairs"][wildcards.analysis][1]
     threads: 1
+    resources:
+        mem_mb = 5000 # usually uses 2.5Gb of RAM
     run:
         # read in the rbh file
         df = pd.read_csv(input.rbh, delimiter="\t")
@@ -1829,18 +1859,21 @@ rule filtered_D_FET_rbh:
         df["color"] = "#000000"
 
         gb = df.groupby(scaf_cols)
-        # iterate through the groups and assign a group name
-        for name, group in gb:
-            gene_group = "{}_{}".format(name[0], name[1])
-            # change the gene_group value of this group in the group, not the df
-            group["gene_group"] = gene_group
-            group["color"] = grc()
-        # unwrap the groups back into a df
-        df = gb.agg().first().reset_index(drop=True)
-
+        # get the unique combos for scaf_columns
+        # this is a list of tuples
+        unique_scaf_combos = list(gb.groups.keys())
+        # make a unique color for each combo
+        combo_to_color = {k: grc() for k in unique_scaf_combos}
+        # now iterate through the dataframe and assign a gene_group and color
+        df["gene_group"] = ""
+        df["color"] = ""
+        for index, row in df.iterrows():
+            this_combo = tuple(row[scaf_cols])
+            df.loc[index, "gene_group"] = "{}_{}".format(this_combo[0], this_combo[1])
+            df.loc[index, "color"] = combo_to_color[this_combo]
         print(df)
-        sys.exit()
-        df = df[df["FET"]] <= 0.05
+        # get places where "whole_FET" <= 0.05
+        df = df[df["whole_FET"] <= 0.05]
         df.to_csv(output.filt, sep ="\t", header = True, index = None)
 
 rule species_HMM_D_and_FET:
@@ -1894,8 +1927,9 @@ rule plot_synteny_nocolor:
         rbh = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_xy_reciprocal_best_hits.plotted.rbh",
         xy  = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_xy_synteny.pdf",
         yx  = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_yx_synteny.pdf"
-    threads:
-        1
+    threads: 1
+    resources:
+        mem_mb = 5000 # usually takes 2.5Gb of RAM
     params:
         analysis = lambda wildcards: wildcards.analysis,
         orthology_method = config["diamond_or_blastp"]
@@ -2126,10 +2160,10 @@ rule hmm_search_to_rbh:
                                                            x["{}_scaf".format(wildcards.coloredby)]), axis=1)
         genesdf2.to_csv(output.rbh, sep ="\t", header = True, index = None)
 
-"""
-This makes the synteny plots with the pre-installed color groups
-"""
 rule plot_synteny_coloredby:
+    """
+    This makes the synteny plots with the pre-installed color groups
+    """
     input:
         rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.D.FET.rbh",
         colordir = lambda wildcards: config["prot_to_color"][wildcards.coloredby],
@@ -2187,20 +2221,20 @@ rule plot_synteny_coloredby:
                      prot_to_color_dir  = params.coloredbydir,
                      prot_to_color_hmm_results = input.hmm_results)
 
-"""
-This makes a synteny plot specifically with the ALG pseudo-genomes
- and the species in the analysis.
-
- For example the BCnS ALGs will be plotted on the x-axis as if they
-  are a genome assembly, and the real genome from the species being
-  analyzed will be plotted on the y-axis. This will be repeated, so the
-  ALGs and species will be on the y and x axes.
-
-In this case, we don't need to compare the plot to the hmm samples because
-  the rbh file we are using has already been treated to have the columns
-  "gene_group" and "color" from the ALG folder's information.
-"""
 rule plot_synteny_of_ALGs_plus_species:
+    """
+    This makes a synteny plot specifically with the ALG pseudo-genomes
+     and the species in the analysis.
+
+     For example the BCnS ALGs will be plotted on the x-axis as if they
+      are a genome assembly, and the real genome from the species being
+      analyzed will be plotted on the y-axis. This will be repeated, so the
+      ALGs and species will be on the y and x axes.
+
+    In this case, we don't need to compare the plot to the hmm samples because
+      the rbh file we are using has already been treated to have the columns
+      "gene_group" and "color" from the ALG folder's information.
+    """
     input:
         rbh = config["tool"] + "/step1-rbh/{hmm}_{sp}_reciprocal_best_hits.hmm.D.FET.rbh",
         chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
@@ -2220,7 +2254,6 @@ rule plot_synteny_of_ALGs_plus_species:
         yorder  = config["species"][ysample]["plotorder"] if "plotorder" in config["species"][ysample] else []
         xbreaks = []
         ybreaks = config["species"][ysample]["manual_breaks"] if "manual_breaks" in config["species"][ysample] else []
-
 
         s2c2s = chromsize_to_s2c2s(input.chromsize)
         # In this case we look in the dataframe and for each scaffold, just get the largest
@@ -2261,3 +2294,107 @@ rule plot_synteny_of_ALGs_plus_species:
                      prot_to_color_name = None,
                      prot_to_color_dir  = None,
                      prot_to_color_hmm_results = None)
+
+def plot_decay(datastruct, outpath, outtsv):
+    """
+    This plots the decay of an ALG between number of genes in the main chromosome,
+    and the number of genes in smaller chromosomes
+
+    Parameters:
+      - 0th datastruct - the data structure described below with the data to plot
+      - 1st outpath    - the path to save the plot to
+      - 2nd outtsv     - the path to save the processed data to
+
+    The input is this datastructure:
+      ALG dataframe
+       - key: the ALG name
+         - 0th element is a list of genes that are on orthologous chroms
+         - 1st element is a list of genes that are not on orthologous chroms
+           - The key for these dicts is the scaffold name
+           - The value for both of these dicts is the count of genes on that scaffold in that category
+    """
+    import matplotlib.pyplot as plt
+    # convert the datastruct to a simple dataframe
+    ALGs = list(datastruct.keys())
+    conserved = [sum(datastruct[x][0].values()) for x in ALGs]
+    scattered = [sum(datastruct[x][1].values()) for x in ALGs]
+    total     = [conserved[i] + scattered[i] for i in range(len(ALGs))]
+    # turn those columns into a dataframe
+    df = pd.DataFrame({"ALG":ALGs, "conserved":conserved, "scattered":scattered, "total":total})
+    df = df.sort_values(by="total", ascending=False)
+    df = df.reset_index(drop=True)
+    df.to_csv(outtsv, sep="\t", index=False)
+
+    fig, ax1 = plt.subplots()
+
+    color = 'tab:red'
+    ax1.set_xlabel('ALG size')
+    ax1.set_ylabel('Distribution size', color=color)
+    ax1.tick_params(axis='y', labelcolor=color)
+
+    for index, row in df.iterrows():
+        x1 = row["total"]
+        x2 = row["total"]
+        y1 = 0
+        y2 = row["total"]
+        ax1.plot([x1,x2],[y1,y2],'k-')
+    ax1.plot(df["total"], df["total"],'ro')
+    ax1.plot(df["total"], df["scattered"],'bo')
+
+    ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+    ax2.set_ylim([0, 100])
+
+    color = 'tab:blue'
+    ax2.set_ylabel('percent conserved on ALGs', color=color)  # we already handled the x-label with ax1
+    ax2.plot(df["total"], 100*(df["conserved"]/df["total"]), "b-")
+    ax2.tick_params(axis='y', labelcolor=color)
+
+    fig.tight_layout()  # otherwise the right y-label is slightly clipped
+    plt.savefig(outpath)
+
+rule ALG_decay_plot:
+    """
+    This rule creates the ALG decay plot
+    |
+    | X
+    | X X X X X
+    | X X X X X X X X X X
+    | X.X.X.X.X.X.X.X.X.X.X.X.X.X.X........
+    | X X X X X X X X X X X X X X X X X X X
+    +----------------------------------------
+    """
+    input:
+        rbh = config["tool"] + "/step1-rbh/{hmm}_{sp}_reciprocal_best_hits.hmm.D.FET.rbh"
+    output:
+        plot = config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.pdf",
+        data = config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.tsv"
+    threads: 1
+    run:
+        # read in the rbh dataframe
+        rbhdf = pd.read_csv(input.rbh, sep = "\t", header = 0)
+        # sort by the whole_FET value
+        rbhdf = rbhdf.sort_values(by = "whole_FET")
+        # groupby the HMM scaf 
+        hmmgroupby = rbhdf.groupby(["{}_scaf".format(wildcards.hmm)])
+
+        # ALG dataframe
+        #  - key: the ALG name
+        #    - 0th element are things that are on orthologous chroms
+        #    - 1st elements are things that are not on orthologous chroms
+        ALG_results = {}
+        # iterate through each group and print the contents
+        for name, group in hmmgroupby:
+            # get a subset of the df where whole_FET is less than 0.05
+            ALGs   = group[group["whole_FET"] <= 0.05]
+            others = group[group["whole_FET"] > 0.05]
+
+            results = [{}, {}]
+            # add the ALGs and others counts to the results dataframe as a dict
+            results[0] = ALGs["{}_scaf".format(wildcards.sp)].value_counts().to_dict()
+            results[1] = others["{}_scaf".format(wildcards.sp)].value_counts().to_dict()
+            # add the results to the ALG_results dict with the hmm name as the key
+            ALG_results[name] = results
+
+        # plot the results with this dataframe
+        plot_decay(ALG_results, output.plot, output.data)
+
