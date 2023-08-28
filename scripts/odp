@@ -557,25 +557,25 @@ rule n_ways_reciprocal_best:
 
             # now we modify the cells
             genesdf["{}_breakchrom".format(thisspecies)] = ""
-            print(genesdf["{}_pos".format(thisspecies)])
-            print("the above should all be positions") 
             for index, row in genesdf.iterrows():
-                thisscaf = row["{}_scaf".format(thisspecies)]
-                thispos  = row["{}_pos".format(thisspecies)]
+                thisscaf = str(row["{}_scaf".format(thisspecies)])
+                thispos  = int(row["{}_pos".format(thisspecies)])
                 if thisscaf not in chrom_to_breaks:
                     chrom_to_breaks[thisscaf] = [0, 9999999999]
                 breakpoints = sorted(chrom_to_breaks[thisscaf])
-                print(thisspecies, breakpoints)
-                print(thisscaf, thispos)
-                print('breakpoints[i] type:', type(breakpoints[0]))
-                print("CRASH")
+                # Debugging messages - can delete if you see this. Aug 28 2023
+                #print(thisspecies, breakpoints)
+                #print(thisscaf, thispos)
+                #print('breakpoints[i] type:', type(breakpoints[0]))
+                #print("CRASH")
                 for i in range(len(breakpoints) - 1):
-                    print('breakpoints[i] type:',   type(breakpoints[i]))
-                    print('breakpoints[i] value:',  breakpoints[i])
-                    print('breakpoints[i+1] type:', type(breakpoints[i+1]))
-                    print('breakpoints[i+1] value:', breakpoints[i+1])
-                    print('thispos type:', type(thispos))
-                    print('thispos value:', thispos)
+                    # Debugging messages - can delete if you see this. Aug 28 2023
+                    # print('breakpoints[i] type:',   type(breakpoints[i]))
+                    # print('breakpoints[i] value:',  breakpoints[i])
+                    # print('breakpoints[i+1] type:', type(breakpoints[i+1]))
+                    # print('breakpoints[i+1] value:', breakpoints[i+1])
+                    # print('thispos type:', type(thispos))
+                    # print('thispos value:', thispos)
                     if (breakpoints[i] <= thispos) and (thispos < breakpoints[i+1]):
                         genesdf.loc[index, "{}_breakchrom".format(thisspecies)] = "{}:{}-{}".format(
                             thisscaf, breakpoints[i], breakpoints[i+1]).replace("9999999999", "end")
