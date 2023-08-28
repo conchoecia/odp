@@ -1863,6 +1863,7 @@ rule filtered_D_FET_rbh:
             # change the gene_group value of this group in the group, not the df
             group["gene_group"] = gene_group
             group["color"] = grc()
+            print(group)
         # unwrap the groups back into a df
         df = gb.agg().first().reset_index(drop=True)
 
