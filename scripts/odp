@@ -1857,16 +1857,18 @@ rule filtered_D_FET_rbh:
         df["color"] = "#000000"
 
         gb = df.groupby(scaf_cols)
-        # iterate through the groups and assign a group name
-        for name, group in gb:
-            gene_group = "{}_{}".format(name[0], name[1])
-            # change the gene_group value of this group in the group, not the df
-            group["gene_group"] = gene_group
-            group["color"] = grc()
-            print(name, group)
-        # unwrap the groups back into a df
-        # don't use this because it doesn't work: gb.agg().first().reset_index(drop=True)
-        df = pd.concat([gb.get_group(x) for x in gb.groups])
+        # get the unique combos for scaf_columns
+        # this is a list of tuples
+        unique_scaf_combos = list(gb.groups.keys())
+        # make a unique color for each combo
+        combo_to_color = {k: grc() for k in unique_scaf_combos}
+        # now iterate through the dataframe and assign a gene_group and color
+        df["gene_group"] = ""
+        df["color"] = ""
+        for index, row in df.iterrows():
+            this_combo = tuple(row[scaf_cols])
+            df.loc[index, "gene_group"] = "{}_{}".format(this_combo[0], this_combo[1])
+            df.loc[index, "color"] = combo_to_color[this_combo]
         print(df)
         df = df[df["whole_FET"]] <= 0.05
         df.to_csv(output.filt, sep ="\t", header = True, index = None)
