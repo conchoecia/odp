@@ -570,8 +570,11 @@ rule n_ways_reciprocal_best:
                 print("CRASH")
                 for i in range(len(breakpoints) - 1):
                     print('breakpoints[i] type:',   type(breakpoints[i]))
+                    print('breakpoints[i] value:',  breakpoints[i])
                     print('breakpoints[i+1] type:', type(breakpoints[i+1]))
+                    print('breakpoints[i+1] value:', breakpoints[i+1])
                     print('thispos type:', type(thispos))
+                    print('thispos value:', thispos)
                     if (breakpoints[i] <= thispos) and (thispos < breakpoints[i+1]):
                         genesdf.loc[index, "{}_breakchrom".format(thisspecies)] = "{}:{}-{}".format(
                             thisscaf, breakpoints[i], breakpoints[i+1]).replace("9999999999", "end")
