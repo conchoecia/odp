@@ -523,7 +523,6 @@ rule n_ways_reciprocal_best:
                 "{}_gene".format(thisspecies)].astype(str)
 
         # now add the other info
-        column_add = []
         for thisspecies in sorted(all_species):
             genesdf["{}_scaf".format(thisspecies)] = genesdf[
                 "{}_gene".format(thisspecies)].map(
@@ -533,9 +532,9 @@ rule n_ways_reciprocal_best:
                 "{}_gene".format(thisspecies)].map(
                     dict(zip(chrom_dicts[thisspecies].prot,
                              chrom_dicts[thisspecies].start)))
-            column_add = column_add + ["{}_gene".format(thisspecies),
-                                       "{}_scaf".format(thisspecies),
-                                       "{}_pos".format(thisspecies)]
+            # convert the pos column to type int
+            genesdf["{}_pos".format(thisspecies)] = genesdf[
+                "{}_pos".format(thisspecies)].astype(int)
 
         # add the gene_group info
         for index, row in genesdf.iterrows():
