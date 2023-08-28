@@ -1867,7 +1867,7 @@ rule filtered_D_FET_rbh:
         # unwrap the groups back into a df
         # don't use this because it doesn't work: gb.agg().first().reset_index(drop=True)
         df = pd.concat([gb.get_group(x) for x in gb.groups])
-        df = df[df["FET"]] <= 0.05
+        df = df[df["whole_FET"]] <= 0.05
         print(df)
         df.to_csv(output.filt, sep ="\t", header = True, index = None)
 
