@@ -31,8 +31,9 @@ import logging
 
 # non-standard dependencies
 import matplotlib
-from matplotlib.patches import Patch
-from matplotlib.lines   import Line2D
+from matplotlib              import font_manager # https://github.com/conchoecia/odp/issues/34#issuecomment-1636475654
+from matplotlib.patches      import Patch
+from matplotlib.lines        import Line2D
 from matplotlib.font_manager import FontProperties
 import networkx as nx
 import numpy as np
