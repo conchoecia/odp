@@ -385,10 +385,9 @@ rule n_ways_reciprocal_best:
     The output of this rule is a yaml file with admissible proteins from each sample
     """
     input:
-        xtoyblastp = [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_recip.temp.blastp".format(
-            "_and_".join(config["analysispairs"][this])) for this in config["analysispairs"]],
-        chrom = lambda wildcards: [config["species"][x]["chrom"]
-                    for x in config["analysisspecies"]]
+        xtoyblastp = lambda wildcards: [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(
+                      config["analysispairs"][wildcards.analysis][0], config["analysispairs"][wildcards.analysis][1])]
+        chrom      = lambda wildcards: [config["species"][x]["chrom"] for x in config["analysispairs"][wildcards.analysis]]
     output:
         acceptable_prots = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_acceptable_prots.txt",
         blast_network    = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_edges.txt",

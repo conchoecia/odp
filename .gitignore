@@ -33,3 +33,4 @@ datasets
 DELETEME*
 DELETE*
 dev_scripts/*/*.yaml
+run_script.sh
