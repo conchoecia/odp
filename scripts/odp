@@ -1863,12 +1863,12 @@ rule filtered_D_FET_rbh:
             # change the gene_group value of this group in the group, not the df
             group["gene_group"] = gene_group
             group["color"] = grc()
-            print(group)
+            print(name, group)
         # unwrap the groups back into a df
         # don't use this because it doesn't work: gb.agg().first().reset_index(drop=True)
         df = pd.concat([gb.get_group(x) for x in gb.groups])
-        df = df[df["whole_FET"]] <= 0.05
         print(df)
+        df = df[df["whole_FET"]] <= 0.05
         df.to_csv(output.filt, sep ="\t", header = True, index = None)
 
 rule species_HMM_D_and_FET:
