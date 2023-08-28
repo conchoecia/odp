@@ -1811,6 +1811,8 @@ rule analysis_D_and_FET:
         xsample = lambda wildcards: config["analysispairs"][wildcards.analysis][0], 
         ysample = lambda wildcards: config["analysispairs"][wildcards.analysis][1]
     threads: 1
+    resources:
+        mem_mb = 5000 # usually uses 2.5Gb of RAM
     run:
         # read in the rbh file
         df = pd.read_csv(input.rbh, delimiter="\t")
@@ -1925,8 +1927,9 @@ rule plot_synteny_nocolor:
         rbh = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_xy_reciprocal_best_hits.plotted.rbh",
         xy  = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_xy_synteny.pdf",
         yx  = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_yx_synteny.pdf"
-    threads:
-        1
+    threads: 1
+    resources:
+        mem_mb = 5000 # usually takes 2.5Gb of RAM
     params:
         analysis = lambda wildcards: wildcards.analysis,
         orthology_method = config["diamond_or_blastp"]
