@@ -1870,7 +1870,8 @@ rule filtered_D_FET_rbh:
             df.loc[index, "gene_group"] = "{}_{}".format(this_combo[0], this_combo[1])
             df.loc[index, "color"] = combo_to_color[this_combo]
         print(df)
-        df = df[df["whole_FET"]] <= 0.05
+        # get places where "whole_FET" <= 0.05
+        df = df[df["whole_FET"] <= 0.05]
         df.to_csv(output.filt, sep ="\t", header = True, index = None)
 
 rule species_HMM_D_and_FET:
