@@ -558,6 +558,8 @@ rule n_ways_reciprocal_best:
 
             # now we modify the cells
             genesdf["{}_breakchrom".format(thisspecies)] = ""
+            print(genesdf["{}_pos".format(thisspecies)])
+            print("the above should all be positions") 
             for index, row in genesdf.iterrows():
                 thisscaf = row["{}_scaf".format(thisspecies)]
                 thispos  = row["{}_pos".format(thisspecies)]
