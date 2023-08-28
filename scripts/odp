@@ -1865,11 +1865,10 @@ rule filtered_D_FET_rbh:
             group["color"] = grc()
             print(group)
         # unwrap the groups back into a df
-        df = gb.agg().first().reset_index(drop=True)
-
-        print(df)
-        sys.exit()
+        # don't use this because it doesn't work: gb.agg().first().reset_index(drop=True)
+        df = pd.concat([gb.get_group(x) for x in gb.groups])
         df = df[df["FET"]] <= 0.05
+        print(df)
         df.to_csv(output.filt, sep ="\t", header = True, index = None)
 
 rule species_HMM_D_and_FET:
