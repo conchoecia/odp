@@ -16,7 +16,6 @@ Description:
 # plotting options
 import matplotlib.pyplot as plt
 import odp_plotting_functions as odp_plot
-
 #
 import argparse
 import pandas as pd
@@ -37,7 +36,16 @@ def parse_args():
     # Path to a config.yaml file that contains the parameters for the analysis we want.
     # Temporary until the tree functionality is added.
     parser.add_argument("-c", "--config", help="The config.yaml file containing the parameters for the analysis. Temporary until trees are added.")
+    # add a chrom file for the species we want to plot. This will help us determine which things are chroms
+    parser.add_argument("-C", "--chrom", help = "The .chrom file for the species we want to plot. This will help us determine which things are chromosomes.")
+    # Target_species is the species we want to plot
+    # We plot this species against everything else
+    parser.add_argument("-T", "--target_species", help="The species we want to plot. This species will be plotted against all other species found in the config file.")
     args = parser.parse_args()
+    # if the length of args is 0 print the help and quit
+    if len(sys.argv) == 1:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
 
     # check that the tree file actually exists
     for thisfile in [args.tree]:
@@ -59,7 +67,7 @@ def read_yaml_file(file_path):
         data = yaml.safe_load(file)
     return data
 
-def parse_config(config_file, directory_of_rbh_files):
+def parse_config(config_file, directory_of_rbh_files, target_species):
     """
     This will be a yaml file with analyses, detailing the target species to plot,
       the other species, and the divergence times.
@@ -68,14 +76,54 @@ def parse_config(config_file, directory_of_rbh_files):
     species_prefix_to_filename = {}
     filelist = os.listdir(directory_of_rbh_files) # get a list of files in the directory
     config = read_yaml_file(config_file)          # load the config file
+    # add the target species to the config if it isn't there already
+    if "target_species" not in config:
+        config["target_species"] = [target_species]
+
     # check if the necessary field, analyses, is in the file
+    if "divergence_times" not in config:
+        raise IOError("The field 'divergence_times' must be present in the config file.")
+
+    # Ensure that the target_species is in the divergence_times field
+    unseen_target_species = set([x for x in config["target_species"]])
+    all_species_set = set()
+    for sp1 in config["divergence_times"].keys():
+        if sp1 in config["target_species"]:
+            # remove this from the set of unseen target species
+            # don't raise an error if it isn't in the set
+            unseen_target_species.discard(sp1)
+        for sp2 in config["divergence_times"][sp1].keys():
+            all_species_set.add(sp1)
+            all_species_set.add(sp2)
+            if sp2 in config["target_species"]:
+                # remove this from the set of unseen target species
+                unseen_target_species.discard(sp2)
+    if len(unseen_target_species) > 0:
+        raise IOError("The target_species [{}] is not in the divergence_times field.".format(unseen_target_species))
+
+    # This is not efficient, but go through the loop again to determine which species pairs we need
+    #  We need this because later we need to check that all of these species pairs have files
+    sp_to_expected_pairs = {x: set() for x in config["target_species"]}
     if "analyses" not in config:
-        raise IOError("The field 'analyses' must be present in the config file.")
+        config["analyses"] = {x:{} for x in config["target_species"]}
+
+    for target in config["analyses"]:
+        for sp in all_species_set:
+            if sp != target:
+                sptup = tuple(sorted((target, sp)))
+                sp_to_expected_pairs[target].add(sptup)
+                # now we also need to add the divergence time to the analyses field
+                if sp not in config["analyses"][target]:
+                    s12 = tuple(sorted((target, sp)))
+                    config["analyses"][target][sp] = config["divergence_times"][s12[0]][s12[1]]
+    #for entry in sorted(config["analyses"]["Pectenmaximus6579"]):
+    #    print("{}: {}".format(entry, config["analyses"]["Pectenmaximus6579"][entry]))
+    #print(len(config["analyses"]["Pectenmaximus6579"]))
 
     # FILE PAIRING
     # for each analysis we now need to get the file to look at for the pairwise comparison
     if "analysis_files" not in config:
-        config["analysis_files"] = {x:{} for x in config["analyses"].keys()}
+        config["analysis_files"] = {x:{} for x in config["target_species"]}
 
     # get the pairs from the files
     pair_to_file = {}
@@ -87,13 +135,14 @@ def parse_config(config_file, directory_of_rbh_files):
         complete_filepath = os.path.join(directory_of_rbh_files, thisfile)
         pair_to_file[analysis_pair].append(complete_filepath)
 
-    # go through the files and figure out the pair
-    for sp1 in config["analyses"].keys():
-        for sp2 in config["analyses"][sp1].keys():
-            analysis_pair = tuple(sorted((sp1, sp2)))
+    # go through the target species analysis pairs as inferred from the divergence_times field
+    #sp_to_expected_pairs = {x: set() for x in config["target_species"]}
+    for target in config["target_species"]:
+        for analysis_pair in sp_to_expected_pairs[target]:
             if analysis_pair not in pair_to_file:
                 raise IOError("The analysis pair {} is not in the filelist.".format(analysis_pair))
-            config["analysis_files"][sp1][sp2] = pair_to_file[analysis_pair][0]
+            not_target = [x for x in analysis_pair if x != target][0]
+            config["analysis_files"][target][not_target] = pair_to_file[analysis_pair][0]
 
     return config
 
@@ -155,14 +204,18 @@ def decay_of_one_species_pair(rawdf, sp1, sp2, sp_to_chr_to_size):
     for sp1_scaf in sp_to_chr_to_size[sp1].keys():
         thisentry = { "sp1_scaf": sp1_scaf,
                       "sp2_scaf": [],
-                      "sp1_scaf_genecount": sp1_scaf_to_total_genes[sp1_scaf],
+                      "sp1_scaf_genecount": 0,
                       "conserved":          0,
-                      "scattered":          sp1_scaf_to_total_genes[sp1_scaf]
+                      "scattered":          0
                       }
+        if sp1_scaf in sp1_scaf_to_total_genes.keys():
+            thisentry["sp1_scaf_genecount"] = sp1_scaf_to_total_genes[sp1_scaf]
+            thisentry["scattered"]          = sp1_scaf_to_total_genes[sp1_scaf]
+        if sp1_scaf in sp1_scaf_to_conserved_genes.keys():
+            thisentry["conserved"]          = sp1_scaf_to_conserved_genes[sp1_scaf]
         if sp1_scaf in sp1_scaf_to_sp2_scaf.keys():
             thisentry["sp2_scaf"]           = sp1_scaf_to_sp2_scaf[sp1_scaf]
-            thisentry["sp1_scaf_genecount"] = sp1_scaf_to_total_genes[sp1_scaf]
-            thisentry["conserved"]          = sp1_scaf_to_conserved_genes[sp1_scaf]
+        if (sp1_scaf in sp1_scaf_to_total_genes) and (sp1_scaf in sp1_scaf_to_conserved_genes):
             thisentry["scattered"]          = sp1_scaf_to_total_genes[sp1_scaf] - sp1_scaf_to_conserved_genes[sp1_scaf]
         entries.append(thisentry)
     decaydf = pd.DataFrame(entries)
@@ -182,6 +235,7 @@ def rbh_files_to_sp_to_chr_to_size(rbh_filelist):
     Get the chromosome sizes by using the rbh files and getting the max gene indices
     """
     sp_to_chr_to_size = {}
+    sp_to_scaf_to_genecount = {}
     for thisfile in rbh_filelist:
         # load as pandas df
         df = pd.read_csv(thisfile, sep="\t")
@@ -203,9 +257,25 @@ def rbh_files_to_sp_to_chr_to_size(rbh_filelist):
             for k in dict_of_maxes.keys():
                 if dict_of_maxes[k] > sp_to_chr_to_size[sp][k]:
                     sp_to_chr_to_size[sp][k] = dict_of_maxes[k]
-    return sp_to_chr_to_size
 
-def calculate_pairwise_decay_sp1_vs_many(sp1, config, sp_to_chr_to_size, outdir="./"):
+            # now add the gene list to the sp_to_scaf_to_genecount
+            if sp not in sp_to_scaf_to_genecount:
+                sp_to_scaf_to_genecount[sp] = {}
+            for scaf in df["{}_scaf".format(sp)].unique().tolist():
+                if scaf not in sp_to_scaf_to_genecount[sp]:
+                    sp_to_scaf_to_genecount[sp][scaf] = set()
+                subdf = df[df["{}_scaf".format(sp)] == scaf]
+                sp_to_scaf_to_genecount[sp][scaf].update(subdf["{}_gene".format(sp)].tolist())
+
+    # now return the size of the set for sp_to_scaf_to_genecount
+    for sp in sp_to_scaf_to_genecount.keys():
+        for scaf in sp_to_scaf_to_genecount[sp].keys():
+            sp_to_scaf_to_genecount[sp][scaf] = len(sp_to_scaf_to_genecount[sp][scaf])
+
+    return sp_to_chr_to_size, sp_to_scaf_to_genecount
+
+def calculate_pairwise_decay_sp1_vs_many(sp1, config, sp_to_chr_to_size,
+                                         sp_to_keepscafs, outdir="./"):
     """
     Calculates the pairwise chromosomal decay between two species.
     Saves the decay dataframes to files. Each file is sp1 vs sp2.
@@ -218,6 +288,8 @@ def calculate_pairwise_decay_sp1_vs_many(sp1, config, sp_to_chr_to_size, outdir=
         rbhfile = config["analysis_files"][sp1][sp2]
         # read in the rbh file as a pandas df
         rawdf = pd.read_csv(rbhfile, sep="\t")
+        # only keep the scaffolds for species 1 that we know are valid
+        rawdf = rawdf[rawdf["{}_scaf".format(sp1)].isin(sp_to_keepscafs[sp1])]
 
         # get the corresponding chromosomes
         sp1_sp2_decay = decay_of_one_species_pair(rawdf, sp1, sp2, sp_to_chr_to_size)
@@ -286,7 +358,7 @@ def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./"):
 
         # the right plot is per-chromosome. Add a little jitter to the x-axis so we can see the points
         axes[1].scatter(jitter(sp1_sp2_decay["divergence_time"], 20), sp1_sp2_decay["fraction_conserved"],
-                        label = "{}".format(sp2), alpha = 0.25, edgecolors='none')
+                        label = "{}".format(sp2), alpha = 0.1, edgecolors='none')
         axes[1].set_xlabel("Divergence time (MYA) (+- 20 MYA jitter)")
         axes[1].set_ylabel("Fraction conserved on orthologous chromosomes")
         axes[1].set_title("Orthologous chromosome conservation vs divergence time")
@@ -403,13 +475,19 @@ def plot_decay_twospecies(sp1, sp2, path_to_tsv, outdir):
         print(df)
         sys.exit()
 
+def chrom_to_inferred_chrom(chrom_path):
+    """
+    Read in a .chrom file to infer what the chromosomes are for a species.
 
+    In the context of this program, the species is the target species.
+
+    """
 def main():
     # parse the arguments
     args = parse_args()
 
     # we must parse the config file to get the analysis parameters
-    config = parse_config(args.config, args.directory)
+    config = parse_config(args.config, args.directory, args.target_species)
 
     # build a sp_to_chr_to_size nested dictionary. We wouldn't need this if we finished clink.
     # nested for loop to get all the files for all the species
@@ -418,16 +496,29 @@ def main():
         for sp2 in config["analysis_files"][sp1].keys():
             rbh_filelist.add(config["analysis_files"][sp1][sp2])
     rbh_filelist = list(rbh_filelist)
-    sp_to_chr_to_size = rbh_files_to_sp_to_chr_to_size(rbh_filelist)
+    sp_to_chr_to_size, sp_to_scaf_to_genecount = rbh_files_to_sp_to_chr_to_size(rbh_filelist)
+    ## print the target genecounts
+    #print(sp_to_scaf_to_genecount[args.target_species])
+
+    # For the target species, get a list of scaf names if they have more
+    #  than 1% of the total amount of genes in the geneome.
+    #  This is to avoid plotting the small scaffolds.
+    target_keep_these_scafs_gt_one_percent_genes = {x:set() for x in config["target_species"]}
+    for sp in config["target_species"]:
+        total_genes = sum([sp_to_scaf_to_genecount[sp][scaf] for scaf in sp_to_scaf_to_genecount[sp]])
+        for scaf in sp_to_scaf_to_genecount[sp]:
+            if sp_to_scaf_to_genecount[sp][scaf] >= (0.01 * total_genes):
+                target_keep_these_scafs_gt_one_percent_genes[sp].add(scaf)
 
     # safely make the directory called 'odp_pairwise_decay'
     os.makedirs("odp_pairwise_decay", exist_ok=True)
     # make a plot using the data
-    for sp1 in config["analyses"].keys():
+    for sp1 in config["target_species"]:
         outdir = os.path.join("odp_pairwise_decay", sp1)
         outdir = os.path.join(outdir, "decay_dataframes")
         # calculate the pairwise decay in chromosomes, save the files, get the list of files
-        filestruct = calculate_pairwise_decay_sp1_vs_many(sp1, config, sp_to_chr_to_size, outdir)
+        filestruct = calculate_pairwise_decay_sp1_vs_many(sp1, config, sp_to_chr_to_size,
+                                                          target_keep_these_scafs_gt_one_percent_genes, outdir)
 
         # make the summary plot of all the chromosomes
         outdir = os.path.join("odp_pairwise_decay", sp1)
