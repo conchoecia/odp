@@ -288,8 +288,6 @@ def calculate_pairwise_decay_sp1_vs_many(sp1, config, sp_to_chr_to_size,
         rbhfile = config["analysis_files"][sp1][sp2]
         # read in the rbh file as a pandas df
         rawdf = pd.read_csv(rbhfile, sep="\t")
-        # only keep the scaffolds for species 1 that we know are valid
-        rawdf = rawdf[rawdf["{}_scaf".format(sp1)].isin(sp_to_keepscafs[sp1])]
 
         # get the corresponding chromosomes
         sp1_sp2_decay = decay_of_one_species_pair(rawdf, sp1, sp2, sp_to_chr_to_size)
@@ -299,6 +297,9 @@ def calculate_pairwise_decay_sp1_vs_many(sp1, config, sp_to_chr_to_size,
 
         # Add a percent conserved column
         sp1_sp2_decay["fraction_conserved"] = sp1_sp2_decay["conserved"] / sp1_sp2_decay["sp1_scaf_genecount"]
+
+        # only keep the scaffolds for species 1 that we know are valid
+        sp1_sp2_decay = sp1_sp2_decay[sp1_sp2_decay["sp1_scaf"].isin(sp_to_keepscafs[sp1])]
 
         # stash this to save to a file later
         sp_to_decay_df[sp2] = sp1_sp2_decay
@@ -380,7 +381,11 @@ def plot_decay_twospecies(sp1, sp2, path_to_tsv, scaffolds_to_keep_sp1, outdir):
     and the number of genes in smaller chromosomes
 
     Parameters:
-        TODO
+        sp1: One species that is being plotted. This text title should match the text in the tsv file.
+        sp2: Another species that is being plotted. This text should match the text of the tsv file.
+        path_to_tsv: The path to the tsv file that contains the data to plot. The structure is described below.
+        scaffolds_to_keep_sp1: A list of scaffolds to keep for sp1. This is necessary because we don't want to plot the small scaffolds.
+        outdir: The directory to which we will save the plot.
 
     The input is the tsv output by calculate_pairwise_decay_sp1_vs_many:
     For example, here is one df with PMA (scallop) as sp1 and PFI (sponge) as sp2:
@@ -393,6 +398,7 @@ def plot_decay_twospecies(sp1, sp2, path_to_tsv, scaffolds_to_keep_sp1, outdir):
     The output is one figure with two subplots.
     The left subplot is the ranked sizes of the chromosomes in sp1. The right subplot is the actual size of the chromosomes in sp1
     """
+    BARS = True
     df = pd.read_csv(path_to_tsv, sep="\t")
     # only keep the scaffolds for species 1 that we know are valid
     df = df[df["sp1_scaf"].isin(scaffolds_to_keep_sp1)]
@@ -401,66 +407,98 @@ def plot_decay_twospecies(sp1, sp2, path_to_tsv, scaffolds_to_keep_sp1, outdir):
     df["sp1_ranked"] = df["sp1_scaf_genecount"].rank(ascending=True, method="first")
     df = df.sort_values(by="sp1_ranked")
 
-
     # set up the two panels of the plot
-    NUMBER_OF_ROWS = 1
-    NUMBER_OF_FIGS = 2
-    fig, axes = plt.subplots(NUMBER_OF_ROWS, NUMBER_OF_FIGS, figsize = (7.5 * NUMBER_OF_FIGS, 6*NUMBER_OF_ROWS))
+    NUMBER_OF_ROWS = 2
+    NUMBER_OF_COLS = 2
+    fig, axes = plt.subplots(NUMBER_OF_ROWS, NUMBER_OF_COLS,
+                             figsize = (7.5 * NUMBER_OF_COLS, 7*(NUMBER_OF_ROWS - 1)),
+                             gridspec_kw={'height_ratios': [1, 2.5]})
+
     fig.suptitle("{} and {} chromosome conservation vs {} chromosome size".format(sp1, sp2, sp1))
 
-    # plot the chromosome sizes by rank on the left
-    axes[0].plot(df["sp1_ranked"], df["sp1_scaf_genecount"], "ro")
+    if BARS:
+        # on the left plot the total gene count as red bars
+        axes[1][0].bar(df["sp1_ranked"], df["sp1_scaf_genecount"], color = "red", alpha = 1)
+    else:
+        # plot the chromosome sizes by rank on the left
+        axes[1][0].plot(df["sp1_ranked"], df["sp1_scaf_genecount"], "bo")
+
     # plot the chromosomes by actual size on the right
-    axes[1].plot(df["sp1_scaf_genecount"], df["sp1_scaf_genecount"], "ro")
+    axes[1][1].plot(df["sp1_scaf_genecount"], df["sp1_scaf_genecount"], "bo")
 
     # add some horizontal space between axes[0] and axes[1]
     fig.subplots_adjust(wspace=0.5)
 
     # make vertical lines on the left and the right plot. Do it by iterating through the dataframe
     for index, row in df.iterrows():
-        axes[0].plot([row["sp1_ranked"], row["sp1_ranked"]], [0, row["sp1_scaf_genecount"]], "k-", alpha = 0.33)
-        axes[1].plot([row["sp1_scaf_genecount"], row["sp1_scaf_genecount"]], [0, row["sp1_scaf_genecount"]], "k-", alpha = 0.33)
+        if BARS:
+            pass
+        else:
+            axes[1][0].plot([row["sp1_ranked"], row["sp1_ranked"]], [0, row["sp1_scaf_genecount"]], "k-", alpha = 0.33)
+        axes[1][1].plot([row["sp1_scaf_genecount"], row["sp1_scaf_genecount"]], [0, row["sp1_scaf_genecount"]], "k-", alpha = 0.33)
 
-    # now we plot blue points for number of genes degraded
-    axes[0].plot(df["sp1_ranked"], df["scattered"], "bo")
-    axes[1].plot(df["sp1_scaf_genecount"], df["scattered"], "bo")
+    # now we plot the blue points
+    if BARS:
+        # now we plot blue bars for the number of genes conserved
+        axes[1][0].bar(df["sp1_ranked"], df["conserved"], color = "blue", alpha = 1)
+    else:
+        # now we plot blue points for number of genes degraded
+        axes[1][0].plot(df["sp1_ranked"], df["scattered"], "ro")
+    axes[1][1].plot(df["sp1_scaf_genecount"], df["scattered"], "ro")
 
     # add some yaxis labels. make the color red to match the dots. Then make the tick labels red too
-    color = "red"
-    axes[0].set_ylabel("Number of orthologs on chromosome", color=color)
-    axes[1].set_ylabel("Number of orthologs on chromosome", color=color)
-    axes[0].tick_params(axis='y', labelcolor=color)
-    axes[1].tick_params(axis='y', labelcolor=color)
+    color = "blue"
+    axes[1][0].set_ylabel("Number of orthologs on chromosome", color=color)
+    axes[1][1].set_ylabel("Number of orthologs on chromosome", color=color)
+    axes[1][0].tick_params(axis='y', labelcolor=color)
+    axes[1][1].tick_params(axis='y', labelcolor=color)
 
     # add some xaxis labels
-    axes[0].set_xlabel("Chromosome ranked by ortholog count")
-    axes[1].set_xlabel("Number of orthologs on chromosome")
+    axes[1][0].set_xlabel("Chromosome ranked by ortholog count")
+    axes[1][1].set_xlabel("Number of orthologs on chromosome")
 
     # on the left side we will add x-axis ticks that at the sp1 chromosome names, and rotate everything 45 degrees
-    axes[0].set_xticks(df["sp1_ranked"])
-    axes[0].set_xticklabels(df["sp1_scaf"], rotation=45, ha="center")
+    axes[1][0].set_xticks(df["sp1_ranked"])
+    axes[1][0].set_xticklabels(df["sp1_scaf"], rotation=90, ha="center")
 
     # get the y-axis limits for the left plot
-    left_ylim = axes[0].get_ylim()
+    left_ylim = axes[1][0].get_ylim()
+    left_xlim = axes[1][0].get_xlim()
+
     # get the max value of the sp1_scaf_genecount
     left_maxgene = df["sp1_scaf_genecount"].max()
     # print out the ratios of the total limits to the max gene count
     ylim_scale_factor = abs(1 - (left_ylim[1]/left_maxgene))
 
+    # set the y-limits of the left plot to the right plot
+    axes[1][0].set_ylim(axes[1][1].get_ylim())
+
     # now we clone the axes and plot the percent conserved on the y-axes
-    axL = axes[0].twinx()  # instantiate a second axes that shares the same x-axis
-    axR = axes[1].twinx()
-    ylim_scale_number = 100 * ylim_scale_factor
-    axL.set_ylim([0 - ylim_scale_number, 100 + ylim_scale_number])
-    axR.set_ylim([0 - ylim_scale_number, 100 + ylim_scale_number])
+    axL = axes[0][0]
+    axR = axes[0][1]
+    ylim_scale_number = 100
+    axL.set_ylim( [-5, 100] )
+    axL.set_xlim( left_xlim )
+    axR.set_ylim( [-5, 100] )
+
     color = 'black'
     axL.set_ylabel('percent conserved on ALGs', color=color)  # we already handled the x-label with ax1
     axR.set_ylabel('percent conserved on ALGs', color=color)
     # set color of axL and axR yaxis ticks to blue
     axL.tick_params(axis='y', labelcolor=color)
     axR.tick_params(axis='y', labelcolor=color)
+    # change the x-axis ticks to be the same positions as the bottom left
+    # turn off the tick labels for the top left
+    axL.set_xticks(df["sp1_ranked"])
+    axL.set_xticklabels(["" for x in df["sp1_ranked"]])
+    # now plot the data
     axL.plot(df["sp1_ranked"], 100*(df["conserved"]/df["sp1_scaf_genecount"]), color = color, lw = 1)
     axR.plot(df["sp1_scaf_genecount"], 100*(df["conserved"]/df["sp1_scaf_genecount"]), color = color, lw = 1)
+
+    # turn off the top and right bar of the frames of each axes
+    for ax in axes.flatten():
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
 
     # CALL THIS TO GET THE VISUAL STYLE WE NEED
     odp_plot.format_matplotlib()
@@ -474,17 +512,6 @@ def plot_decay_twospecies(sp1, sp2, path_to_tsv, scaffolds_to_keep_sp1, outdir):
     plt.savefig("{}.pdf".format(outdir_prefix), format='pdf')
     plt.close()
 
-    if sp2 == "RES":
-        print(df)
-        sys.exit()
-
-def chrom_to_inferred_chrom(chrom_path):
-    """
-    Read in a .chrom file to infer what the chromosomes are for a species.
-
-    In the context of this program, the species is the target species.
-
-    """
 def main():
     # parse the arguments
     args = parse_args()
@@ -523,15 +550,15 @@ def main():
         filestruct = calculate_pairwise_decay_sp1_vs_many(sp1, config, sp_to_chr_to_size,
                                                           target_keep_these_scafs_gt_one_percent_genes, outdir)
 
-        # make the summary plot of all the chromosomes
-        outdir = os.path.join("odp_pairwise_decay", sp1)
-        outdir = os.path.join(outdir, "plot_overview_sp_sp")
-        plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir=outdir)
+        ## make the summary plot of all the chromosomes
+        #outdir = os.path.join("odp_pairwise_decay", sp1)
+        #outdir = os.path.join(outdir, "plot_overview_sp_sp")
+        #plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir=outdir)
 
         # make individual sp-sp scatterplots
         outdir = os.path.join("odp_pairwise_decay", sp1)
         outdir = os.path.join(outdir, "plot_individual_sp_sp")
-        for sp2 in filestruct[sp1].keys():
+        for sp2 in sorted(filestruct[sp1].keys()):
             plot_decay_twospecies(sp1, sp2, filestruct[sp1][sp2],
                                   target_keep_these_scafs_gt_one_percent_genes[sp1], outdir)
 
