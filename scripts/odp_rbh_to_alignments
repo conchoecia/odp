@@ -46,6 +46,15 @@ species_string = "_".join(sorted(rbh_species))
 
 config["tool"] = "odp_LGs_from_{}".format(species_string)
 
+# check if we have specified how to handle duplicate protein sequences
+if "duplicate_proteins" not in config:
+    config["duplicate_proteins"] = "fail"
+#else:
+#    options_list = ["fail", "best"]
+#    outstring = ", ".join(options_list)
+#    if config["duplicate_proteins"] not in options_list:
+#        raise IOError("duplicate_proteins must be set to one of the following: {}".format(outstring))
+
 for this_species in rbh_species:
     if this_species not in config["species"]:
         raise IOError("Species {} is not in the config file.".format(this_species))
@@ -125,16 +134,28 @@ rule check_input_legality:
                                    for x in rbh_species]
     output:
         input_pass = temp(config["tool"] + "/db/input_check/{sample}_pass.txt")
+    params:
+        duplicate_handling = config["duplicate_proteins"]
     threads: 1
     run:
-        for thissp in rbh_species:
-            thisfasta = config["species"][thissp]["genome"]
-            thispep   = config["species"][thissp]["proteins"]
-            thischrom = config["species"][thissp]["chrom"]
-            if odpf.check_species_input_legality(thisfasta, thispep, thischrom):
+        if params.duplicate_handling == "fail":
+            for thissp in rbh_species:
+                thisfasta = config["species"][thissp]["genome"]
+                thispep   = config["species"][thissp]["proteins"]
+                thischrom = config["species"][thissp]["chrom"]
+                if odpf.check_species_input_legality(thisfasta, thispep, thischrom):
+                    outfile = config["tool"] + "/db/input_check/{}_pass.txt".format(thissp)
+                    with open(outfile, "w") as outf:
+                        outf.write("pass")
+        elif params.duplicate_handling == "pass":
+            # we just assume that everything is copacetic and let the program continue
+            for thissp in rbh_species:
                 outfile = config["tool"] + "/db/input_check/{}_pass.txt".format(thissp)
                 with open(outfile, "w") as outf:
                     outf.write("pass")
+        else:
+            raise IOError("Right now we can only handle fail and pass cases. Sorry.")
+
 
 rule generate_fasta_of_each_rbh:
     input:
