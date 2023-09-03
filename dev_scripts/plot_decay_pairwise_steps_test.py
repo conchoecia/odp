@@ -374,7 +374,7 @@ def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./"):
     plt.savefig("{}.pdf".format(outdir_prefix), format='pdf')
 
 
-def plot_decay_twospecies(sp1, sp2, path_to_tsv, outdir):
+def plot_decay_twospecies(sp1, sp2, path_to_tsv, scaffolds_to_keep_sp1, outdir):
     """
     This plots the decay of an ALG between number of genes in the main chromosome,
     and the number of genes in smaller chromosomes
@@ -394,6 +394,9 @@ def plot_decay_twospecies(sp1, sp2, path_to_tsv, outdir):
     The left subplot is the ranked sizes of the chromosomes in sp1. The right subplot is the actual size of the chromosomes in sp1
     """
     df = pd.read_csv(path_to_tsv, sep="\t")
+    # only keep the scaffolds for species 1 that we know are valid
+    df = df[df["sp1_scaf"].isin(scaffolds_to_keep_sp1)]
+
     # rank the chromosomes based on their size and sort by the rank
     df["sp1_ranked"] = df["sp1_scaf_genecount"].rank(ascending=True, method="first")
     df = df.sort_values(by="sp1_ranked")
@@ -529,7 +532,8 @@ def main():
         outdir = os.path.join("odp_pairwise_decay", sp1)
         outdir = os.path.join(outdir, "plot_individual_sp_sp")
         for sp2 in filestruct[sp1].keys():
-            plot_decay_twospecies(sp1, sp2, filestruct[sp1][sp2], outdir)
+            plot_decay_twospecies(sp1, sp2, filestruct[sp1][sp2],
+                                  target_keep_these_scafs_gt_one_percent_genes[sp1], outdir)
 
 
 if __name__ == '__main__':
