@@ -27,7 +27,7 @@ class LG_db:
     This class ingests a directory of an odp linkage database,
      checks to see if the input is legal based on the LG db spec,
      and makes data structures to access the information later.
-    
+
     One special thing that is done to process the linkage database is
      to find if there are some cases where the same protein is in
      multiple columns. This is likely due to one species' proteome

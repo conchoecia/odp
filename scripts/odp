@@ -653,6 +653,28 @@ def calculate_FET(genesdf, scafdict):
 
     genesdf["whole_FET"] = -1
     genesdf["break_FET"] = -1
+
+    # set the types of the dataframe
+    types = {"rbh"        : str,
+             "gene_group" : str,
+             "color"      : str,
+             "whole_FET"  : float,
+             "break_FET"  : float}
+    for colname in genesdf.columns:
+        if colname.endswith("_gene"):
+            types[colname] = str
+        if colname.endswith("_scaf"):
+            types[colname] = str
+        elif colname.endswith("_pos"):
+            types[colname] = int
+        elif colname.endswith("_ix"):
+            types[colname] = int
+        elif colname.endswith("_break_ix"):
+            types[colname] = int
+        elif colname.endswith("_breakchrom"):
+            types[colname] = object
+    genesdf = genesdf.astype(types)
+
     # now perform Fisher's Exact Test
     if len(all_species) == 2:
         sp1 = list(sorted(all_species))[0]
@@ -2112,6 +2134,21 @@ rule hmm_search_to_rbh:
                       "{}_gene".format(wildcards.sample),
                       "{}_scaf".format(wildcards.sample),
                       "{}_pos".format( wildcards.sample)]]
+        # set the columns rbh, gene_group, color to be strings
+        # also set the {}_gene and {}_scaf columns to be strings
+        # TODO - in the future I need a function to set these as types
+        #        This block of code is messy and is repeated in other rules
+        genesdf["rbh"] = genesdf["rbh"].astype(str)
+        genesdf["gene_group"] = genesdf["gene_group"].astype(str)
+        genesdf["color"] = genesdf["color"].astype(str)
+        genesdf["{}_gene".format(wildcards.coloredby)] = genesdf["{}_gene".format(wildcards.coloredby)].astype(str)
+        genesdf["{}_scaf".format(wildcards.coloredby)] = genesdf["{}_scaf".format(wildcards.coloredby)].astype(str)
+        genesdf["{}_gene".format(wildcards.sample)] = genesdf["{}_gene".format(wildcards.sample)].astype(str)
+        genesdf["{}_scaf".format(wildcards.sample)] = genesdf["{}_scaf".format(wildcards.sample)].astype(str)
+        # set the {}_pos columns to be ints
+        genesdf["{}_pos".format(wildcards.coloredby)] = genesdf["{}_pos".format(wildcards.coloredby)].astype(int)
+        genesdf["{}_pos".format(wildcards.sample)] = genesdf["{}_pos".format(wildcards.sample)].astype(int)
+
         # delete the old dfs to remove references
         del df
         del rbhdf
