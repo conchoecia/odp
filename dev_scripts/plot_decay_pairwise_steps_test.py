@@ -23,6 +23,7 @@ import os
 import random
 import sys
 import yaml
+from math import ceil as ceil
 
 # set up argparse method to get the directory of the .tsv files we want to plot
 def parse_args():
@@ -332,18 +333,42 @@ def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./"):
     filestruct is a dictionary of dictionaries. The first key is the focal species.
       The second keys are the species to which the focal species is being compared.
       The value of the second key is the path to the tsv file to use for the comparison.
-    """
-    # We start by making a subplot array to make the two variants. A two-column, one-row plot.
-    NUMBER_OF_ROWS = 1
-    NUMBER_OF_FIGS = 2
-    fig, axes = plt.subplots(NUMBER_OF_ROWS, NUMBER_OF_FIGS, figsize = (7.5 * NUMBER_OF_FIGS, 6*NUMBER_OF_ROWS))
-    fig.suptitle("{} decay versus divergence time".format(sp1))
 
+    Plot [0][0] (top-left)  is the whole-genome conservation vs divergence time.
+         [0][1] (top-right) is the per-chromosome conservation vs divergence time.
+         [1][0] (bottom-left)  is a violin plot of every 25 million years of divergence time-whole genomes
+         [1][1] (bottom-right) is a violin plot of every 25 million years of divergence time-per-chromosome
+    """
+    # BIN_SIZE is the number of millions of years to bin the data
+    BIN_SIZE = 50
+    sp_bins  = { x:[] for x in range(BIN_SIZE, 1500, BIN_SIZE) }
+    chr_bins = { x:[] for x in range(BIN_SIZE, 1500, BIN_SIZE) }
+    decay_bins
+    bin_to_index = { x: int((x/BIN_SIZE) - 1)+2 for x in range(BIN_SIZE, 1500, BIN_SIZE)}
+    # This sort order is used to make sure that all of the chromosomes are in the same order
+    # for the later plots.
+    sp1_sort_order = []
+
+    # We start by making a subplot array to make the two variants. A two-column, one-row plot.
+    NUMBER_OF_ROWS = 2 + len(sp_bins.keys())
+    NUMBER_OF_COLS = 2
+    fig, axes = plt.subplots(NUMBER_OF_ROWS, NUMBER_OF_COLS, figsize = (7.5 * NUMBER_OF_COLS, 6 * NUMBER_OF_ROWS))
+    fig.suptitle("{} decay versus divergence time".format(sp1))
     for sp2 in filestruct[sp1].keys():
         sp1_sp2_decay = pd.read_csv(filestruct[sp1][sp2], sep="\t")
+        if sp1_sort_order == []:
+            # we should sort this by the chromosome size, smallest to largest
+            sp1_sort_order = sp1_sp2_decay.sort_values(by="sp1_scaf_genecount", ascending=True)["sp1_scaf"].tolist()
+
+        # sort the dataframe by the sp1_sort_order
+        sp1_sp2_decay = sp1_sp2_decay.set_index("sp1_scaf").reindex(sp1_sort_order).reset_index()
         # get the most abundant divergence time from sp1_sp2_decay
         # They should all be the same, but this is the most robust thing to do.
         divergence_time = sp1_sp2_decay["divergence_time"].mode()[0]
+        # figure out which bin this divergence time goes into.
+        # The bin will be a multiple of 25.
+        # The correct bin is the closest multiple of 25 to the divergence time, rounded up
+        divergence_time_bin = int(BIN_SIZE * ceil(divergence_time/BIN_SIZE))
         # Make a whole-genome version of the dataframe. Just sum up the columns and recalculate the percent conserved
         sp1_sp2_whole = sp1_sp2_decay.sum(axis=0).to_frame().transpose()
         # only keep certain columns
@@ -352,17 +377,47 @@ def plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir="./"):
         sp1_sp2_whole["fraction_conserved"] = sp1_sp2_whole["conserved"] / sp1_sp2_whole["sp1_scaf_genecount"]
 
         #on the left-plot just do a scatterplot of the fraction conserved vs divergence time
-        axes[0].scatter(sp1_sp2_whole["divergence_time"], sp1_sp2_whole["fraction_conserved"], label = "{}".format(sp2))
-        axes[0].set_xlabel("Divergence time (MYA)")
-        axes[0].set_ylabel("Fraction conserved on orthologous chromosomes")
-        axes[0].set_title("Whole-genome conservation vs divergence time")
+        axes[0][0].scatter(sp1_sp2_whole["divergence_time"], sp1_sp2_whole["fraction_conserved"], label = "{}".format(sp2))
+        axes[0][0].set_xlabel("Divergence time (MYA)")
+        axes[0][0].set_ylabel("Fraction conserved on orthologous chromosomes")
+        axes[0][0].set_title("Whole-genome conservation vs divergence time")
 
         # the right plot is per-chromosome. Add a little jitter to the x-axis so we can see the points
-        axes[1].scatter(jitter(sp1_sp2_decay["divergence_time"], 20), sp1_sp2_decay["fraction_conserved"],
+        axes[0][1].scatter(jitter(sp1_sp2_decay["divergence_time"], 20), sp1_sp2_decay["fraction_conserved"],
                         label = "{}".format(sp2), alpha = 0.1, edgecolors='none')
-        axes[1].set_xlabel("Divergence time (MYA) (+- 20 MYA jitter)")
-        axes[1].set_ylabel("Fraction conserved on orthologous chromosomes")
-        axes[1].set_title("Orthologous chromosome conservation vs divergence time")
+        axes[0][1].set_xlabel("Divergence time (MYA) (+- 20 MYA jitter)")
+        axes[0][1].set_ylabel("Fraction conserved on orthologous chromosomes")
+        axes[0][1].set_title("Orthologous chromosome conservation vs divergence time")
+
+        # add these values to the bins for plotting later
+        sp_bins[divergence_time_bin].append( sp1_sp2_whole["fraction_conserved"].tolist()[0])
+        chr_bins[divergence_time_bin].extend(sp1_sp2_decay["fraction_conserved"].tolist())
+
+        # make the line plots of the decay per-bin
+        plotting_bin = bin_to_index[divergence_time_bin]
+        # A
+
+
+
+    # remove the empty bins
+    sp_bins  = {x-(BIN_SIZE/2):sp_bins[x] for x in sp_bins.keys() if len(sp_bins[x]) > 0}
+    chr_bins = {x-(BIN_SIZE/2):chr_bins[x] for x in chr_bins.keys() if len(chr_bins[x]) > 0}
+    # now we need to make the violin plots of all the bins
+    axes[1][0].violinplot(sp_bins.values(), sp_bins.keys(),   points=10, widths=20, showmeans=False, showextrema=True, showmedians=True)
+    axes[1][1].violinplot(chr_bins.values(), chr_bins.keys(), points=5, widths=20, showmeans=False, showextrema=True, showmedians=True)
+
+    # get the xlims and ylims for the top right plot
+    xlims = axes[0][1].get_xlim()
+    # set the xlims of all the plots
+    axes[0][0].set_xlim(xlims)
+    axes[1][0].set_xlim(xlims)
+    axes[1][1].set_xlim(xlims)
+
+    # set the ylims of all the figures from -0.05 to 1
+    axes[0][0].set_ylim(-0.05, 1.05)
+    axes[0][1].set_ylim(-0.05, 1.05)
+    axes[1][0].set_ylim(-0.05, 1.05)
+    axes[1][1].set_ylim(-0.05, 1.05)
 
     # CALL THIS TO GET THE VISUAL STYLE WE NEED
     odp_plot.format_matplotlib()
@@ -550,17 +605,17 @@ def main():
         filestruct = calculate_pairwise_decay_sp1_vs_many(sp1, config, sp_to_chr_to_size,
                                                           target_keep_these_scafs_gt_one_percent_genes, outdir)
 
-        ## make the summary plot of all the chromosomes
-        #outdir = os.path.join("odp_pairwise_decay", sp1)
-        #outdir = os.path.join(outdir, "plot_overview_sp_sp")
-        #plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir=outdir)
-
-        # make individual sp-sp scatterplots
+        # make the summary plot of all the chromosomes
         outdir = os.path.join("odp_pairwise_decay", sp1)
-        outdir = os.path.join(outdir, "plot_individual_sp_sp")
-        for sp2 in sorted(filestruct[sp1].keys()):
-            plot_decay_twospecies(sp1, sp2, filestruct[sp1][sp2],
-                                  target_keep_these_scafs_gt_one_percent_genes[sp1], outdir)
+        outdir = os.path.join(outdir, "plot_overview_sp_sp")
+        plot_pairwise_decay_sp1_vs_all(sp1, filestruct, outdir=outdir)
+        #
+        ### make individual sp-sp scatterplots
+        #outdir = os.path.join("odp_pairwise_decay", sp1)
+        #outdir = os.path.join(outdir, "plot_individual_sp_sp")
+        #for sp2 in sorted(filestruct[sp1].keys()):
+        #    plot_decay_twospecies(sp1, sp2, filestruct[sp1][sp2],
+        #                          target_keep_these_scafs_gt_one_percent_genes[sp1], outdir)
 
 
 if __name__ == '__main__':
