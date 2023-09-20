@@ -28,6 +28,7 @@ config["tool"] = "odp_ncbi_genome_db"
 # Do some logic to see if the user has procided enough information for us to analyse the genomes
 if ("directory" not in config) and ("accession_tsvs" not in config): 
     raise IOerror("You must provide either a directory of the annotated and unannotated genome lists, or a list of the paths to those tsv files. Read the config file.")
+
 if "directory" in config:
     # ensure that the user also hasn't specified the accession tsvs
     if "accession_tsvs" in config:
@@ -90,6 +91,8 @@ rule download_annotated_genomes:
         """
         cd {params.outdir}
         {input.datasets} download genome accession {wildcards.assemAnn} {params.APIstring} --include genome,protein,gff3,gtf
+        # put bash to sleep for 5 minutes to avoid overloading the NCBI servers
+        sleep 300
         """
 
 rule unzip_annotated_genomes:
@@ -179,7 +182,7 @@ rule generate_assembled_config_entry:
         #    taxid:
         #    genus:
         #    species:
-        #    assembly_accession: 
+        #    assembly_accession:
         #    proteins:
         #    chrom:
         #    genome:
@@ -196,7 +199,7 @@ rule generate_assembled_config_entry:
             species = row["Organism Name"].values[0].split(" ")[1]
         except:
             species = "None" 
-        
+
         spstring = "{}{}{}".format(genus, species, taxid)
         h = "  "
         s = ""

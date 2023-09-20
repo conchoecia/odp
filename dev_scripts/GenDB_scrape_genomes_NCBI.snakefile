@@ -52,7 +52,7 @@ def create_directories_recursive_notouch(path):
             os.mkdir(current_path)
     # safe return code if done
     return 0
- 
+
 def get_assembly_datapacks(wildcards):
     checkpoint_results = list(checkpoints.split_into_annotated_and_unannotated.get(**wildcards).output)
     annotated_dir = checkpoint_results[0]  # this forces the checkpoint to be executed before we continue
@@ -65,7 +65,7 @@ def get_assembly_datapacks(wildcards):
                 for assembly in os.listdir(annotated_dir) \
                 if assembly not in REJECT]
     return assemAnn
-    
+
 rule all:
     input:
         expand(config["tool"] + "/output/annotated_genomes_{datetime}.tsv",
@@ -404,7 +404,7 @@ def append_to_list(inputlist, to_append):
 def prefer_representative_genomes(df):
     """
     prefers the representative genomes if there are multiple rows with the same WGS URL
-    
+
     Works similarly to prefer_SRA_over_others()
     """
     # sort by WGS URL, then by Assembly Refseq Category. If one is representative, keep that row
@@ -495,7 +495,7 @@ rule get_representative_genomes:
     """
     This rule is responsible for parsing the genome report and selecting the representative genomes
      for each species.
-    
+
     Currently this does not support multiple genomes for one species.
     """
     input:
@@ -525,7 +525,7 @@ rule get_representative_genomes:
         # Filter out some duplicate assemblies, preferentially select the ones that are listed as representative genomes
         df = prefer_representative_genomes(df)
         print("len of df after keeping the representative sequences is {}".format(len(df)))
-        
+
         # prefer SRA repository over others
         df = prefer_SRA_over_others(df)
         print("len of df after preferring SRA is {}".format(len(df)))
@@ -533,11 +533,11 @@ rule get_representative_genomes:
         # prefer assemblies that have not been superseded
         df = prefer_assemblies_with_no_superseded(df)
         print("len of df after preferring non-superseded is {}".format(len(df)))
-        
+
         # get the assembly with the lowest contig L50. This is almost invariably the best assembly for this species
         df = get_best_contig_L50_assembly(df)
         print("len of df after keeping the lowest contig L50 assembly is {}".format(len(df)))
-        
+
         # Get rid of assemblies with more than 5000 scaffolds unless they are chromosome-scale
         # This is also generous - there is no reason a genome assembly should have even 5000 scaffolds now.
         df = df.loc[(df["Assembly Stats Number of Scaffolds"] <= 5000) | (df["Assembly Level"] == "Chromosome")]
@@ -551,7 +551,7 @@ checkpoint split_into_annotated_and_unannotated:
     """
     This rule is responsible for parsing the genome report and selecting the representative genomes
      for each species.
-    
+
     Currently this does not support multiple genomes for one species.
     """
     input:
@@ -575,11 +575,11 @@ checkpoint split_into_annotated_and_unannotated:
             # annotated genomes. Get "Annotation Release Date" is not Nan
             annot_df = df.loc[df["Annotation Release Date"].notna()]
             list_of_annotated_dfs.append(annot_df)
-        
+
             # unannotated genomes
             unann_df = df.loc[~df["Annotation Release Date"].notna()]
             list_of_unannotated_dfs.append(unann_df)
-        
+
         # put all the annotated dataframes together
         annot_df = pd.concat(list_of_annotated_dfs)
         unann_df = pd.concat(list_of_unannotated_dfs)
@@ -591,5 +591,5 @@ checkpoint split_into_annotated_and_unannotated:
         # save the dataframe to the output
         annot_df.to_csv(output.annotated_genomes,   sep="\t", index=False)
         unann_df.to_csv(output.unannotated_genomes, sep="\t", index=False) 
-        
+
 
