@@ -472,6 +472,46 @@ def prefer_assemblies_with_no_superseded(df):
                 indices_to_keep = append_to_list(indices_to_keep, group.index)
     return df.loc[indices_to_keep]
 
+def remove_specific_GCAs(df, filepath_of_GCAs):
+    """
+    We often decide post-hoc that we do not want to include certain assemblies.
+    These assemblies have specific GCA accessions, and by removing them from the dataframe
+       we can prevent them from being included in the final database.
+
+    The file at filepath_of_GCAs should be a text file with one GCA accession per line.
+       In this file, if the line starts with a comment character then we simply ignore that line.
+       In the context of odp, that file will look like this:
+
+       ```
+       # These are assemblies that are malformed on NCBI, or are not chromosome-scale.
+       # Do not use inline-comments for this file. Just use one assembly per line.
+       GCA_021556685.1
+       GCA_013368085.1
+       GCA_017607455.1
+       GCA_905250025.1
+       ```
+    """
+    # first check that filepath_of_GCAs exists
+    if not os.path.exists(filepath_of_GCAs):
+        raise Exception("The file {} does not exist".format(filepath_of_GCAs))
+
+    assemblies_to_ignore = set()
+    with open(filepath_of_GCAs, "r") as f:
+        for line in f:
+            # remove leading and trailing whitespace
+            line = line.strip()
+            # ignore lines that start with a comment character
+            if line.startswith("#"):
+                continue
+            # ignore empty lines
+            if len(line) == 0:
+                continue
+            # add this line to the set of assemblies to ignore
+            assemblies_to_ignore.add(line)
+
+    # Remove rows that have values in assemblies_to_ignore values in the "Assembly Accession" column
+    return df.loc[~df["Assembly Accession"].isin(assemblies_to_ignore)]
+
 def get_best_contig_L50_assembly(df):
     """
     In great anticlimactic fashion we now pick the assembly with the lowest contig L50
@@ -499,7 +539,8 @@ rule get_representative_genomes:
     Currently this does not support multiple genomes for one species.
     """
     input:
-        report_tsv = config["tool"] + "/input/{taxid}.tsv"
+        report_tsv = config["tool"] + "/input/{taxid}.tsv",
+        assembly_ignore_list = os.path.join(snakefile_path, "assembly_ignore_list.txt")
     output:
         representative_genomes = config["tool"] + "/input/selected_genomes_{taxid}.tsv"
     threads: 1
@@ -512,6 +553,9 @@ rule get_representative_genomes:
         df.columns = df.columns.str.strip()
         print("number of species is {}".format(len(df["Organism Taxonomic ID"].unique())))
         print("len of raw df is {}".format(len(df)))
+
+        # remove assemblies that are not chromosome-scale
+        df = remove_specific_GCAs(df, assembly_ignore_list)
 
         # remove the assemblies that are simply contigs using "Assembly Level"
         df = df.loc[df["Assembly Level"] != "Contig"]
