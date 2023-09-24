@@ -307,7 +307,7 @@ def chrom_file_is_legal(chrompath):
     If everything is good, returns True.
     """
     # 1. check that the file exists
-    check_file_exists(path)
+    check_file_exists(chrompath)
     # go through the file line by line and inspect each element
     with open(chrompath, "r") as f:
         for line in f:
