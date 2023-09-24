@@ -216,11 +216,11 @@ def gff_to_chrom(gffhandle, genome_headers_to_size, protein_headers_to_size, out
       - outprefix: the prefix for the output files. This script saves a .chrom and .pep file.
          N.B. - this script does not save over existing files. The program will throw an error
             if the output files already exist.
-    
+
     The function saves the files:
       - .chrom file (safely saved to disk - no clobber)
       - .report.txt (safely saved to disk - no clobber)
-    
+
     The function returns:
       - a pandas dataframe of the chrom file. This can be used to filter proteins later.
     """
@@ -278,10 +278,11 @@ def gff_to_chrom(gffhandle, genome_headers_to_size, protein_headers_to_size, out
         basedir = os.path.dirname(chrom_path)
         # safely make the directory for the report if it does not yet exist
         create_directories_recursive_notouch(basedir)
-    
+
         # save
         df = format_prots_to_df(prots)
-        df.to_csv(chrom_path, sep="\t", index=False)
+        # no indices and no headers
+        df.to_csv(chrom_path, sep="\t", index=False, header=False)
         # DONE WITH THE REPORT
         # give a safe return value
         return 0
