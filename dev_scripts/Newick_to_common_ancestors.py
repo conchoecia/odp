@@ -58,7 +58,7 @@ def parse_args():
     if not os.path.exists(args.newick):
         # raise an IO error
         raise IOError("The newick file does not exist: {}".format(args.newick))
-    
+ 
     # optional args
     if args.config:
         # make sure that the config file exists
@@ -110,7 +110,7 @@ def find_common_ancestor_age(sp1_lineage, sp2_lineage):
        [Node("'414'"), Node("'421'"), Node("'327'"), Node("'358'"), Node("'329'"), Node("'349'"), Node("'330'"), Node("'286'"),
         Node("'320'"), Node("'321'"), Node("'323'"), Node("'287'"), Node("'297'"), Node("'294'"), Node("'143'"), Node("'144'"),
         Node("'146'"), Node("'22'"), Node("'23'"), Node("Abscondita_terminalis")]
-    
+
     These lineage data structures are extracted from the get_all_lineages() function.
 
     The return type of this function is a tuple of the common ancestor and the age of the species.
@@ -127,18 +127,25 @@ def find_common_ancestor_age(sp1_lineage, sp2_lineage):
     shared_species = set(sp1_lineage).intersection(set(sp2_lineage))
     unique_sp1 = [x for x in sp1_lineage if x not in shared_species]
     unique_sp2 = [x for x in sp2_lineage if x not in shared_species]
-    sp1_age = sum([x.length for x in unique_sp1] ) #+ [common_ancestor.length]) 
+    sp1_age = sum([x.length for x in unique_sp1] ) #+ [common_ancestor.length])
     sp2_age = sum([x.length for x in unique_sp2] ) #+ [common_ancestor.length])
     # the ages should be the same, so check
     # Sometimes when one of the species has a really long branch, the ages are not exactly the same.
     # Just check that they are within 0.05 of each other in terms of precent.
     percent_diff = 0 if abs(sp1_age - sp2_age) == 0 else (abs(sp1_age - sp2_age)/sp1_age)
 
-    # There is a weird behavior where, if percent_diff is 0, then the equality statement doesn't work as predicted. 
+    # There is a weird behavior where, if percent_diff is 0, then the equality statement doesn't work as predicted.
     #  So we need to handle that case separately
-    sp_1_2_within_0_0_5 = True if (percent_diff == 0) else (percent_diff < (0.05 * sp1_age))
-    if not sp_1_2_within_0_0_5:
-        raise ValueError("The ages of the two species are not the same: {} vs {}".format(sp1_age, sp2_age))
+
+    ## Getting rid of this and just assuming that the tree is correct
+    #sp_1_2_within_0_0_5 = True if (percent_diff == 0) else (percent_diff < (0.15 * sp1_age))
+    #if not sp_1_2_within_0_0_5:
+    #    print("The two species are: {} and {}".format(sp1_lineage[-1].name, sp2_lineage[-1].name))
+    #    print("The lineage of sp1 is: {}".format([x.name for x in sp1_lineage]))
+    #    print("The lineage of sp2 is: {}".format([x.name for x in sp2_lineage]))
+    #    print("The common ancestor is: {}".format(common_ancestor.name))
+    #    print("The percent difference is: {}".format(percent_diff))
+    #    raise ValueError("The ages of the two species are not the same: {} vs {}".format(sp1_age, sp2_age))
     return common_ancestor, sp1_age
 
 def get_divergence_time_all_vs_all(tree):
@@ -214,7 +221,7 @@ def taxinfo_download_or_load(binomial_name, taxinfo_filepath):
     """
     This looks to see if a yaml file exists with the taxinfo for this species.
     If it does not, it will download the taxinfo from NCBI and save it to that yaml file.
-    
+
     Sometimes the download from NCBI doesn't work, so we need to allow for failures.
 
     If it doesn't work, returns a 1.

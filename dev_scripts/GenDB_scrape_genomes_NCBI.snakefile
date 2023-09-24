@@ -89,7 +89,7 @@ rule install_datasets:
         mem_mb = 1000
     shell:
         """
-        curl -o datasets 'https://ftp.ncbi.nlm.nih.gov/pub/datasets/command-line/v2/linux-amd64/datasets'
+        curl -o datasets 'https://ftp.ncbi.nlm.nih.gov/pub/datasets/command-line/LATEST/linux-amd64/datasets'
         mv datasets {output.datasets}
         chmod +x {output.datasets}
         """
@@ -555,7 +555,7 @@ rule get_representative_genomes:
         print("len of raw df is {}".format(len(df)))
 
         # remove assemblies that are not chromosome-scale
-        df = remove_specific_GCAs(df, assembly_ignore_list)
+        df = remove_specific_GCAs(df, input.assembly_ignore_list)
 
         # remove the assemblies that are simply contigs using "Assembly Level"
         df = df.loc[df["Assembly Level"] != "Contig"]
