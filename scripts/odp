@@ -258,8 +258,8 @@ rule check_input_legality:
     threads: 1
     run:
         # We always check to see if the chrom file is legal, regardless of whether we're ignoring duplicate prots.
-        if not odpf.chrom_file_is_legal(chrompath):
-            raise IOError("The chrom file is not legal: {}".format(chrompath))
+        if not odpf.chrom_file_is_legal(input.chrom):
+            raise IOError("The chrom file is not legal: {}".format(input.chrom))
         if params.duplicate_handling == "fail":
             # We want to enforce that the input files are legal
             # See the odpf.check_species_input_legality function for more details
