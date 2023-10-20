@@ -1,10 +1,17 @@
 """
 build a database of chromosome-scale genome assemblies using the NCBI website
 """
+
+from Bio import Entrez
 import numpy as np
 import os
 import pandas as pd
 from datetime import datetime
+
+import yaml
+import time
+
+from Newick_to_common_ancestors import yaml_file_legal as yaml_file_legal
 
 # import fasta parser from dependencies
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
@@ -382,8 +389,9 @@ rule format_json_to_tsv:
     output:
         report_tsv = temp(config["tool"] + "/input/{taxid}.tsv")
     params:
-        fields = ",".join(fields_to_print)
-    threads: 1 
+        fields = ",".join(fields_to_print),
+        #fields = ",".join(all_fields)
+    threads: 1
     resources:
         mem_mb = 1000
     shell:
@@ -531,6 +539,135 @@ def get_best_contig_L50_assembly(df):
             indices_to_keep = append_to_list(indices_to_keep, group.index[0])
     return df.loc[indices_to_keep]
 
+#def get_taxonomic_string_of_taxid(taxid, taxid_string_filepath):
+#    """
+#    Currently the JSON for NCBI does not include the taxonomic string for each taxid.
+#    If we have the taxonomic string we can sort by it and use it to easily manually subset the assemblies by clade.
+#
+#    This function will get the taxonomic string for a given taxid from a file path.
+#      - If this file path does not exist, the function will look up the string using a tool and save that string to the file.
+#      - In this case, pause the program for a few seconds so we don't overload NCBI and get our IP banned.
+#
+#
+#    The return type is a string, and is the taxonomic string discussed above.
+#    """
+#    # first check if taxid_string_filepath exists
+#    if os.path.exists(taxid_string_filepath):
+#        pass
+#    else:
+#        # the file doesn't exist, so we have to look up the taxid string.
+
+def get_taxonomy_info(taxon_id):
+    handle = Entrez.efetch(db="taxonomy", id=taxon_id, retmode="xml")
+    records = Entrez.read(handle)
+    return records[0]["Lineage"]
+
+def taxinfo_download_or_load_taxid(taxid, taxinfo_filepath):
+    """
+    This looks to see if a yaml file exists with the taxinfo for this species.
+    If it does not, it will download the taxinfo from NCBI and save it to that yaml file.
+
+    Sometimes the download from NCBI doesn't work, so we need to allow for failures.
+
+    If it doesn't work, returns a 1.
+    If the file exists, returns a 0.
+    """
+    # just make sure this is a string of an int
+    taxid = str(int(taxid))
+    # get the basename of the taxinfo_filepath
+    taxinfo_dirname = os.path.dirname(taxinfo_filepath)
+    # safely make the directory if it doesn't exist
+    create_directories_recursive_notouch(taxinfo_dirname)
+    if not os.path.exists(taxinfo_filepath):
+        try:
+            sp_tax_info = get_taxonomy_info(taxid)
+            # now we need to write this to a yaml file
+            with open(taxinfo_filepath, "w") as f:
+                print(sp_tax_info, file = f)
+            # we need to pause if we had a successful download to avoid overloading the NCBI servers
+            time.sleep(3)
+            # return success
+            return 0
+        except:
+            # return failure
+            print("           ^^^ THE DOWNLOAD FOR THIS SPECIES DIDN'T WORK IN THIS ROUND.", file = sys.stderr)
+            return 1
+    else:
+        # read in the file and check if it has any contents.
+        # If not, this hasn't worked, we delete the file, then return 1
+        with open(taxinfo_filepath, "r") as f:
+            contents = f.read()
+            if len(contents) == 0:
+                os.remove(taxinfo_filepath)
+                return 1
+            else:
+                # in theory the file should be good, so return success
+                return 0
+
+def download_all_taxinfo(sp_taxids, output_prefix, email):
+    """
+    Inputs:
+      - sp_taxids: a list of taxids
+      - The output prefix is what the files will be saved as
+      - the email is the email address to use for programmatic access to NCBI
+
+    This controls a loop that handles downloading all of the taxinfo
+    for all of the species in the sp_taxids object. Returns a dict of the taxinfo when
+    done, and a path to the file where the taxinfo is stored.
+    """
+    # get rid of duplicated taxids
+    sp_taxids = list(set(sp_taxids))
+
+    # set up email for Entrez
+    Entrez.email = email
+    # for now we just want to investigate the best way to get the lineage information
+    taxinfo_yaml = {"taxinfo": {}}
+
+    # We will make a temporary folder to store the taxid information for each species.
+    #  Maybe there are files there already, so don't overwrite them.
+    create_directories_recursive_notouch(output_prefix)
+
+    species_remaining = set(sp_taxids)
+    species_completed_this_round = set()
+    downloading_round = 0
+    # now we need to loop through all of the species in the sp_taxids_object
+    print("DOWNLOADING ROUND {}".format(downloading_round), file = sys.stderr)
+    while len(species_remaining) > 0:
+        for taxid in sp_taxids:
+            sp_remaining = len(species_remaining) - len(species_completed_this_round)
+            print("    downloading", taxid, "- {} species remaining        ".format(sp_remaining), file = sys.stderr)
+            taxinfo_filepath = os.path.join(output_prefix, "{}.taxinfo.yaml".format(taxid))
+            success_value = taxinfo_download_or_load_taxid(taxid, taxinfo_filepath)
+            if success_value == 0:
+                species_completed_this_round.add(taxid)
+        species_remaining = species_remaining - species_completed_this_round
+        species_completed_this_round = set()
+
+    # Now we have a file for each of these
+    # make sure that each file exists
+    for taxid in sp_taxids:
+        taxinfo_filepath = os.path.join(output_prefix, "{}.taxinfo.yaml".format(taxid))
+        if not os.path.exists(taxinfo_filepath):
+            raise Exception("The file {} does not exist".format(taxinfo_filepath))
+
+    # it worked, so just return 0. The program would have crashed otherwise.
+    return 0
+
+def taxid_files_to_dict(sp_taxids, output_prefix):
+    """
+    There are now files for each of the taxids.
+    Make a dict of the taxid as the key, and the file contents as a string as the value.
+    """
+    sp_taxids = list(set(sp_taxids))
+    taxid_dict = {}
+    for taxid in sp_taxids:
+        taxinfo_filepath = os.path.join(output_prefix, "{}.taxinfo.yaml".format(taxid))
+        if not os.path.exists(taxinfo_filepath):
+            raise Exception("The file {} does not exist".format(taxinfo_filepath))
+        with open(taxinfo_filepath, "r") as f:
+            taxid_dict[taxid] = f.read().strip()
+    return taxid_dict
+
 rule get_representative_genomes:
     """
     This rule is responsible for parsing the genome report and selecting the representative genomes
@@ -543,6 +680,9 @@ rule get_representative_genomes:
         assembly_ignore_list = os.path.join(snakefile_path, "assembly_ignore_list.txt")
     output:
         representative_genomes = config["tool"] + "/input/selected_genomes_{taxid}.tsv"
+    params:
+        email = config["email"],
+        taxid_prefix = config["tool"] + "/input/taxid_info/"
     threads: 1
     resources:
         mem_mb = 1000
@@ -586,6 +726,16 @@ rule get_representative_genomes:
         # This is also generous - there is no reason a genome assembly should have even 5000 scaffolds now.
         df = df.loc[(df["Assembly Stats Number of Scaffolds"] <= 5000) | (df["Assembly Level"] == "Chromosome")]
         print("len of df after filtering out non-chr-scale assemblies with more than 5000 scaffolds {}".format(len(df)))
+
+        # convert data type of df["Organism Taxonomic ID"] to int
+        df["Organism Taxonomic ID"] = df["Organism Taxonomic ID"].astype(int)
+
+        # Now we need to get the taxonomic string for each taxid
+        download_all_taxinfo(df["Organism Taxonomic ID"], params.taxid_prefix, params.email)
+        taxid_dict = taxid_files_to_dict(df["Organism Taxonomic ID"], params.taxid_prefix)
+
+        # make a new column called Lineage. Use the taxid_dict to map the values from df["Organism Taxonomic ID"]
+        df["Lineage"] = df["Organism Taxonomic ID"].map(taxid_dict)
 
         # save the dataframe to the output
         df.to_csv(output.representative_genomes, sep="\t", index=False)
