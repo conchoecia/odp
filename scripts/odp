@@ -479,6 +479,7 @@ rule n_ways_reciprocal_best:
             if G.degree[thisnode] != (len(all_species) - 1):
                 remnodes.add(thisnode)
         for node in remnodes:
+            print(node)
             G.remove_node(node)
         remnodes.clear()
         # now get the n-connected components
@@ -654,10 +655,12 @@ def calculate_FET(genesdf, scafdict):
     genesdf["whole_FET"] = -1
     genesdf["break_FET"] = -1
 
-    # set the types of the dataframe
+    # Set the types of the dataframe.
+    # We do this because we need to make sure that the columns are cast correctly.
+    # Something breaks downstream otherwise, or the print formatting is now correct.
+    # These core columns will ALWAYS be present. Otherwise, we parse below
     types = {"rbh"        : str,
              "gene_group" : str,
-             "color"      : str,
              "whole_FET"  : float,
              "break_FET"  : float}
     for colname in genesdf.columns:
@@ -673,6 +676,11 @@ def calculate_FET(genesdf, scafdict):
             types[colname] = int
         elif colname.endswith("_breakchrom"):
             types[colname] = object
+        elif colname == "color":
+            types[colname] = str
+        else:
+            types[colname] = str
+    # now re-cast the columns
     genesdf = genesdf.astype(types)
 
     # now perform Fisher's Exact Test
@@ -968,7 +976,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     if sort_df["CC_group"].isnull().values.any():
         print("ERROR: there are Nones in the CC_group column")
         sys.exit()
-    
+
     # now we figure out the plotting order for both axes.
     # The algorithm is:
     #   - Find the largest x-scaffold that we have not yet plotted
@@ -976,7 +984,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     #   - Keep track of which CCs have been added to the plotting order lists
     #   - Do this until all x-axis scaffolds have been seen. Check list of seen CCs against len of CCs to see if we missed something
     CCs_seen = set()
-    x_scaffolds_by_size = df["{}_scaf".format(xsample)].value_counts().index.tolist() 
+    x_scaffolds_by_size = df["{}_scaf".format(xsample)].value_counts().index.tolist()
     if len(x_scaffolds_by_size) != len(df["{}_scaf".format(xsample)].unique()):
         print("ERROR: these x-axis counts should match")
         sys.exit()
