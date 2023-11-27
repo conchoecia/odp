@@ -280,23 +280,78 @@ def check_file_exists(filepath) -> bool:
         outmessage =  "*********************************************************************\n"
         raise IOError(outmessage)
     else:
-        return True 
+        return True
+
+def chrom_file_is_legal(chrompath):
+    """
+    Checks if a chrom file is legal.
+    Columns (and types) are:
+     - protein_id (string)
+     - scaffold (string)
+     - strand (string)
+     - start (int)
+     - stop (int)
+
+    This doesn't check if the proteins or scaffolds are legal. It simply checks if the file format is legal.
+
+    The function that checks if this matches the protein and genome file is check_species_input_legality().
+
+    BREAK CONDITIONS
+      - Any of the fields have leading or trailing whitespace
+      - Any of the following strings appear in theses respective columns: pid     scaf    strand  start   stop
+      - Field 2 isn't a ['+', '-', '.']
+      - Field 3 can't be converted to an int
+      - Field 4 can't be converted to an int
+
+    If any of the columns don't match this, or if there is a header string, returns False.
+    If everything is good, returns True.
+    """
+    # 1. check that the file exists
+    check_file_exists(chrompath)
+    # go through the file line by line and inspect each element
+    with open(chrompath, "r") as f:
+        for line in f:
+            fields = line.strip().split("\t")
+            # check if any of the fields have leading or trailing whitespace
+            for field in fields:
+                if field != field.strip():
+                    print("There is leading or trailing whitespace in this field: " + field)
+                    return False
+            # check if any of the fields are the header strings
+            if fields[0] == "pid" or fields[1] == "scaf" or fields[2] == "strand" or fields[3] == "start" or fields[4] == "stop":
+                print("One of the fields is a header string: " + str(fields))
+                return False
+            # Check if field 2 is a ['+', '-', '.']
+            if fields[2] not in ['+', '-', '.']:
+                print("Field 2 is not a ['+', '-', '.']: " + str(fields))
+                return False
+            # check that field 3 is able to be converted to an int
+            if not fields[3].isdigit():
+                print("Field 3 is not an int: " + str(fields))
+                return False
+            # check that field 4 is able to be converted to an int
+            if not fields[4].isdigit():
+                print("Field 4 is not an int: " + str(fields))
+                return False
+    # if we get here, everything is good
+    return True
+
 
 def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
     """
     This function checks that the input files are legal.
     There are certain fields that are required,
       and they must be in a specific format.
-    
+
     First read in the genome assembly fasta file:
       1. Check that the file exists
       2. Check that each sequence ID exists only once
-    
+
     Then read in the protein file:
       1. Check that the file exists
-      2. Check that each sequence ID exists only once 
+      2. Check that each sequence ID exists only once
       3. Check that there are no duplicate protein sequences
-    
+
     Lastly, read in the .chrom file:
       1. Check that the file exists
       2. Check that the proteins in column 1 were seen in the protein fasta file

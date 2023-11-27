@@ -1,7 +1,10 @@
 #!/usr/bin/env python
 
 """
-This directory 
+This python program contains functions that are used to download genomes from NCBI.
+  - These tools are common to the scripts:
+    - GenDB_build_db_unannotated.snakefile
+    - GenDB_build_db.snakefile
 """
 
 import os
@@ -23,6 +26,8 @@ def contains_date(string_to_check):
 def return_latest_accession_tsvs(directory_path):
     """
     Given a directory, we have to do some parsing of the file names to figure out what is the most recent accession tsv file.
+
+    Returns the full path to the most recent annotated and unannotated accession TSV files.
     """
     # check that the directory exists
     if not os.path.isdir(directory_path):

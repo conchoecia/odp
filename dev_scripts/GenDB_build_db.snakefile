@@ -26,8 +26,9 @@ bin_path = os.path.join(snakefile_path, "../bin")
 configfile: "config.yaml"
 config["tool"] = "odp_ncbi_genome_db"
 # Do some logic to see if the user has procided enough information for us to analyse the genomes
-if ("directory" not in config) and ("accession_tsvs" not in config): 
+if ("directory" not in config) and ("accession_tsvs" not in config):
     raise IOerror("You must provide either a directory of the annotated and unannotated genome lists, or a list of the paths to those tsv files. Read the config file.")
+
 if "directory" in config:
     # ensure that the user also hasn't specified the accession tsvs
     if "accession_tsvs" in config:
@@ -39,6 +40,14 @@ if "directory" in config:
     config["annotated_genome_tsv"], config["unannotated_genome_tsv"] = GenDB.return_latest_accession_tsvs(config["directory"])
     # now add the entries to the config file so we can download them or not
     config["assemAnn"] = GenDB.determine_genome_accessions(config["annotated_genome_tsv"])
+    # get the list of GCAs to ignore in case we need to remove any
+    ignore_list_path = os.path.join(snakefile_path, "assembly_ignore_list.txt")
+    with open(ignore_list_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                if line in config["assemAnn"]:
+                    config["assemAnn"].remove(line)
 
 elif "accession_tsvs" in config:
     # ensure that the user also hasn't specified the directory
@@ -90,6 +99,8 @@ rule download_annotated_genomes:
         """
         cd {params.outdir}
         {input.datasets} download genome accession {wildcards.assemAnn} {params.APIstring} --include genome,protein,gff3,gtf
+        # put bash to sleep for 5 minutes to avoid overloading the NCBI servers
+        sleep 300
         """
 
 rule unzip_annotated_genomes:
@@ -170,7 +181,7 @@ rule generate_assembled_config_entry:
         minscaflen = filtdf["scaflen"].min() - 1000
 
         row = df.loc[df["Assembly Accession"] == wildcards.assemAnn]
-        taxid = row["Organism Taxonomic ID"].values[0]
+        taxid = int(row["Organism Taxonomic ID"].values[0])
 
         # s is the output string.
         # h is headspace. Currently 2 spaces because the odp yaml files are compoased like so:
@@ -179,7 +190,7 @@ rule generate_assembled_config_entry:
         #    taxid:
         #    genus:
         #    species:
-        #    assembly_accession: 
+        #    assembly_accession:
         #    proteins:
         #    chrom:
         #    genome:
@@ -195,20 +206,23 @@ rule generate_assembled_config_entry:
         try:
             species = row["Organism Name"].values[0].split(" ")[1]
         except:
-            species = "None" 
-        
+            species = "None"
+
+        # cleanup the species name
+        species = species.replace("sp.", "sp")
+
         spstring = "{}{}{}".format(genus, species, taxid)
         h = "  "
         s = ""
         s += h + "{}:\n".format(spstring)
         s += h + h + "assembly_accession: {}\n".format(wildcards.assemAnn)
-        s += h + h + "taxid:              {}\n".format(taxid)
+        s += h + h + "taxid:              {}\n".format(str(int(taxid)))
         s += h + h + "genus:              {}\n".format(genus)
         s += h + h + "species:            {}\n".format(species)
         s += h + h + "proteins:           {}\n".format(os.path.abspath(input.protein))
         s += h + h + "chrom:              {}\n".format(os.path.abspath(input.chrom))
         s += h + h + "genome:             {}\n".format(os.path.abspath(input.genome))
-        s += h + h + "minscaflen:         {}\n".format(minscaflen)
+        s += h + h + "minscafsize:         {}\n".format(str(int(minscaflen)))
 
         # write the string to the output
         with open(output.yaml, "w") as f:
