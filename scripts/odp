@@ -1,11 +1,22 @@
 """
-This script performs mutual-best protein diamond BLAST searches,
- then makes synteny plots of those results.
+Program  : odp
+Language : snakemake
+Date     : 2021-01-21
+Author   : Darrin T. Schultz
+Email    : darrin.schultz@univie.ac.at
+Github   : https://github.com/conchoecia/odp
+License  : GNU GENERAL PUBLIC LICENSE, Version 3, 29 June 2007. See the LICENSE file.
 
-Author: Darrin Schultz
-Email : dts@ucsc.edu
+Description:
+  This program is part of the Oxford Dot Plot (odp) package on github.
+  This script performs mutual-best protein diamond BLAST searches,
+  then makes synteny plots of those results. Performs many other functions.
+  See the documentation for more details.
 
+Usage instructions:
+  - See https://github.com/conchoecia/odp#getting-started
 """
+
 # This block imports fasta-parser as fasta
 import os
 import sys
@@ -192,16 +203,16 @@ if "plot_LGs" not in config:
     config["plot_LGs"] = True
 
 if config["plot_LGs"]:
-    # This set of files plots the installed LGs against all of the datasets
-    file_targets += [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(hmm, sp)
-      for sp in config["analysisspecies"] for hmm in config["prot_to_color"]]
-    # color by the things in the chrom settings
-    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
-      for x in config["analysispairs"] for y in config["prot_to_color"]]
-    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
-      for x in config["analysispairs"] for y in config["prot_to_color"]]
-    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
-      for x in config["analysispairs"] for y in config["prot_to_color"]]
+    ## This set of files plots the installed LGs against all of the datasets
+    #file_targets += [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(hmm, sp)
+    #  for sp in config["analysisspecies"] for hmm in config["prot_to_color"]]
+    ## color by the things in the chrom settings
+    #file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
+    #  for x in config["analysispairs"] for y in config["prot_to_color"]]
+    #file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
+    #  for x in config["analysispairs"] for y in config["prot_to_color"]]
+    #file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
+    #  for x in config["analysispairs"] for y in config["prot_to_color"]]
 
     # We also want to plot the ALGs as if they were genomes, against the individual species
     # This line specifically is for testing the RBH-as-a-species analysis
@@ -255,6 +266,9 @@ rule check_input_legality:
         input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     params:
         duplicate_handling = config["duplicate_proteins"]
+    resources:
+        mem_mb = 500,  # should be small
+        time   = 600   # 10 minutes in seconds
     threads: 1
     run:
         # We always check to see if the chrom file is legal, regardless of whether we're ignoring duplicate prots.
@@ -286,6 +300,9 @@ rule filter_prots:
         input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
         pep = config["tool"] + "/db/{sample}_prots.pep"
+    resources:
+        mem_mb = 500, # should be small
+        time   = 600  # ten minutes in seconds
     threads: 1
     run:
         odpf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
@@ -353,9 +370,9 @@ rule reciprocal_best_hits:
     run:
         odpf.reciprocal_best_hits_blastp_or_diamond_blastp(
             input.blastp1to2, input.blastp2to1, output.blastp1to2)
-        df = pd.read_csv(output.blastp1to2, sep = "\t", header = None)
+        df = pd.read_csv(output.blastp1to2, sep = '\t', header = None)
         newdf = df[[1,0,2,3,4,5,8,9,6,7,10,11]]
-        newdf.to_csv(output.blastp2to1, sep ="\t", header = None, index = None)
+        newdf.to_csv(output.blastp2to1, sep ='\t', header = None, index = None)
 
 def get_component_size_dict(G):
     """
@@ -461,7 +478,7 @@ rule n_ways_reciprocal_best:
                         gene_list.add(bgene)
                         gene_to_species[agene] = a
                         gene_to_species[bgene] = b
-                        #add these since we've added the genes already
+                        # add these since we've added the genes already
                         checked_names.add(a)
                         checked_names.add(b)
                         # now add the edge
@@ -612,6 +629,7 @@ def calc_D_for_y_and_x(df, xsample, ysample):
                                   "{}_break_ix".format(thisdir)],
                             ascending = True)
         df = df.reset_index(drop = True)
+        print("df\n", df)
         breaks = df["{}_breakchrom".format(thisdir)].unique()
         thisdir_dfs = []
         # this just calculates Dx
@@ -626,6 +644,7 @@ def calc_D_for_y_and_x(df, xsample, ysample):
             subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
             xdf["{}_D".format(thisdir)] = subtractdf.apply(lambda x: np.sqrt(np.square(x).sum()), axis = 1)
             thisdir_dfs.append(xdf)
+        print("thisdir_dfs\n", thisdir_dfs)
         df = pd.concat(thisdir_dfs)
     df.reset_index(drop=True, inplace = True)
     return df
@@ -1748,6 +1767,9 @@ rule get_chromsize_of_one_species:
         input_pass = config["tool"] + "/db/input_check/{sp}_pass.txt"
     output:
         chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
+    resources:
+        mem_mb = 2000, # Use 2GB of RAM in case there are large chromosomes
+        time   = 600   # ten minutes in seconds
     threads:
         1
     run:
@@ -1853,6 +1875,9 @@ rule filtered_D_FET_rbh:
         rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.D.FET.rbh"
     output:
         filt = config["tool"] + "/step1-rbh-filtered/{analysis}_reciprocal_best_hits.D.FET.filt.rbh"
+    resources:
+        mem_mb = 1000, # usually takes 0.2 to 0.3GB of RAM
+        time   = 2700  # 45 minutes in seconds
     threads: 1
     run:
         # read in the rbh file
@@ -1895,8 +1920,11 @@ rule species_HMM_D_and_FET:
     output:
         rbh = config["tool"] + "/step1-rbh/{hmm}_{sp}_reciprocal_best_hits.hmm.D.FET.rbh",
     params:
-        xsample = lambda wildcards: wildcards.hmm, 
+        xsample = lambda wildcards: wildcards.hmm,
         ysample = lambda wildcards: wildcards.sp
+    resources:
+        mem_mb = 5000, # usually takes ???GB of RAM
+        time   = 1800  # 30 minutes in seconds
     threads: 1
     run:
         # read in the rbh file
@@ -1936,7 +1964,8 @@ rule plot_synteny_nocolor:
         yx  = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_yx_synteny.pdf"
     threads: 1
     resources:
-        mem_mb = 5000 # usually takes 2.5Gb of RAM
+        mem_mb = 5000, # usually takes ??Gb of RAM
+        time   = 1800  # 30 minutes in seconds
     params:
         analysis = lambda wildcards: wildcards.analysis,
         orthology_method = config["diamond_or_blastp"]
@@ -2009,6 +2038,9 @@ rule filter_each_hmm_result:
     output:
         hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp"
     threads: 1
+    resources:
+        mem_mb = 500,  # usually uses 0.2-0.3 GB of RAM
+        time   = 3600  # one hour in seconds
     run:
         top_hits = 5
         outhandle = open(output.hmm, "w")
@@ -2018,6 +2050,8 @@ rule filter_each_hmm_result:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#"):
+                    # TODO delete this line
+                    print("debug: ", line, file = sys.stderr)
                     fields = line.split()
                     qseqid = fields[2].replace(".aligned", "")
                     sseqid = fields[0]
@@ -2055,6 +2089,9 @@ rule hmm_search_to_rbh:
         coloredby_rbh = lambda wildcards: config["prot_to_color_rbh"][wildcards.coloredby]
     output:
         rbh = config["tool"] + "/step1-rbh/{coloredby}_{sample}_reciprocal_best_hits.hmm.rbh"
+    resources:
+        mem_mb = 1000,  # should be relatively small
+        time   = 1800   # 30 minutes in seconds
     threads: 1
     run:
         ## final columns must be
@@ -2181,6 +2218,9 @@ rule plot_synteny_coloredby:
         rbh = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_xy_reciprocal_best_hits.coloredby_{coloredby}.plotted.rbh",
         xy  = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_xy_synteny_coloredby_{coloredby}.pdf",
         yx  = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_yx_synteny_coloredby_{coloredby}.pdf",
+    resources:
+        mem_mb = 5000, # usually takes 2.5Gb of RAM
+        time   = 1800  # 30 minutes in seconds
     threads:
         1
     params:
@@ -2249,6 +2289,9 @@ rule plot_synteny_of_ALGs_plus_species:
         rbh = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_reciprocal_best_hits.plotted.rbh",
         xy  = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_synteny.pdf",
         yx  = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_yx_synteny.pdf"
+    resources:
+        mem_mb = 5000, # usually takes ??GB of RAM
+        time   = 1800  # 30 minutes in seconds
     threads:
         1
     params:

@@ -1,10 +1,24 @@
 """
-This takes the list of unannotated genomes, annotates the genomes with common animal linkage groups, and prepares a database of those linkage groups for ODP.
+Program  : GenDB_build_db_unannotated.snakefile
+Language : snakemake
+Date     : 2023-10-01
+Author   : Darrin T. Schultz
+Email    : darrin.schultz@univie.ac.at
+Github   : https://github.com/conchoecia/odp
+License  : GNU GENERAL PUBLIC LICENSE, Version 3, 29 June 2007. See the LICENSE file.
 
-The program requires that either a directory of the annotated and unannotated genome lists be provided.
+Description:
+  This program:
+    - takes the list of unannotated genomes,
+    - annotates the genomes with common animal linkage groups,
+    - and prepares a database of those linkage groups for ODP.
+  The program requires that either a directory of the annotated and unannotated genome lists be provided.
+  Otherwise the user has to specify specific paths to those tsv files.
 
-Otherwise the user has to specify specific paths to those tsv files.
+Usage instructions:
+  - There are currently no usage instructions. This is a work in progress.
 """
+
 
 import os
 import pandas as pd
@@ -12,9 +26,6 @@ import sys
 from datetime import datetime
 import GenDB
 import yaml
-
-#if "datetime" not in config:
-#    config["datetime"] = datetime.now().strftime('%Y%m%d%H%M')
 
 # figure out where bin is because we need to use some outside tools
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
@@ -87,13 +98,14 @@ rule download_unannotated_genomes:
         APIstring = "" if "API_key" not in locals() else "--api-key {}".format(locals()["API_key"])
     threads: 1
     resources:
-        mem_mb = 1000
+        mem_mb = 1000, # 1 GB of RAM
+        time   = 1200  # 20 minutes. 15 minutes to download then 5 minutes to sleep
     shell:
         """
         cd {params.outdir}
         {input.datasets} download genome accession {wildcards.assemAnn} {params.APIstring} --include genome
-        # put bash to sleep for 5 minutes to avoid overloading the NCBI servers
-        #sleep 300
+        echo "Sleping for 2.5 minutes to avoid overloading the NCBI servers."
+        sleep 150
         """
 
 rule unzip_annotated_genomes:
@@ -103,19 +115,22 @@ rule unzip_annotated_genomes:
     input:
         assembly = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/ncbi_dataset.zip"
     output:
-        genome   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta"
+        genome   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz"
     threads: 1
     resources:
-        mem_mb = 1000
+        mem_mb = 1000, # 1 GB of RAM
+        time   = 600   # 10 minutes to unzip
     params:
         outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/"
+        bridge   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta"
     shell:
         """
         TMPDIR=`pwd`
         cd {params.outdir}
         unzip -o ncbi_dataset.zip
         cd $TMPDIR
-        find {params.outdir} -name "*.fna" -exec mv {{}} {output.genome} \;
+        find {params.outdir} -name "*.fna" -exec mv {{}} {output.bridge} \;
+        cat {params.bridge} | gzip > {output.genome}
         """
 
 #rule prep_chrom_file_from_NCBI:

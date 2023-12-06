@@ -99,7 +99,7 @@ rule download_annotated_genomes:
         """
         cd {params.outdir}
         {input.datasets} download genome accession {wildcards.assemAnn} {params.APIstring} --include genome,protein,gff3,gtf
-        # put bash to sleep for 5 minutes to avoid overloading the NCBI servers
+        echo "Sleping for 5 minutes to avoid overloading the NCBI servers."
         sleep 300
         """
 
