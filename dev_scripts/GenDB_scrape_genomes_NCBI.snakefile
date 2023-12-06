@@ -688,7 +688,7 @@ rule get_representative_genomes:
         mem_mb = 1000
     run:
         # load in the dataframe
-        df = pd.read_csv(input.report_tsv, sep="\t") 
+        df = pd.read_csv(input.report_tsv, sep="\t")
         # strip leading and trailing whitespace from the column names because pandas can screw up sometimes
         df.columns = df.columns.str.strip()
         print("number of species is {}".format(len(df["Organism Taxonomic ID"].unique())))
