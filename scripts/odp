@@ -322,7 +322,10 @@ rule make_diamond_and_blast_db:
         psq  = config["tool"] + "/db/{sample}_prots.pep.psq"
     params:
         outdir = config["tool"] + "/db/dmnd"
-    threads: workflow.cores - 1
+    resources:
+        mem_mb = 1000, # should be small
+        time   = 600  # ten minutes in seconds
+    threads: 1 # No reason to have more than one thread
     shell:
         """
         mkdir -p {params.outdir}
@@ -340,7 +343,10 @@ rule diamond_blast:
         dmnd2 = ancient(config["tool"] + "/db/dmnd/{sample2}_prots.dmnd"),
     output:
         blastp = config["tool"] + "/step0-blastp_results/{sample1}_against_{sample2}.blastp"
-    threads: (workflow.cores - 1)
+    resources:
+        mem_mb = 2000, # 20231206 - I don't actually know how long this will take.
+        time   = 1200  # 20231206 - I don't actually know how long this will take. Currently 20 minutes in seconds.
+    threads: max(10, int(workflow.cores/4)) # we want to use 10 threads, but no more than 1/4 of the cores. If run on SLURM mode, workflow.cores is 0, so will default to 10 cores.
     params:
         search_method = config["diamond_or_blastp"]
     priority: 1
@@ -366,6 +372,9 @@ rule reciprocal_best_hits:
     output:
         blastp1to2 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample1}_and_{sample2}_recip.temp.blastp",
         blastp2to1 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample2}_and_{sample1}_recip.temp.blastp",
+    resources:
+        mem_mb = 1000, # Should be small
+        time   = 1200  # 20 minutes in seconds
     threads: 1
     run:
         odpf.reciprocal_best_hits_blastp_or_diamond_blastp(
@@ -394,14 +403,11 @@ rule n_ways_reciprocal_best:
     Gets reciprocal best hits from 3 or more samples
     For a protein to be retained, it must be a reciprocal-best hit in three samples.
 
-              A      B
-             / \    /|\
-            B___C  A-+-C , --et cetera
-                    \|/
-                     D
-
-    # Here I need to draw an ascii pentagram with lines connected to each element A, B, C, D, E
-
+              A       B
+             / \    /| |
+            B___C  A-+-C , ... et cetera. These are k-complete graphs.
+                   | |/
+                    D
 
     The output of this rule is a yaml file with admissible proteins from each sample
     """
@@ -413,6 +419,9 @@ rule n_ways_reciprocal_best:
         acceptable_prots = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_acceptable_prots.txt",
         blast_network    = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_edges.txt",
         rbh              = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh"
+    resources:
+        mem_mb = 1000, # should be small
+        time   = 1200  # 20 minutes in seconds
     threads: 1
     run:
         # prot to group
@@ -1810,20 +1819,15 @@ rule get_chromsize_of_analysis_pair:
         pass2  = lambda wildcards: config["tool"] + "/db/input_check/{}_pass.txt".format(wildcards.analysis.split("_")[1])
     output:
         chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize"
+    resources:
+        mem_mb = 500,  # 20231206 I don't actually know how much RAM this uses. But it probably is not much.
+        time   = 300   # Five minutes in seconds. 20231206 I don't actually know how much time this uses.
     threads:
         1
     shell:
         """
         cat {input.fastas} > {output.chromsize}
         """
-    #run:
-    #    with open(output.chromsize, "w") as o:
-    #        for thissp in config["analysispairs"][wildcards.analysis]:
-    #            thisfasta = config["species"][thissp]["genome"]
-    #            for record in fasta.parse(thisfasta):
-    #                recordlen = len(record.seq)
-    #                if recordlen >= config["species"][thissp]["minscafsize"]:
-    #                    o.write("{}\t{}\t{}\n".format(thissp, record.id, len(record.seq)))
 
 rule analysis_D_and_FET:
     """
@@ -1837,11 +1841,12 @@ rule analysis_D_and_FET:
     output:
         rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.D.FET.rbh"
     params:
-        xsample = lambda wildcards: config["analysispairs"][wildcards.analysis][0], 
+        xsample = lambda wildcards: config["analysispairs"][wildcards.analysis][0],
         ysample = lambda wildcards: config["analysispairs"][wildcards.analysis][1]
     threads: 1
     resources:
-        mem_mb = 5000 # usually uses 2.5Gb of RAM
+        time   = 1800, # 20231206 I don't know how long this will actually take. 30 minutes in seconds.
+        mem_mb = 5000  # 20231205 This usually uses 2.5Gb of RAM.
     run:
         # read in the rbh file
         df = pd.read_csv(input.rbh, delimiter="\t")
@@ -1876,8 +1881,8 @@ rule filtered_D_FET_rbh:
     output:
         filt = config["tool"] + "/step1-rbh-filtered/{analysis}_reciprocal_best_hits.D.FET.filt.rbh"
     resources:
-        mem_mb = 1000, # usually takes 0.2 to 0.3GB of RAM
-        time   = 2700  # 45 minutes in seconds
+        mem_mb = 1000, # 20231205 usually takes 0.2 to 0.3GB of RAM.
+        time   = 2700  # 45 minutes in seconds. 20231206 This is probably too long.
     threads: 1
     run:
         # read in the rbh file
@@ -2011,7 +2016,10 @@ rule hmm_against_prots:
         proteins = config["tool"] + "/db/{sample}_prots.pep",
     output:
         hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"
-    threads: min(10, int(workflow.cores/4))
+    resources:
+        mem_mb = 5000, # Some example consumption for single cores: 500M, 120M, 288M
+        time   = 7200  # 2 hours in seconds
+    threads: max(10, int(workflow.cores/4)) # use 10 threads or 1/4 of the cores, whichever is larger. Not much reason to use more than 10. I haven't seen much speedup after 10 threads.
     shell:
         """
         hmmsearch --incE 1E-5 \
@@ -2292,8 +2300,7 @@ rule plot_synteny_of_ALGs_plus_species:
     resources:
         mem_mb = 5000, # usually takes ??GB of RAM
         time   = 1800  # 30 minutes in seconds
-    threads:
-        1
+    threads: 1
     params:
         orthology_method = config["diamond_or_blastp"],
         coloredby = lambda wildcards: wildcards.hmm,
@@ -2418,6 +2425,9 @@ rule ALG_decay_plot:
     output:
         plot = config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.pdf",
         data = config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.tsv"
+    resources:
+        mem_mb = 1000, # 20231206 This almost certainly will not take up 1GB of RAM. Just using this value temporarily.
+        time   = 600  # 20231206 Don't know what value. Just using 10 minutes. 10 minutes in seconds
     threads: 1
     run:
         # read in the rbh dataframe
