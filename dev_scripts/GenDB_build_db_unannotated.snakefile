@@ -19,10 +19,15 @@ Usage instructions:
   - There are currently no usage instructions. This is a work in progress.
 """
 
-
+# This block imports fasta-parser as fasta
 import os
-import pandas as pd
 import sys
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
+
+import pandas as pd
 from datetime import datetime
 import GenDB
 import yaml
@@ -38,15 +43,15 @@ configfile: "config.yaml"
 config["tool"] = "odp_ncbi_genome_db"
 # Do some logic to see if the user has procided enough information for us to analyse the genomes
 if ("directory" not in config) and ("accession_tsvs" not in config):
-    raise IOerror("You must provide either a directory of the annotated and unannotated genome lists, or a list of the paths to those tsv files. Read the config file.")
+    raise IOError("You must provide either a directory of the annotated and unannotated genome lists, or a list of the paths to those tsv files. Read the config file.")
 
 if "directory" in config:
     # ensure that the user also hasn't specified the accession tsvs
     if "accession_tsvs" in config:
-        raise IOerror("You cannot provide both a directory of tsv files ('directory') and specify the exact path of the TSVs ('accession_tsvs'). Read the config file.")
+        raise IOError("You cannot provide both a directory of tsv files ('directory') and specify the exact path of the TSVs ('accession_tsvs'). Read the config file.")
     # ensure that the directory exists
     if not os.path.isdir(config["directory"]):
-        raise IOerror("The directory of TSV files you provided does not exist. {}".format(config["directory"]))
+        raise IOError("The directory of TSV files you provided does not exist. {}".format(config["directory"]))
     # get the paths to the tsv files
     config["annotated_genome_tsv"], config["unannotated_genome_tsv"] = GenDB.return_latest_accession_tsvs(config["directory"])
     # now add the entries to the config file so we can download them or not
@@ -55,9 +60,46 @@ if "directory" in config:
 elif "accession_tsvs" in config:
     # ensure that the user also hasn't specified the directory
     if "directory" in config:
-        raise IOerror("You cannot provide both a directory of tsv files ('directory') and specify the exact path of the TSVs ('accession_tsvs'). Read the config file.")
+        raise IOError("You cannot provide both a directory of tsv files ('directory') and specify the exact path of the TSVs ('accession_tsvs'). Read the config file.")
     # we haven't implemented this yet. I haven't found a use case where I would want to specifially pick a file path rather than just get the most recent one.
     raise NotImplementedError("We haven't implemented this yet. I haven't found a use case where I would want to specifially pick a file path rather than just get the most recent one.")
+
+# One key feature of this script is that we will map proteins from
+#  LG databases to annotate those genomes with the LG identities.
+#  Before we accept the user's input, we need to parse the supplied
+#  directories to make sure that they are valid.
+LG_to_db_directory_dict = {}
+LG_to_rbh_dfs = {}
+LG_outfiles = []
+if len(LG_to_db_directory_dict) == 0: # only do this once
+    if "LG_db_directories" not in config:
+        raise ValueError("You have not specified the directories of LG databases. Please add the key 'LG_db_directories' to your config file.")
+    for thisdirectory in config["LG_db_directories"]:
+        # The directory must exist
+        if not os.path.isdir(thisdirectory):
+            raise IOError("The directory of LG databases you provided does not exist. {}".format(thisdirectory))
+        # There must be a directory named aligned
+        if not os.path.isdir(os.path.join(thisdirectory, "aligned")):
+            raise IOError("The directory of LG databases you provided does not contain a directory named 'aligned'. {}".format(thisdirectory))
+        # The directory name is the name of the LG, just get the last part of the path
+        LG_name = os.path.basename(os.path.normpath(thisdirectory))
+        # The directory must contain a .rbh file
+        if not any([x.endswith(".rbh") for x in os.listdir(thisdirectory)]):
+            raise IOError("The directory of LG databases you provided does not contain a .rbh file. {}".format(thisdirectory))
+        # Now we read in the .rbh file as a pandas df to get the LG names from the `.rbh` column.
+        rbhfilepath = [x for x in os.listdir(thisdirectory) if x.endswith(".rbh")][0]
+        df = pd.read_csv(os.path.join(thisdirectory, rbhfilepath), sep="\t")
+        # For each rbh entry in the dataframe, there should be a fasta file in the aligned directory
+        fasta_list = [x for x in os.listdir(os.path.join(thisdirectory, "aligned")) if x.endswith(".fasta")]
+        for rbh in df["rbh"].unique():
+            if rbh + ".fasta" not in fasta_list:
+                raise IOError("The directory of LG databases you provided does not contain a fasta file for the rbh entry {}. {}".format(rbh, thisdirectory))
+        # This appears to be a legitimate LG database directory. Add it to the dictionary.
+        # Also add a pandas dataframe to the dictionary.
+        LG_to_db_directory_dict[LG_name] = thisdirectory
+        LG_to_rbh_dfs[LG_name] = df
+        outfile =config["tool"] + "/input/LG_proteins/{}.fasta".format(LG_name)
+        LG_outfiles.append(outfile)
 
 #onstart:
 #    # NOTE: onstart doesn't execute if the workflow is run with the -n flag
@@ -80,9 +122,189 @@ wildcard_constraints:
 # first we must load in all of the files. Only do it once
 rule all:
     input:
-        expand(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta",   assemAnn=config["assemAnn"]),
-        #"NCBI_odp_db.yaml",
-        #"NCBI_odp_sp_list.txt"
+        expand(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz", assemAnn=config["assemAnn"]),
+        LG_outfiles,
+        expand(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.chrom",
+               assemAnn=config["assemAnn"], LG_name=LG_to_db_directory_dict.keys()),
+        expand(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.pep",
+               assemAnn=config["assemAnn"], LG_name=LG_to_db_directory_dict.keys()),
+        expand("NCBI_odp_db.unannotated.{LG_name}.yaml",
+               LG_name=LG_to_db_directory_dict.keys()),
+        expand("NCBI_odp_sp_list.unannotated.{LG_name}.txt",
+               LG_name=LG_to_db_directory_dict.keys()),
+
+
+# I am not using this rule at the moment
+#rule get_chromsize_of_one_species:
+#    """
+#    This chromsize file is used later to speed up the synteny_plot analysis.
+#    The first column is the sample name
+#    2nd col is the scaf name
+#    3rd col is the scaf length
+#
+#    We filter out the scaffolds that are too small here.
+#
+#    We require that the sample pass the input file checks first
+#    """
+#    input:
+#        fasta     = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz"
+#    output:
+#        chromsize = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chromsize"
+#    resources:
+#        mem_mb = 2000, # Use 2GB of RAM in case there are large chromosomes
+#        time   = 10    # ten minutes
+#    threads:
+#        1
+#    run:
+#        with open(output.chromsize, "w") as o:
+#            for record in fasta.parse(input.fasta):
+#                o.write("{}\t{}\t{}\n".format(wildcards.assemAnn, record.id, len(record.seq)))
+
+rule generate_LG_fasta_sequence:
+    """
+    Currently, in the LG database, the sequences are only available as alignments.
+    Here, we just concatenate all of the alignments, then strip the gaps.
+    """
+    input:
+        LG_dir = lambda wildcards: LG_to_db_directory_dict[wildcards.LG_name]
+    output:
+        fasta = config["tool"] + "/input/LG_proteins/{LG_name}.fasta"
+    resources:
+        mem_mb = 1000, # 1 GB of RAM
+        time   = 5     # 5 minutes
+    threads: 1
+    run:
+        with open(output.fasta, "w") as o:
+            for fastafile in os.listdir(input.LG_dir + "/aligned"):
+                for record in fasta.parse(input.LG_dir + "/aligned/" + fastafile):
+                    o.write(">{}\n{}\n".format(record.id, record.seq.replace("-", "")))
+
+rule index_genome_miniprot:
+    input:
+        genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz",
+    output:
+        mpi    = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz.mpi"
+    threads: 8
+    resources:
+        mem_mb = 20000, # The RAM usage can blow up during indexing. Often > 10GB.
+        time   = 40    # 20 minutes
+    shell:
+        """
+        miniprot -t {threads} -d {output.mpi} {input.genome}
+        """
+
+rule map_proteins:
+    """
+    Map the proteins of each ALG to each file.
+    """
+    input:
+        pep  = config["tool"] + "/input/LG_proteins/{LG_name}.fasta",
+        genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz",
+        mpi    = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz.mpi"
+    output:
+        paf = config["tool"] + "/output/mapped_reads/{assemAnn}/{LG_name}_to_{assemAnn}.paf"
+    threads: 8
+    resources:
+        mem_mb = 15000, # This can peak at up to 7GB of RAM on 8 threads. 15 for overhead.
+        time   = 40  # This can take a long time with large genomes.
+    shell:
+        """
+        miniprot -t {threads} {input.mpi} {input.pep} > {output.paf}
+        """
+
+rule filter_paf_for_longer_scaffold:
+    """
+    Many times, a single protein will map equally well to multiple scaffolds.
+    In this case, we just pick the longest of the scaffolds.
+
+    To do this, we load of a file of all the chrom sizes first to do the comparisons.
+    """
+    input:
+        paf = config["tool"] + "/output/mapped_reads/{assemAnn}/{LG_name}_to_{assemAnn}.paf",
+    output:
+        paf = config["tool"] + "/output/mapped_reads/{assemAnn}/{LG_name}_to_{assemAnn}.filt.paf"
+    threads: 1
+    resources:
+        mem_mb = 100, # I can't forsee using a GB of RAM, but easy to request.
+        time   = 1    # Just 10 minutes
+    run:
+        paf_colnames = ["query",  "qlen", "qstart", "qend", "strand",
+                         "target", "tlen", "tstart", "tend", "matches",
+                         "alnlen", "mapq", "AS", "ms"]
+
+        entries = []
+        with open(input.paf, "r") as f:
+            for line in f:
+                # skip the header lines
+                if line.startswith("#"):
+                    continue
+                # split the line
+                line = line.strip().split("\t")[:len(paf_colnames)]
+                line[-2] = line[-2].replace("AS:i:", "")
+                line[-1] = line[-1].replace("ms:i:", "")
+                for colindex in [1,2,3,6,7,8,9,10,11,12,13]:
+                    line[colindex] = int(line[colindex])
+                entries.append(line)
+        # load in the paf file, only read in the first 14 columns
+        pafdf = pd.DataFrame(entries, columns=paf_colnames)
+        # Sort by query, then ms, then tlen. This will put the best hits at the top.
+        # Then, drop duplicates of the query column. This will keep only the best hit.
+        pafdf = pafdf.sort_values(by=["query", "ms", "tlen"], ascending=False
+                 ).drop_duplicates(subset=["query"])
+        # save the filtered paf file to the outout, but don't use the index or header
+        pafdf.to_csv(output.paf, sep="\t", index=False, header=False)
+
+rule paf_to_chrom_and_pep:
+    """
+    This script converts the filtered paf file to the chrom file.
+    There are some decisions to make here about which proteins are best
+
+    The chrom format is: protein_name, scaf_name, strand, scaf_start, scaf_end
+    BFGX8636T1      sca1    +       1       1246
+    BFGX0001T1      sca1    -       2059    2719
+    BFGX0002T1      sca2    +       6491    12359
+    BFGX0003T1      sca2    -       12899   18848
+
+    Also outputs a protein fasta file of the entries.
+    """
+    input:
+        paf = config["tool"] + "/output/mapped_reads/{assemAnn}/{LG_name}_to_{assemAnn}.filt.paf",
+        pep  = config["tool"] + "/input/LG_proteins/{LG_name}.fasta"
+    output:
+        chrom = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.chrom",
+        pep   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.pep"
+    threads: 1
+    resources:
+        mem_mb = 100, # I can't forsee using a GB of RAM, but easy to request.
+        time   = 5    # Just 5 minutes
+    run:
+        paf_colnames = ["query",  "qlen", "qstart", "qend", "strand",
+                         "target", "tlen", "tstart", "tend", "matches",
+                         "alnlen", "mapq", "AS", "ms"]
+
+        # read in the paf file as a pandas dataframe
+        df = pd.read_csv(input.paf, sep="\t", header=None, names=paf_colnames)
+        # Split the query column into two parts. The first part is up to the last
+        # _ character, the second part is everything else. Save the first part as
+        # the rbh column.
+        df["rbh"]     = df["query"].str.rsplit("_", n=1, expand=True)[0]
+        # the second part is the species name
+        df["species"] = df["query"].str.rsplit("_", n=1, expand=True)[1]
+        # sort based on the rbh column, then the ms column, then the tlen column
+        df = df.sort_values(by=["rbh", "ms", "tlen"], ascending=False)
+        # for now just keep the first entry for each rbh
+        df = df.drop_duplicates(subset=["rbh"])
+        chromdf = df[["query", "target", "strand", "tstart", "tend"]]
+        # sort by target, then tstart, then tend
+        chromdf = chromdf.sort_values(by=["target", "tstart", "tend"])
+        # save the chromdf as a tab delimited file
+        chromdf.to_csv(output.chrom, sep="\t", index=False, header=False)
+
+        # now we generate the protein fasta file
+        with open(output.pep, "w") as o:
+            for record in fasta.parse(input.pep):
+                if record.id in chromdf["query"].values:
+                    o.write(">{}\n{}\n".format(record.id, record.seq))
 
 rule download_unannotated_genomes:
     """
@@ -99,13 +321,43 @@ rule download_unannotated_genomes:
     threads: 1
     resources:
         mem_mb = 1000, # 1 GB of RAM
-        time   = 1200  # 20 minutes. 15 minutes to download then 5 minutes to sleep
+        time   = 20  # 20 minutes.
     shell:
         """
+        # Set the path of the target file
+        TARGETFILE={output.assembly}
+
+        # Maximum number of download attempts
+        MAX_ATTEMPTS=5
+
+        # Function to download the file
+        download_file() {{
+            {input.datasets} download genome accession {wildcards.assemAnn} {params.APIstring} --include genome || true
+        }}
+
+        # Attempt to download the file up to MAX_ATTEMPTS times
         cd {params.outdir}
-        {input.datasets} download genome accession {wildcards.assemAnn} {params.APIstring} --include genome
-        echo "Sleping for 2.5 minutes to avoid overloading the NCBI servers."
-        sleep 150
+        for ((i=1; i<=MAX_ATTEMPTS; i++)); do
+            download_file
+
+            # Check if the file exists
+            if [ -e ncbi_dataset.zip ]; then
+                echo "File downloaded successfully."
+                break
+            else
+                echo "Download attempt $i failed. Waiting for 5 minutes before the next attempt..."
+                sleep 60  # Wait for 1 minutes (60 seconds)
+            fi
+        done
+
+        # Check one last time if the file exists
+        if [ ! -e ncbi_dataset.zip ]; then
+            echo "Download failed after $MAX_ATTEMPTS attempts. Exiting..."
+            exit 1
+        fi
+
+        echo "Sleeping for 30 seconds to avoid overloading the NCBI servers."
+        sleep 60  # Wait for 1 minutes (60 seconds)
         """
 
 rule unzip_annotated_genomes:
@@ -115,155 +367,143 @@ rule unzip_annotated_genomes:
     input:
         assembly = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/ncbi_dataset.zip"
     output:
-        genome   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz"
+        fasta    = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta")
     threads: 1
     resources:
         mem_mb = 1000, # 1 GB of RAM
-        time   = 600   # 10 minutes to unzip
+        time   = 10   # 10 minutes
     params:
         outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/"
-        bridge   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta"
     shell:
         """
         TMPDIR=`pwd`
         cd {params.outdir}
         unzip -o ncbi_dataset.zip
         cd $TMPDIR
-        find {params.outdir} -name "*.fna" -exec mv {{}} {output.bridge} \;
-        cat {params.bridge} | gzip > {output.genome}
+        find {params.outdir} -name "*.fna" -exec mv {{}} {output.fasta} \;
         """
 
-#rule prep_chrom_file_from_NCBI:
-#    """
-#    This takes the output files from the NCBI database and puts them into the file format we need for odp, clink, et cetera
-#    """
-#    input:
-#        genome   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.fasta",
-#        protein  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.pep",
-#        gff      = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gff",
-#        chromgen = os.path.join(snakefile_path, "..", "scripts", "NCBIgff2chrom.py")
-#    output:
-#        chrom   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrom",
-#        report  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.report.txt"
-#    threads: 1
-#    resources:
-#        mem_mb  = 1000
-#    params:
-#        prefix  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}"
-#    shell:
-#        """
-#        python {input.chromgen} -f {input.genome} -p {input.protein} -g {input.gff} -o {params.prefix}
-#        """
-#
-#rule generate_assembled_config_entry:
-#    """
-#    Print out a small piece of a yaml file specifically for ODP.
-#    These will be gathered and concatenated later.
-#    """
-#    input:
-#        annotated_genomes = config["annotated_genome_tsv"],
-#        report            = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.report.txt",
-#        genome            = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.fasta",
-#        protein           = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.pep",
-#        chrom             = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrom",
-#    output:
-#        yaml   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.yaml.part",
-#    threads: 1
-#    resources:
-#        mem_mb  = 1000
-#    run:
-#        # load in the dataframe of the annotated genomes
-#        df = pd.read_csv(input.annotated_genomes, sep="\t")
-#        # strip leading and trailing whitespace from the column names because pandas can screw up sometimes
-#        df.columns = df.columns.str.strip()
-#
-#        # read in the report into pandas if we can. Strip all the excess whitespace since the columns are formatted with whitespace
-#        reportdf = pd.read_csv(input.report, comment = "#", delim_whitespace=True)
-#        # get only the scaffolds that comprise more than 0.5% of the annotated proteins
-#        filtdf = reportdf.loc[reportdf["percent_of_proteins"] >= 0.05]
-#        minscaflen = filtdf["scaflen"].min() - 1000
-#
-#        row = df.loc[df["Assembly Accession"] == wildcards.assemAnn]
-#        taxid = row["Organism Taxonomic ID"].values[0]
-#
-#        # s is the output string.
-#        # h is headspace. Currently 2 spaces because the odp yaml files are compoased like so:
-#        #species:
-#        #  Sp_name:
-#        #    taxid:
-#        #    genus:
-#        #    species:
-#        #    assembly_accession:
-#        #    proteins:
-#        #    chrom:
-#        #    genome:
-#        #    minscaflen:
-#        #    ....
-#
-#        # genus
-#        try:
-#            genus = row["Organism Name"].values[0].split(" ")[0]
-#        except:
-#            genus = row["Organism Name"].values[0]
-#        # species
-#        try:
-#            species = row["Organism Name"].values[0].split(" ")[1]
-#        except:
-#            species = "None" 
-#
-#        spstring = "{}{}{}".format(genus, species, taxid)
-#        h = "  "
-#        s = ""
-#        s += h + "{}:\n".format(spstring)
-#        s += h + h + "assembly_accession: {}\n".format(wildcards.assemAnn)
-#        s += h + h + "taxid:              {}\n".format(taxid)
-#        s += h + h + "genus:              {}\n".format(genus)
-#        s += h + h + "species:            {}\n".format(species)
-#        s += h + h + "proteins:           {}\n".format(os.path.abspath(input.protein))
-#        s += h + h + "chrom:              {}\n".format(os.path.abspath(input.chrom))
-#        s += h + h + "genome:             {}\n".format(os.path.abspath(input.genome))
-#        s += h + h + "minscaflen:         {}\n".format(minscaflen)
-#
-#        # write the string to the output
-#        with open(output.yaml, "w") as f:
-#            f.write(s)
-#
-#rule collate_assembled_config_entries:
-#    """
-#    Concatenate all of the yaml files together into one big file.
-#    """
-#    input:
-#        yaml_parts = expand(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.yaml.part",
-#                            assemAnn=config["assemAnn"])
-#    output:
-#        yaml = "NCBI_odp_db.yaml"
-#    threads: 1
-#    resources:
-#        mem_mb  = 1000
-#    shell:
-#        """
-#        echo "species:" > {output.yaml}
-#        cat {input.yaml_parts} >> {output.yaml}
-#        """
-#
-#rule generate_species_list_for_timetree:
-#    """
-#    Generates a list of species that are in this database.
-#    One species per line.
-#    """
-#    input:
-#        yaml    = "NCBI_odp_db.yaml"
-#    output:
-#        sp_list = "NCBI_odp_sp_list.txt"
-#    threads: 1
-#    resources:
-#        mem_mb  = 1000
-#    run:
-#        # open the yaml file into a dictionary
-#        with open(input.yaml, "r") as f:
-#            yaml_dict = yaml.load(f, Loader=yaml.FullLoader)
-#        # open the output file for writing
-#        with open(output.sp_list, "w") as f:
-#            # loop through the dictionary and write the species names to the file
-#            for sp in yaml_dict["species"]:
-#                f.write("{}\t{}\n".format(yaml_dict["species"][sp]["genus"], yaml_dict["species"][sp]["species"]))
+rule zip_fasta_file:
+    """
+    In this step zip the fasta file to conserve space.
+    """
+    input:
+        genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta"
+    output:
+        genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz"
+    threads: 1
+    resources:
+        mem_mb = 1000, # 1 GB of RAM
+        time   = 10   # 10 minutes to unzip
+    shell:
+        """
+        echo "Gzipping the fasta file."
+        gzip {input.genome}
+        """
+
+rule generate_assembled_config_entry:
+    """
+    Print out a small piece of a yaml file specifically for ODP.
+    These will be gathered and concatenated later.
+    """
+    input:
+        unannot_genomes = config["unannotated_genome_tsv"],
+        genome          = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz",
+        protein         = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.pep",
+        chrom           = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.chrom",
+    output:
+        yaml   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.yaml.part",
+    threads: 1
+    resources:
+        mem_mb  = 1000
+    run:
+        # load in the dataframe of the annotated genomes
+        df = pd.read_csv(input.unannot_genomes, sep="\t")
+        # strip leading and trailing whitespace from the column names because pandas can screw up sometimes
+        df.columns = df.columns.str.strip()
+
+        row = df.loc[df["Assembly Accession"] == wildcards.assemAnn]
+        taxid = row["Organism Taxonomic ID"].values[0]
+
+        # s is the output string.
+        # h is headspace. Currently 2 spaces because the odp yaml files are compoased like so:
+        #species:
+        #  Sp_name:
+        #    taxid:
+        #    genus:
+        #    species:
+        #    assembly_accession:
+        #    proteins:
+        #    chrom:
+        #    genome:
+        #    minscaflen:
+        #    ....
+
+        # genus
+        try:
+            genus = row["Organism Name"].values[0].split(" ")[0]
+        except:
+            genus = row["Organism Name"].values[0]
+        # species
+        try:
+            species = row["Organism Name"].values[0].split(" ")[1]
+        except:
+            species = "None"
+
+        minscaflen = 100000
+        spstring = "{}{}{}".format(genus, species, taxid)
+        h = "  "
+        s = ""
+        s += h + "{}:\n".format(spstring)
+        s += h + h + "assembly_accession: {}\n".format(wildcards.assemAnn)
+        s += h + h + "taxid:              {}\n".format(taxid)
+        s += h + h + "genus:              {}\n".format(genus)
+        s += h + h + "species:            {}\n".format(species)
+        s += h + h + "proteins:           {}\n".format(os.path.abspath(input.protein))
+        s += h + h + "chrom:              {}\n".format(os.path.abspath(input.chrom))
+        s += h + h + "genome:             {}\n".format(os.path.abspath(input.genome))
+        s += h + h + "minscaflen:         {}\n".format(minscaflen)
+
+        # write the string to the output
+        with open(output.yaml, "w") as f:
+            f.write(s)
+
+rule collate_assembled_config_entries:
+    """
+    Concatenate all of the yaml files together into one big file.
+    """
+    input:
+        yaml_parts = expand(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{{LG_name}}.yaml.part",
+                            assemAnn=config["assemAnn"])
+    output:
+        yaml = "NCBI_odp_db.unannotated.{LG_name}.yaml"
+    threads: 1
+    resources:
+        mem_mb  = 1000
+    shell:
+        """
+        echo "species:" > {output.yaml}
+        cat {input.yaml_parts} >> {output.yaml}
+        """
+
+rule generate_species_list_for_timetree:
+    """
+    Generates a list of species that are in this database.
+    One species per line.
+    """
+    input:
+        yaml    = "NCBI_odp_db.unannotated.{LG_name}.yaml"
+    output:
+        sp_list = "NCBI_odp_sp_list.unannotated.{LG_name}.txt"
+    threads: 1
+    resources:
+        mem_mb  = 1000
+    run:
+        # open the yaml file into a dictionary
+        with open(input.yaml, "r") as f:
+            yaml_dict = yaml.load(f, Loader=yaml.FullLoader)
+        # open the output file for writing
+        with open(output.sp_list, "w") as f:
+            # loop through the dictionary and write the species names to the file
+            for sp in yaml_dict["species"]:
+                f.write("{}\t{}\n".format(yaml_dict["species"][sp]["genus"], yaml_dict["species"][sp]["species"]))

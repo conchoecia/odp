@@ -39,6 +39,7 @@ from odp_color_manager import generate_random_color as grc
 from itertools import permutations
 from itertools import combinations
 import logging
+import subprocess
 
 # non-standard dependencies
 import matplotlib
@@ -80,10 +81,6 @@ for thissample in config["species"]:
     if "_" in thissample:
         raise IOError("Sample names can't have '_' char: {}".format(thissample))
 
-# make sure there are at least 2 samples
-if len(config["species"]) < 2:
-    raise IOError("There must be at least 2 samples")
-
 # check if we have specified how to handle duplicate protein sequences
 if "duplicate_proteins" not in config:
     config["duplicate_proteins"] = "fail"
@@ -96,6 +93,10 @@ if "duplicate_proteins" not in config:
 # see if we have included any illegal arguments
 illegal = set()
 for this_sample in config["species"]:
+    # this bit of code allows for users to also use the term minscaflen instead of minscafsize
+    if "minscaflen" in config["species"][this_sample]:
+        config["species"][this_sample]["minscafsize"] = config["species"][this_sample]["minscaflen"]
+        del config["species"][this_sample]["minscaflen"]
     for key in config["species"][this_sample]:
         if key not in legal:
             illegal.add(key)
@@ -267,8 +268,8 @@ rule check_input_legality:
     params:
         duplicate_handling = config["duplicate_proteins"]
     resources:
-        mem_mb = 500,  # should be small
-        time   = 600   # 10 minutes in seconds
+        mem_mb = 2000,  # 20231207 - saw this peaking around 700MB on a 800Mbp genome
+        time   = 10   # 10 minutes 
     threads: 1
     run:
         # We always check to see if the chrom file is legal, regardless of whether we're ignoring duplicate prots.
@@ -302,7 +303,7 @@ rule filter_prots:
         pep = config["tool"] + "/db/{sample}_prots.pep"
     resources:
         mem_mb = 500, # should be small
-        time   = 600  # ten minutes in seconds
+        time   = 10  # ten minutes
     threads: 1
     run:
         odpf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
@@ -324,7 +325,7 @@ rule make_diamond_and_blast_db:
         outdir = config["tool"] + "/db/dmnd"
     resources:
         mem_mb = 1000, # should be small
-        time   = 600  # ten minutes in seconds
+        time   = 10  # ten minutes
     threads: 1 # No reason to have more than one thread
     shell:
         """
@@ -345,8 +346,8 @@ rule diamond_blast:
         blastp = config["tool"] + "/step0-blastp_results/{sample1}_against_{sample2}.blastp"
     resources:
         mem_mb = 2000, # 20231206 - I don't actually know how long this will take.
-        time   = 1200  # 20231206 - I don't actually know how long this will take. Currently 20 minutes in seconds.
-    threads: max(10, int(workflow.cores/4)) # we want to use 10 threads, but no more than 1/4 of the cores. If run on SLURM mode, workflow.cores is 0, so will default to 10 cores.
+        time   = 20    # 20231206 - I don't actually know how long this will take. Currently 20 minutes in seconds.
+    threads: 10
     params:
         search_method = config["diamond_or_blastp"]
     priority: 1
@@ -374,7 +375,7 @@ rule reciprocal_best_hits:
         blastp2to1 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample2}_and_{sample1}_recip.temp.blastp",
     resources:
         mem_mb = 1000, # Should be small
-        time   = 1200  # 20 minutes in seconds
+        time   = 20  # 20 minutes in seconds
     threads: 1
     run:
         odpf.reciprocal_best_hits_blastp_or_diamond_blastp(
@@ -421,7 +422,7 @@ rule n_ways_reciprocal_best:
         rbh              = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh"
     resources:
         mem_mb = 1000, # should be small
-        time   = 1200  # 20 minutes in seconds
+        time   = 20  # 20 minutes in seconds
     threads: 1
     run:
         # prot to group
@@ -1778,9 +1779,8 @@ rule get_chromsize_of_one_species:
         chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
     resources:
         mem_mb = 2000, # Use 2GB of RAM in case there are large chromosomes
-        time   = 600   # ten minutes in seconds
-    threads:
-        1
+        time   = 10   # ten minutes in seconds
+    threads: 1
     run:
         with open(output.chromsize, "w") as o:
             for record in fasta.parse(input.fasta):
@@ -1821,9 +1821,8 @@ rule get_chromsize_of_analysis_pair:
         chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize"
     resources:
         mem_mb = 500,  # 20231206 I don't actually know how much RAM this uses. But it probably is not much.
-        time   = 300   # Five minutes in seconds. 20231206 I don't actually know how much time this uses.
-    threads:
-        1
+        time   = 5   # Five minutes. 20231206 I don't actually know how much time this uses.
+    threads: 1
     shell:
         """
         cat {input.fastas} > {output.chromsize}
@@ -1845,7 +1844,7 @@ rule analysis_D_and_FET:
         ysample = lambda wildcards: config["analysispairs"][wildcards.analysis][1]
     threads: 1
     resources:
-        time   = 1800, # 20231206 I don't know how long this will actually take. 30 minutes in seconds.
+        time   = 30, # 20231206 I don't know how long this will actually take. 30 minutes.
         mem_mb = 5000  # 20231205 This usually uses 2.5Gb of RAM.
     run:
         # read in the rbh file
@@ -1882,7 +1881,7 @@ rule filtered_D_FET_rbh:
         filt = config["tool"] + "/step1-rbh-filtered/{analysis}_reciprocal_best_hits.D.FET.filt.rbh"
     resources:
         mem_mb = 1000, # 20231205 usually takes 0.2 to 0.3GB of RAM.
-        time   = 2700  # 45 minutes in seconds. 20231206 This is probably too long.
+        time   = 45  # 45 minutes. 20231206 This is probably too long.
     threads: 1
     run:
         # read in the rbh file
@@ -1929,7 +1928,7 @@ rule species_HMM_D_and_FET:
         ysample = lambda wildcards: wildcards.sp
     resources:
         mem_mb = 5000, # usually takes ???GB of RAM
-        time   = 1800  # 30 minutes in seconds
+        time   = 30  # 30 minutes
     threads: 1
     run:
         # read in the rbh file
@@ -1970,7 +1969,7 @@ rule plot_synteny_nocolor:
     threads: 1
     resources:
         mem_mb = 5000, # usually takes ??Gb of RAM
-        time   = 1800  # 30 minutes in seconds
+        time   = 30  # 30 minutes
     params:
         analysis = lambda wildcards: wildcards.analysis,
         orthology_method = config["diamond_or_blastp"]
@@ -2007,29 +2006,95 @@ rule plot_synteny_nocolor:
                      sort_y_by_x = sort_y_by_x)
 
 rule hmm_against_prots:
+    """
+    This runs hmmsearch of an LG_db against one species.
+    It will output all of the results into the format used by HMM search.
+
+    To save time, we will first check whether the target proteins are a subset of the proteins
+     in the hmmsearch database. If they are, we will skip this step to save compute time.
+
+    The output results of hmmsearch looks like this:
+    #                                                                                             --- full sequence ---- --- best 1 domain ----   --- domain number estimation ----
+    # target name                        accession    query name                       accession    E-value  score  bias   E-value  score  bias   exp reg clu  ov env dom rep inc description of target
+    # -------------------                ----------   --------------------             ---------- --------- ------ ----- --------- ------ -----   --- --- --- --- --- --- --- --- ---------------------
+    Simakov2022BCnS_genefamily_4903_HVU  -            Simakov2022BCnS_genefamily_4903  -            1.8e-46  153.7   0.5     2e-46  153.6   0.5   1.0   1   0   0   1   1   1   1 -
+    Simakov2022BCnS_genefamily_10760_HVU -            Simakov2022BCnS_genefamily_10760 -           4.9e-258  855.3  29.8  4.4e-153  508.5  15.1   2.6   1   1   2   3   3   3   2 -
+    Simakov2022BCnS_genefamily_1288_HVU  -            Simakov2022BCnS_genefamily_1288  -           1.7e-190  630.9  17.3  5.5e-112  372.1  10.2   2.3   1   1   1   2   2   2   2 -
+    Simakov2022BCnS_genefamily_3389_HVU  -            Simakov2022BCnS_genefamily_1288  -               0.28    7.3   7.1      0.39    6.8   7.1   1.1   1   0   0   1   1   1   0 -
+    Simakov2022BCnS_genefamily_9576_HVU  -            Simakov2022BCnS_genefamily_1288  -                2.4    4.2  16.9         4    3.5  16.9   1.2   1   0   0   1   1   1   0 -
+    Simakov2022BCnS_genefamily_1894_HVU  -            Simakov2022BCnS_genefamily_1894  -                  0 1024.2  12.2         0 1024.0  12.2   1.0   1   0   0   1   1   1   1 -
+    Simakov2022BCnS_genefamily_5502_HVU  -            Simakov2022BCnS_genefamily_1894  -            9.9e-06   21.7   0.2   1.6e-05   21.0   0.2   1.2   1   0   0   1   1   1   1 -
+    Simakov2022BCnS_genefamily_4972_HVU  -            Simakov2022BCnS_genefamily_1894  -            0.00018   17.6   0.1     0.002   14.1   0.0   2.1   2   0   0   2   2   2   0 -
+    Simakov2022BCnS_genefamily_4273_RES  -            Simakov2022BCnS_genefamily_1894  -             0.0068   12.4   0.1     0.012   11.5   0.1   1.3   1   0   0   1   1   1   0 -
+    Simakov2022BCnS_genefamily_10977_HVU -            Simakov2022BCnS_genefamily_10977 -           6.2e-131  434.6  15.6    7e-131  434.4  15.6   1.0   1   0   0   1   1   1   1 -
+    """
     input:
         hmm = lambda wildcards: os.path.join(
             config["prot_to_color"][wildcards.coloredby],
             [x for x in list(os.listdir(
             config["prot_to_color"][wildcards.coloredby]))
                                       if x.endswith(".hmm")][0]),
+        rbh = lambda wildcards: config["prot_to_color_rbh"][wildcards.coloredby],
         proteins = config["tool"] + "/db/{sample}_prots.pep",
     output:
         hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"
     resources:
         mem_mb = 5000, # Some example consumption for single cores: 500M, 120M, 288M
-        time   = 7200  # 2 hours in seconds
-    threads: max(10, int(workflow.cores/4)) # use 10 threads or 1/4 of the cores, whichever is larger. Not much reason to use more than 10. I haven't seen much speedup after 10 threads.
-    shell:
-        """
-        hmmsearch --incE 1E-5 \
-          --tblout {output.hmm} \
-          --cpu {threads} \
-          --noali \
-          --notextw \
-          {input.hmm} \
-          {input.proteins} > /dev/null
-        """
+        time   = 120  # 2 hours in minutes
+    threads: 3 # 20231207 - I have not seen this peak above 2.5 threads, even when supplied with many more.
+    run:
+        # GET THE PROTEIN IDS IN THE RBH FILE
+        # first we load the .rbh file to process all of the possible protein IDs
+        rbhdf = pd.read_csv(input.rbh, sep = "\t")
+        # get all of the '*_gene' columns
+        gene_columns = [x for x in rbhdf.columns if x.endswith("_gene")]
+        # get all of the species prefixes, the first part of the '*_gene' columns. Keep everything up until the last _ character
+        all_species = ["_".join(x.split("_")[0:-1]) for x in gene_columns]
+        # concatenate the contents of the "*_gene" columns
+        all_protein_ids = set()
+        for thiscol in gene_columns:
+            all_protein_ids = all_protein_ids.union(set(rbhdf[thiscol].unique()))
+        # now, for the column rbh, tag "_" + the species name to the end of the protein ID, for each species, and add these to all_protein_ids
+        for thissp in all_species:
+            all_protein_ids = all_protein_ids.union(set([x + "_" + thissp for x in rbhdf["rbh"].unique()]))
+
+        # GET THE PROTEIN IDS IN THE SAMPLE
+        sample_protein_ids = set()
+        for record in fasta.parse(input.proteins):
+            sample_protein_ids.add(record.id)
+
+        # DECISION TIME
+        # If the protein ids in the sample are a subset of what was found in the RBH file, then print out a pseudo-hmmsearch file
+        # If not, continue with the actual hmm search.
+        if sample_protein_ids.issubset(all_protein_ids):
+            # write out a pseudo hmmsearch file
+            with open(output.hmm, "w") as o:
+                for thisid in sample_protein_ids:
+                    # we must determine which gene family (rbh column) in the rbh file this protein belongs to.
+                    thisgenefamily = ""
+                    potential_gene_family_id = "_".join(thisid.split("_")[0:-1])
+
+                    # this case applies to when this is a gene family protein name
+                    if potential_gene_family_id in rbhdf["rbh"].unique():
+                        # the genefamily is the rbh value of this column
+                        thisgenefamily = potential_gene_family_id
+                    else:
+                        for thiscol in gene_columns:
+                            # this case applies to when this is a specific protein ID that exists in another sample
+                            if thisid in rbhdf[thiscol].unique():
+                                # the genefamily is the rbh value of this column
+                                thisgenefamily = rbhdf.loc[rbhdf[thiscol] == thisid, "rbh"].values[0]
+                                break
+                    if thisgenefamily == "":
+                        raise IOError("The gene family wasn't assigned for some reason. This should not happpen. One possible cause is that the protein fasta file had a blank header.")
+                    # there are 19 fields. The first is the protein ID, the fourth is the gene family, and the rest are alignment scores
+                    o.write("{}\t-\t{}\t-\t0\t9999\t0\t0\t9999\t0\t1\t1\t1\t1\t1\t1\t1\t1\t1\n".format(
+                        thisid, thisgenefamily))
+        else:
+            # Example HMM command
+            hmm_command = f"hmmsearch --incE 1E-5 --tblout {output.hmm} --cpu {threads} --noali --notextw {input.hmm} {input.proteins} > /dev/null"
+            # Run the HMM command using subprocess
+            subprocess.run(hmm_command, shell=True)
 
 rule filter_each_hmm_result:
     """
@@ -2047,8 +2112,8 @@ rule filter_each_hmm_result:
         hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp"
     threads: 1
     resources:
-        mem_mb = 500,  # usually uses 0.2-0.3 GB of RAM
-        time   = 3600  # one hour in seconds
+        mem_mb = 500, # usually uses 0.2-0.3 GB of RAM
+        time   = 60   # one hour
     run:
         top_hits = 5
         outhandle = open(output.hmm, "w")
@@ -2058,8 +2123,6 @@ rule filter_each_hmm_result:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#"):
-                    # TODO delete this line
-                    print("debug: ", line, file = sys.stderr)
                     fields = line.split()
                     qseqid = fields[2].replace(".aligned", "")
                     sseqid = fields[0]
@@ -2098,8 +2161,8 @@ rule hmm_search_to_rbh:
     output:
         rbh = config["tool"] + "/step1-rbh/{coloredby}_{sample}_reciprocal_best_hits.hmm.rbh"
     resources:
-        mem_mb = 1000,  # should be relatively small
-        time   = 1800   # 30 minutes in seconds
+        mem_mb = 1000, # should be relatively small
+        time   = 30    # 30 minutes
     threads: 1
     run:
         ## final columns must be
@@ -2228,9 +2291,8 @@ rule plot_synteny_coloredby:
         yx  = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_yx_synteny_coloredby_{coloredby}.pdf",
     resources:
         mem_mb = 5000, # usually takes 2.5Gb of RAM
-        time   = 1800  # 30 minutes in seconds
-    threads:
-        1
+        time   = 30  # 30 minutes
+    threads: 1
     params:
         analysis = lambda wildcards: wildcards.analysis,
         orthology_method = config["diamond_or_blastp"],
@@ -2299,7 +2361,7 @@ rule plot_synteny_of_ALGs_plus_species:
         yx  = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_yx_synteny.pdf"
     resources:
         mem_mb = 5000, # usually takes ??GB of RAM
-        time   = 1800  # 30 minutes in seconds
+        time   = 30  # 30 minutes in seconds
     threads: 1
     params:
         orthology_method = config["diamond_or_blastp"],
@@ -2427,7 +2489,7 @@ rule ALG_decay_plot:
         data = config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.tsv"
     resources:
         mem_mb = 1000, # 20231206 This almost certainly will not take up 1GB of RAM. Just using this value temporarily.
-        time   = 600  # 20231206 Don't know what value. Just using 10 minutes. 10 minutes in seconds
+        time   = 10  # 20231206 Don't know what value. Just using 10 minutes. 10 minutes in seconds
     threads: 1
     run:
         # read in the rbh dataframe
