@@ -183,7 +183,7 @@ rule index_genome_miniprot:
     input:
         genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz",
     output:
-        mpi    = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz.mpi"
+        mpi    = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz.mpi")
     threads: 8
     resources:
         mem_mb = 20000, # The RAM usage can blow up during indexing. Often > 10GB.
@@ -202,7 +202,7 @@ rule map_proteins:
         genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz",
         mpi    = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz.mpi"
     output:
-        paf = config["tool"] + "/output/mapped_reads/{assemAnn}/{LG_name}_to_{assemAnn}.paf"
+        paf = temp(config["tool"] + "/output/mapped_reads/{assemAnn}/{LG_name}_to_{assemAnn}.paf")
     threads: 8
     resources:
         mem_mb = 15000, # This can peak at up to 7GB of RAM on 8 threads. 15 for overhead.
@@ -324,6 +324,11 @@ rule download_unannotated_genomes:
         time   = 20  # 20 minutes.
     shell:
         """
+        # Wait a random amount of time up to 2 minutes to avoid overloading the NCBI servers.
+        SLEEPTIME=$((1 + RANDOM % 120))
+        echo "Sleeping for $SLEEPTIME seconds to avoid overloading the NCBI servers."
+        sleep $SLEEPTIME
+
         # Set the path of the target file
         TARGETFILE={output.assembly}
 
@@ -355,9 +360,6 @@ rule download_unannotated_genomes:
             echo "Download failed after $MAX_ATTEMPTS attempts. Exiting..."
             exit 1
         fi
-
-        echo "Sleeping for 30 seconds to avoid overloading the NCBI servers."
-        sleep 60  # Wait for 1 minutes (60 seconds)
         """
 
 rule unzip_annotated_genomes:
