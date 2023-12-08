@@ -45,6 +45,15 @@ config["tool"] = "odp_ncbi_genome_db"
 if ("directory" not in config) and ("accession_tsvs" not in config):
     raise IOError("You must provide either a directory of the annotated and unannotated genome lists, or a list of the paths to those tsv files. Read the config file.")
 
+config["tempdir"] = "/tmp"
+# check that the tempdir exists
+if "tempdir" not in config:
+    raise IOError("You must provide a temporary directory to store temporary files. Read the config file.")
+# strip all trailing slashes from the tempdir
+config["temp"] = config["tempdir"].rstrip("/").rstrip("\\")
+if not os.path.isdir(config["tempdir"]):
+    raise IOError("The temporary directory you provided does not exist. {}".format(config["tempdir"]))
+
 if "directory" in config:
     # ensure that the user also hasn't specified the accession tsvs
     if "accession_tsvs" in config:
@@ -123,7 +132,7 @@ wildcard_constraints:
 rule all:
     input:
         expand(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz", assemAnn=config["assemAnn"]),
-        LG_outfiles,
+        #LG_outfiles,
         expand(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.chrom",
                assemAnn=config["assemAnn"], LG_name=LG_to_db_directory_dict.keys()),
         expand(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.pep",
@@ -132,33 +141,6 @@ rule all:
                LG_name=LG_to_db_directory_dict.keys()),
         expand("NCBI_odp_sp_list.unannotated.{LG_name}.txt",
                LG_name=LG_to_db_directory_dict.keys()),
-
-
-# I am not using this rule at the moment
-#rule get_chromsize_of_one_species:
-#    """
-#    This chromsize file is used later to speed up the synteny_plot analysis.
-#    The first column is the sample name
-#    2nd col is the scaf name
-#    3rd col is the scaf length
-#
-#    We filter out the scaffolds that are too small here.
-#
-#    We require that the sample pass the input file checks first
-#    """
-#    input:
-#        fasta     = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz"
-#    output:
-#        chromsize = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chromsize"
-#    resources:
-#        mem_mb = 2000, # Use 2GB of RAM in case there are large chromosomes
-#        time   = 10    # ten minutes
-#    threads:
-#        1
-#    run:
-#        with open(output.chromsize, "w") as o:
-#            for record in fasta.parse(input.fasta):
-#                o.write("{}\t{}\t{}\n".format(wildcards.assemAnn, record.id, len(record.seq)))
 
 rule generate_LG_fasta_sequence:
     """
@@ -179,38 +161,78 @@ rule generate_LG_fasta_sequence:
                 for record in fasta.parse(input.LG_dir + "/aligned/" + fastafile):
                     o.write(">{}\n{}\n".format(record.id, record.seq.replace("-", "")))
 
-rule index_genome_miniprot:
-    input:
-        genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz",
-    output:
-        mpi    = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz.mpi")
-    threads: 8
-    resources:
-        mem_mb = 20000, # The RAM usage can blow up during indexing. Often > 10GB.
-        time   = 40    # 20 minutes
-    shell:
-        """
-        miniprot -t {threads} -d {output.mpi} {input.genome}
-        """
-
-rule map_proteins:
+def miniprot_get_mem_mb(wildcards, attempt):
     """
-    Map the proteins of each ALG to each file.
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 8000,
+                   2: 16000,
+                   3: 32000,
+                   4: 64000,
+                   5: 128000,
+                   6: 256000,
+                   7: 512000,
+                   8: 1024000}
+    return attemptdict[attempt]
+
+rule miniprot:
+    """
+    This handles all of the miniprot steps. Both the indexing and the mapping.
+    Doing it this way prevents keeping a ton of temporary data on the hard drive.
     """
     input:
         pep  = config["tool"] + "/input/LG_proteins/{LG_name}.fasta",
         genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz",
-        mpi    = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz.mpi"
     output:
-        paf = temp(config["tool"] + "/output/mapped_reads/{assemAnn}/{LG_name}_to_{assemAnn}.paf")
+        paf  = config["tool"] + "/output/mapped_reads/{assemAnn}/{LG_name}_to_{assemAnn}.paf"
     threads: 8
+    retries: 8
+    params:
+        mpi_suffix = "{LG_name}_{assemAnn}.fasta.gz.mpi" # this is the temporary index file
     resources:
-        mem_mb = 15000, # This can peak at up to 7GB of RAM on 8 threads. 15 for overhead.
-        time   = 40  # This can take a long time with large genomes.
+        tmpdir = config["tempdir"], # the place where the temporary index file will be stored
+        mem_mb = miniprot_get_mem_mb, # The RAM usage can blow up during indexing. Often > 10GB. 6Gbp genomes need more than 20GB of RAM.
+        time   = 60 # 20 minutes
     shell:
         """
-        miniprot -t {threads} {input.mpi} {input.pep} > {output.paf}
+        INDEXFILE=$TMPDIR/{params.mpi_suffix}
+        # don't index if the file already exists
+        if [ ! -f ${{INDEXFILE}} ]; then
+            # INDEXING step
+            echo "Indexing the genome: Genome {wildcards.assemAnn} for LG {wildcards.LG_name}"
+            miniprot -t {threads} -d ${{INDEXFILE}} {input.genome}
+        fi
+
+        # MAPPING step
+        echo ""
+        echo "Mapping the proteins to the genome. {wildcards.LG_name} to {wildcards.assemAnn}"
+        miniprot -t {threads} ${{INDEXFILE}} {input.pep} > {output.paf}
+
+        # REMOVE the index
+        echo ""
+        echo "Removing the index file: ${{INDEXFILE}}"
+        rm ${{INDEXFILE}}
         """
+
+#rule map_proteins:
+#    """
+#    Map the proteins of each ALG to each file.
+#    """
+#    input:
+#        pep  = config["tool"] + "/input/LG_proteins/{LG_name}.fasta",
+#        mpi  = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta.gz.mpi"
+#    output:
+#        paf  = config["tool"] + "/output/mapped_reads/{assemAnn}/{LG_name}_to_{assemAnn}.paf"
+#    threads: 8
+#    retries: 8
+#    resources:
+#        mem_mb = miniprot_get_mem_mb, # This can peak at up to 7GB of RAM on 8 threads. 15 for overhead.
+#        time   = 40  # This can take a long time with large genomes.
+#    shell:
+#        """
+#        # MAPPING step
+#        miniprot -t {threads} {input.mpi} {input.pep} > {output.paf}
+#        """
 
 rule filter_paf_for_longer_scaffold:
     """
@@ -315,6 +337,7 @@ rule download_unannotated_genomes:
         datasets = os.path.join(bin_path, "datasets")
     output:
         assembly = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/ncbi_dataset.zip")
+    retries: 3
     params:
         outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/",
         APIstring = "" if "API_key" not in locals() else "--api-key {}".format(locals()["API_key"])
@@ -329,37 +352,10 @@ rule download_unannotated_genomes:
         echo "Sleeping for $SLEEPTIME seconds to avoid overloading the NCBI servers."
         sleep $SLEEPTIME
 
-        # Set the path of the target file
-        TARGETFILE={output.assembly}
-
-        # Maximum number of download attempts
-        MAX_ATTEMPTS=5
-
         # Function to download the file
-        download_file() {{
-            {input.datasets} download genome accession {wildcards.assemAnn} {params.APIstring} --include genome || true
-        }}
-
-        # Attempt to download the file up to MAX_ATTEMPTS times
         cd {params.outdir}
-        for ((i=1; i<=MAX_ATTEMPTS; i++)); do
-            download_file
-
-            # Check if the file exists
-            if [ -e ncbi_dataset.zip ]; then
-                echo "File downloaded successfully."
-                break
-            else
-                echo "Download attempt $i failed. Waiting for 5 minutes before the next attempt..."
-                sleep 60  # Wait for 1 minutes (60 seconds)
-            fi
-        done
-
-        # Check one last time if the file exists
-        if [ ! -e ncbi_dataset.zip ]; then
-            echo "Download failed after $MAX_ATTEMPTS attempts. Exiting..."
-            exit 1
-        fi
+        {input.datasets} download genome accession {wildcards.assemAnn} \
+            {params.APIstring} --include genome || true
         """
 
 rule unzip_annotated_genomes:
@@ -382,7 +378,7 @@ rule unzip_annotated_genomes:
         cd {params.outdir}
         unzip -o ncbi_dataset.zip
         cd $TMPDIR
-        find {params.outdir} -name "*.fna" -exec mv {{}} {output.fasta} \;
+        find {params.outdir} -name "*.fna" -exec mv {{}} {output.fasta} \\;
         """
 
 rule zip_fasta_file:
@@ -396,7 +392,7 @@ rule zip_fasta_file:
     threads: 1
     resources:
         mem_mb = 1000, # 1 GB of RAM
-        time   = 10   # 10 minutes to unzip
+        time   = 20   # Usually takes less than 10 minutes. Just do 20 for exceptional cases. Will go beyond 20 if needed.
     shell:
         """
         echo "Gzipping the fasta file."
@@ -417,6 +413,7 @@ rule generate_assembled_config_entry:
         yaml   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.yaml.part",
     threads: 1
     resources:
+        time    = 5,
         mem_mb  = 1000
     run:
         # load in the dataframe of the annotated genomes
@@ -481,7 +478,8 @@ rule collate_assembled_config_entries:
         yaml = "NCBI_odp_db.unannotated.{LG_name}.yaml"
     threads: 1
     resources:
-        mem_mb  = 1000
+        mem_mb  = 1000,
+        time    = 5
     shell:
         """
         echo "species:" > {output.yaml}
