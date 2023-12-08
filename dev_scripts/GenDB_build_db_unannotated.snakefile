@@ -328,7 +328,7 @@ rule paf_to_chrom_and_pep:
                 if record.id in chromdf["query"].values:
                     o.write(">{}\n{}\n".format(record.id, record.seq))
 
-rule download_unannotated_genomes:
+rule download_unzip:
     """
     We have selected the unannotated genomes to download.
     For these genomes we need to find a way to annotate them.
@@ -336,7 +336,8 @@ rule download_unannotated_genomes:
     input:
         datasets = os.path.join(bin_path, "datasets")
     output:
-        assembly = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/ncbi_dataset.zip")
+        assembly = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/ncbi_dataset.zip"),
+        fasta    = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta")
     retries: 3
     params:
         outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/",
@@ -352,34 +353,41 @@ rule download_unannotated_genomes:
         echo "Sleeping for $SLEEPTIME seconds to avoid overloading the NCBI servers."
         sleep $SLEEPTIME
 
+        # Save the current directory
         # Function to download the file
         cd {params.outdir}
         {input.datasets} download genome accession {wildcards.assemAnn} \
             {params.APIstring} --include genome || true
+
+        # now we try to unzip it
+        unzip -o ncbi_dataset.zip
+
+        # Go back to the original directory
+        find . -name "*.fna" -exec mv {{}} {wildcards.assemAnn}.fasta \\;
         """
 
-rule unzip_annotated_genomes:
-    """
-    We just downloaded the genome data packet. Now unzip it, delete the zip file, and rename things
-    """
-    input:
-        assembly = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/ncbi_dataset.zip"
-    output:
-        fasta    = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta")
-    threads: 1
-    resources:
-        mem_mb = 1000, # 1 GB of RAM
-        time   = 10   # 10 minutes
-    params:
-        outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/"
-    shell:
-        """
-        TMPDIR=`pwd`
-        cd {params.outdir}
-        unzip -o ncbi_dataset.zip
-        cd $TMPDIR
-        find {params.outdir} -name "*.fna" -exec mv {{}} {output.fasta} \\;
-        """
+#rule unzip_annotated_genomes:
+#    """
+#    We just downloaded the genome data packet. Now unzip it, delete the zip file, and rename things
+#    """
+#    input:
+#        assembly = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/ncbi_dataset.zip"
+#    output:
+#        fasta    = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta")
+#    threads: 1
+#    resources:
+#        mem_mb = 1000, # 1 GB of RAM
+#        time   = 10   # 10 minutes
+#    params:
+#        outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/"
+#    shell:
+#        """
+#        TMPDIR=`pwd`
+#        cd {params.outdir}
+#        unzip -o ncbi_dataset.zip
+#        cd $TMPDIR
+#        find {params.outdir} -name "*.fna" -exec mv {{}} {output.fasta} \\;
+#        """
 
 rule zip_fasta_file:
     """
