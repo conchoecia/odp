@@ -389,7 +389,8 @@ rule download_unzip:
 #        find {params.outdir} -name "*.fna" -exec mv {{}} {output.fasta} \\;
 #        """
 
-rule zip_fasta_file:
+
+rule gzip_fasta_file:
     """
     In this step zip the fasta file to conserve space.
     """
@@ -400,7 +401,7 @@ rule zip_fasta_file:
     threads: 1
     resources:
         mem_mb = 1000, # 1 GB of RAM
-        time   = 20   # Usually takes less than 10 minutes. Just do 20 for exceptional cases. Will go beyond 20 if needed.
+        time   = 50   # Usually takes less than 10 minutes. Just do 50 for exceptional cases. Exceptional cases usually take 150 minutes.
     shell:
         """
         echo "Gzipping the fasta file."

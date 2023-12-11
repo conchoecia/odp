@@ -146,7 +146,7 @@ if (config["prot_to_color"] == {}) and (config["prot_to_color_rbh"] == {}):
         # now find the .rbh file in the trim directory
         for thisfile in os.listdir(thisdir):
             if thisfile.endswith(".rbh"):
-                config["prot_to_color_rbh"][trim] = os.path.join(thisdir, thisfile) 
+                config["prot_to_color_rbh"][trim] = os.path.join(thisdir, thisfile)
 
 # come up with a list of blast/diamond jobs
 # we must have every combination that is in the analyses_list
@@ -269,7 +269,7 @@ rule check_input_legality:
         duplicate_handling = config["duplicate_proteins"]
     resources:
         mem_mb = 2000,  # 20231207 - saw this peaking around 700MB on a 800Mbp genome
-        time   = 10   # 10 minutes 
+        time   = 10   # 10 minutes
     threads: 1
     run:
         # We always check to see if the chrom file is legal, regardless of whether we're ignoring duplicate prots.
@@ -288,6 +288,18 @@ rule check_input_legality:
         else:
             raise IOError("Right now we can only handle fail and pass cases. Sorry.")
 
+def filtprot_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for filtering prots could change.
+    """
+    attemptdict = {1: 2000,
+                   2: 4000,
+                   3: 16000,
+                   4: 64000,
+                   5: 256000,
+                   6: 512000}
+    return attemptdict[attempt]
+
 rule filter_prots:
     """
     Sometimes the prot file with have sequences that are not present in
@@ -301,8 +313,9 @@ rule filter_prots:
         input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
         pep = config["tool"] + "/db/{sample}_prots.pep"
+    retries: 6
     resources:
-        mem_mb = 500, # should be small
+        mem_mb = filtprot_get_mem_mb, # should be small
         time   = 10  # ten minutes
     threads: 1
     run:
@@ -347,18 +360,16 @@ rule diamond_blast:
     resources:
         mem_mb = 2000, # 20231206 - I don't actually know how long this will take.
         time   = 20    # 20231206 - I don't actually know how long this will take. Currently 20 minutes in seconds.
-    threads: 10
+    threads: 8
     params:
         search_method = config["diamond_or_blastp"]
     priority: 1
     shell:
         """
         if [ "{params.search_method}" = "blastp" ]; then
-            blastp -query {input.pep1} -db {input.pep2} \
-              -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
+            blastp -query {input.pep1} -db {input.pep2} -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
         elif [ "{params.search_method}" = "diamond" ]; then
-            diamond blastp --query {input.pep1} --db {input.dmnd2} \
-              --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
+            diamond blastp --query {input.pep1} --db {input.dmnd2} --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
         fi
         """
 
@@ -405,7 +416,7 @@ rule n_ways_reciprocal_best:
     For a protein to be retained, it must be a reciprocal-best hit in three samples.
 
               A       B
-             / \    /| |
+             / |    /| |
             B___C  A-+-C , ... et cetera. These are k-complete graphs.
                    | |/
                     D
@@ -639,7 +650,7 @@ def calc_D_for_y_and_x(df, xsample, ysample):
                                   "{}_break_ix".format(thisdir)],
                             ascending = True)
         df = df.reset_index(drop = True)
-        print("df\n", df)
+        #print("df\n", df)
         breaks = df["{}_breakchrom".format(thisdir)].unique()
         thisdir_dfs = []
         # this just calculates Dx
@@ -1737,7 +1748,8 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
         "Dots that are a solid color are in cells with a FET p-value less than or equal to 0.05.",
         "Dots that are translucent are in cells with a FET p-value greater than 0.05.",
         "The Dx and Dy values depict places where there may be sudden breaks in synteny.",
-        "See the supplementary information the following paper for more information on Dx and Dy: Simakov, Oleg, et al. \"Deeply conserved synteny resolves early events in vertebrate evolution.\" Nature Ecology & Evolution 4.6 (2020): 820-830.",
+        "See the supplementary information the following paper for more information on Dx and Dy: Simakov, Oleg, et al.",
+        "Deeply conserved synteny resolves early events in vertebrate evolution. Nature Ecology & Evolution 4.6 (2020): 820-830.",
         "(b) depicts the same information as panel a, but it is plotted in the",
         "organisms chromosome basepair coordinates rather than gene index.",
         "This is useful for visualizing gene-poor regions of the chromosomes",
@@ -1761,6 +1773,19 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     plt.savefig(synplot)
 
+def chromsize_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 4000,
+                   2: 8000,
+                   3: 16000,
+                   4: 32000,
+                   5: 64000,
+                   6: 128000,
+                   7: 256000}
+    return attemptdict[attempt]
+
 rule get_chromsize_of_one_species:
     """
     This chromsize file is used later to speed up the synteny_plot analysis.
@@ -1778,8 +1803,9 @@ rule get_chromsize_of_one_species:
     output:
         chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
     resources:
-        mem_mb = 2000, # Use 2GB of RAM in case there are large chromosomes
-        time   = 10   # ten minutes in seconds
+        mem_mb = chromsize_get_mem_mb, # Use 2GB of RAM in case there are large chromosomes
+        time   = 20   # ten minutes in seconds
+    retries: 8
     threads: 1
     run:
         with open(output.chromsize, "w") as o:
@@ -2027,6 +2053,8 @@ rule hmm_against_prots:
     Simakov2022BCnS_genefamily_4972_HVU  -            Simakov2022BCnS_genefamily_1894  -            0.00018   17.6   0.1     0.002   14.1   0.0   2.1   2   0   0   2   2   2   0 -
     Simakov2022BCnS_genefamily_4273_RES  -            Simakov2022BCnS_genefamily_1894  -             0.0068   12.4   0.1     0.012   11.5   0.1   1.3   1   0   0   1   1   1   0 -
     Simakov2022BCnS_genefamily_10977_HVU -            Simakov2022BCnS_genefamily_10977 -           6.2e-131  434.6  15.6    7e-131  434.4  15.6   1.0   1   0   0   1   1   1   1 -
+
+    # Notes on thread usage: This program seems to only use each thread at 50% load, so providing 4 cores appears to use 2 or 3 cores. More cores does make it go faster, but not linearly.
     """
     input:
         hmm = lambda wildcards: os.path.join(
@@ -2040,8 +2068,8 @@ rule hmm_against_prots:
         hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"
     resources:
         mem_mb = 5000, # Some example consumption for single cores: 500M, 120M, 288M
-        time   = 120  # 2 hours in minutes
-    threads: 3 # 20231207 - I have not seen this peak above 2.5 threads, even when supplied with many more.
+        time   = 180  # 20231211 - 3 hours in minutes. 2 hours was too short with 3 threads. Now trying with 8 threads.
+    threads: 8 # 20231211 - 3 threads was very slow and used only around 500MB of RAM at peak. Trying 8 threads.
     run:
         # GET THE PROTEIN IDS IN THE RBH FILE
         # first we load the .rbh file to process all of the possible protein IDs
@@ -2096,6 +2124,19 @@ rule hmm_against_prots:
             # Run the HMM command using subprocess
             subprocess.run(hmm_command, shell=True)
 
+def filthmm_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 1000,
+                   2: 2000,
+                   3: 4000,
+                   4: 8000,
+                   5: 16000,
+                   6: 320000,
+                   7: 640000}
+    return attemptdict[attempt]
+
 rule filter_each_hmm_result:
     """
     The header fields are:
@@ -2111,8 +2152,9 @@ rule filter_each_hmm_result:
     output:
         hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp"
     threads: 1
+    retries: 7
     resources:
-        mem_mb = 500, # usually uses 0.2-0.3 GB of RAM
+        mem_mb = filthmm_get_mem_mb, # usually uses 0.2-0.3 GB of RAM
         time   = 60   # one hour
     run:
         top_hits = 5
@@ -2150,6 +2192,20 @@ rule filter_each_hmm_result:
                     prev = qseqid
         outhandle.close()
 
+def hmmsearch_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 2000,
+                   2: 4000,
+                   3: 8000,
+                   4: 16000,
+                   5: 32000,
+                   6: 64000,
+                   7: 128000,
+                   8: 256000}
+    return attemptdict[attempt]
+
 rule hmm_search_to_rbh:
     """
     converts a hmmsearch output to a reciprocal best hit file
@@ -2160,8 +2216,9 @@ rule hmm_search_to_rbh:
         coloredby_rbh = lambda wildcards: config["prot_to_color_rbh"][wildcards.coloredby]
     output:
         rbh = config["tool"] + "/step1-rbh/{coloredby}_{sample}_reciprocal_best_hits.hmm.rbh"
+    retries: 8
     resources:
-        mem_mb = 1000, # should be relatively small
+        mem_mb = hmmsearch_get_mem_mb, # should be relatively small
         time   = 30    # 30 minutes
     threads: 1
     run:
