@@ -34,6 +34,8 @@ PREREQUISITES:
 import argparse
 import numpy as np
 from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+import itertools
 import os
 import pandas as pd
 import re
@@ -82,7 +84,7 @@ def hex_to_rgb(hex):
     hlen = len(hex)
     return tuple(int(hex[i:i+hlen//3], 16) for i in range(0, hlen, hlen//3))
 
-def parse_rbh_file(rbh_file, ALGname) -> pd.DataFrame:
+def parse_rbh_file(rbh_file) -> pd.DataFrame:
     """
     Reads in an rbh file from ALGs and returns the following dataframe:
 
@@ -359,7 +361,7 @@ def plot_ALG_fusions(Fusion_df, ALG_df, ALGname, outprefix=None):
         outfile = "{}_ALG_fusions.pdf".format(outprefix)
     else:
         outfile = "ALG_fusions.pdf"
-    plt.savefig(outfile, bbox_inches='tight')
+    plt.savefig(outfile)
 
 def image_sp_matrix_to_lineage(taxidstring) -> Image:
     """
@@ -739,6 +741,115 @@ def standard_plot_out(perspchrom, outprefix)->None:
     composite_image = image_concatenate_horizontally(concatenate_these_images)
     composite_image.save("{}_composite_image_unclustered.png".format(outprefix))
 
+def plot_missing_vs_colocalized(perspchrom, fileprefix):
+    """
+    This makes a dotplot of the number of missing combinations vs the number of colocalizations.
+
+    To find the number of missing combinations, we find the non-tuple columns with zeros, then make
+     combinations of them.
+    To find the number of colocalizations, we find the number of 1s in the tuple columns.
+    """
+    # Find all of the columns that are not tuples or tuple-like
+    non_tuple_columns = [x for x in perspchrom.columns if not isinstance(x, tuple)]
+    # remove the columns that are ["species", "taxid", "taxidstring"]
+    remove_these = ["species", "taxid", "taxidstring"]
+    non_tuple_columns = [x for x in non_tuple_columns if x not in remove_these]
+    # filter the df
+    entries = []
+    # go through each row of the pandas dataframe perspchrom
+    for i, row in perspchrom.iterrows():
+        # get missing non-tuple columns
+        missing_ALGs = [x for x in non_tuple_columns if row[x] == 0]
+        # get the number of n choose two combinations of the missing ALGs
+        missing_combinations = len(list(itertools.combinations(missing_ALGs, 2)))
+        # get the number of colocalizations
+        number_colocalizations = len([x for x in row.index if isinstance(x, tuple) and row[x] == 1])
+        entries.append({"missing_combinations": missing_combinations,
+                        "number_colocalizations": number_colocalizations})
+    # Make a scatterplot of the missing combinations vs the number of colocalizations. Use matplotlib only.
+    # The x-axis is the number of missing combinations
+    # The y-axis is the number of colocalizations
+    df = pd.DataFrame(entries)
+    plt.scatter(df["missing_combinations"], df["number_colocalizations"])
+    plt.xlabel("Number of missing combinations")
+    plt.ylabel("Number of colocalizations")
+    filename = "{}_missing_vs_colocalized.pdf".format(fileprefix)
+    plt.show()
+
+def missing_present_ALGs(df, min_for_missing = 0.8):
+    """
+    This takes in a dataframe and returns lists of which ALGs are missing and present.
+    The min_for_missing is the minimum fraction of species in this clade that must have the ALG missing
+      for this ALG to be considered missing.
+
+    Returns the missing_ALGs and the present_ALGs as two separate lists.
+    """
+    # first get all of the ALGs from this dataframe by finding the non-tuple columns that are not in ["species", "taxid", "taxidstring"]
+    remove_these_columns = ["species", "taxid", "taxidstring", "changestrings"]
+    ALG_columns = [x for x in df.columns if not isinstance(x, tuple) and x not in remove_these_columns]
+    # Now we find the ALGs that have the min_for_missing fraction of species missing
+    missing_ALGs = []
+    for thisALG in ALG_columns:
+        # get the fraction of species that have this ALG missing
+        fraction_missing = len(df[df[thisALG] == 0]) / len(df)
+        if fraction_missing >= min_for_missing:
+            missing_ALGs.append(thisALG)
+    present_ALGs = [x for x in ALG_columns if x not in missing_ALGs]
+    return missing_ALGs, present_ALGs
+
+def separate_ALG_pairs(df, min_for_noncolocalized = 0.5):
+    """
+    This takes in a dataframe and returns a list of the ALGs
+     that are confirmed to be separated in this clade.
+
+    We need to identify the ALGs that are separated in this clade.
+    We do not try to find ALGs that are fused in this clade, because that
+      doesn't allow us to polarize against what we know about the clade in question:
+      the ALGs that have been fused in this clade.
+    Additionally, we do not try to find ALGs that are fused, because we may have
+      lost the ability to detect fusion in this clade depending on the genome quality
+      or if the ALGs in question have dispersed.
+
+    By using the logic above, we push back the fusion event to the earliest possible
+      node, rather than the latest. This is the same preference that we have given
+      to detecting the node on which the ALGs are lost.
+    """
+    # First get all of the ALGs from this dataframe by finding the non-tuple
+    #   columns that are not in ["species", "taxid", "taxidstring"]
+    remove_these_columns = ["species", "taxid", "taxidstring", "changestrings"]
+    ALG_columns  = [x for x in df.columns if not isinstance(x, tuple) and x not in remove_these_columns]
+    pair_columns = [x for x in df.columns if isinstance(x, tuple) and x not in remove_these_columns]
+
+    # We must count the number of detectable pairs,
+    #  and we must also count the number of times the pairs are NOT colocalized.
+    # Definition: a pair is detectable if both ALGs are present in that species. (1 values in the ALG columns)
+    # Definition: a pair is colocalized if both ALGs are present in the same chromosome in that species.
+    pair_detectability_count = {x: 0 for x in pair_columns}
+    pair_nonlocalized_count  = {x: 0 for x in pair_columns}
+    # go through the rows of the dataframe. For the detectability count, go through ALG column pairs to see if they are both 1.
+    # For the detected count, go through the pair columns to see if they are 1.
+    for i, row in df.iterrows():
+        for pair in pair_columns:
+            # if the pair is detectable, then add one to the detectability count
+            if row[pair[0]] == 1 and row[pair[1]] == 1:
+                pair_detectability_count[pair] += 1
+                # In this case, as we only see if they are nonlocalized if they were both detected in the first place.
+                # if the pair is NOT detected, then add one to the detected count
+                if row[pair] == 0:
+                    pair_nonlocalized_count[pair] += 1
+    # In this dictionary, a value of 0 means that the pair was never detected.
+    #  The reason it was never detected could be because it wasn't detectable (The ALGs have dispersed)
+    #  Or the ALGs were detectable, but they were colocalized
+    pair_nonlocalized_detectability_ratio = {}
+    for thispair in pair_columns:
+        if pair_detectability_count[thispair] > 0:
+            pair_nonlocalized_detectability_ratio[thispair] = pair_nonlocalized_count[thispair] / pair_detectability_count[thispair]
+        else:
+            pair_nonlocalized_detectability_ratio[thispair] = 0
+    # return the pairs that are not colocalized in at least min_for_noncolocalized fraction of the species
+    return [x for x in pair_nonlocalized_detectability_ratio
+            if pair_nonlocalized_detectability_ratio[x] >= min_for_noncolocalized]
+
 def main():
     # parse the args
     args = parse_args()
@@ -884,8 +995,12 @@ def main():
     ncbi = NCBITaxa()
     # Now that we have looked at every scaffold in every species, add a few missing fields
     for thissp in sp_df:
-        # just get the integer at the end of this string by removing all the alpha characters
-        thistaxid = int(re.sub(r"[A-Za-z]", "", thissp).replace(".",""))
+        # Just get the integer at the end of this string by removing all the alpha characters
+        # Sometimes there is a preceding '.' or '-' that we need to remove. Just keep digits.
+        thistaxid = int(re.sub(r"[A-Za-z]", "", thissp).replace(".","").replace("-",""))
+        # Raise an error if there is something in the string that is not 0-9
+        if not re.match(r"^[0-9]*$", str(thistaxid)):
+            raise ValueError("There is a non-numeric character in the taxid string")
         # get the NCBI taxid string
         thistaxidstring = ";".join([str(x) for x in ncbi.get_lineage(thistaxid)])
         sp_df[thissp]["taxid"] = thistaxid
@@ -901,17 +1016,24 @@ def main():
     perspchrom = perspchrom.rename(columns={"index": "species"})
     # sort by the taxidstring
     perspchrom = perspchrom.sort_values(by="taxidstring", ascending=True)
-    # save this dataframe to a text file called per_species_ALG_presence_fusions.tsv
-    perspchrom.to_csv("per_species_ALG_presence_fusions.tsv", sep='\t', index=False)
+    # THIS FILE IS SAVED LATER
+
     # now save it in a way that can be used by R
     # get all of the columns that are not the species, taxid, or taxidstring
-    perspchrom_R = perspchrom.drop(columns=["species", "taxid", "taxidstring"])
+    drop_these_columns = ["species", "taxid", "taxidstring"]
+    if "changestrings" in perspchrom.columns:
+        drop_these_columns.append("changestrings")
+    perspchrom_R = perspchrom.drop(columns=drop_these_columns)
     # save it in a format that can be used by R. meaning that we surround the indices with quotation marks and sep with commas
     perspchrom_R.to_csv("per_species_ALG_presence_fusions_R.tsv", sep=',', index=True, header=True)
+
+    ## make a scatterplot of the # of lost ALG combos vs number of fused ALG combos. Color by taxid
+    #plot_missing_vs_colocalized(perspchrom, "per_species_ALG_presence_colocalizations")
 
     # make figures of the per-species plots
     standard_plot_out(perspchrom, "perSpecies")
 
+    ### This block makes a simple binary image of the fusion matrix
     # Create a binary matrix (0s and 1s)
     matrix = perspchrom_R.values
     # Convert the matrix to a Pillow Image
@@ -921,6 +1043,180 @@ def main():
     # print the tree to a .tre file
     tree = ncbi.get_topology([int(x) for x in perspchrom["taxid"].tolist()])
 
+    # *********************************************************************************************************************
+    #     ┏┓┓ ┏┓  ┳┓┳┏┓┏┓┏┓┳┓┏┓┳┏┓┳┓  ┏┓┳┓┳┓  ┏┓┳┳┏┓┳┏┓┳┓
+    #     ┣┫┃ ┃┓  ┃┃┃┗┓┃┛┣ ┣┫┗┓┃┃┃┃┃  ┣┫┃┃┃┃  ┣ ┃┃┗┓┃┃┃┃┃
+    #     ┛┗┗┛┗┛  ┻┛┻┗┛┃ ┗┛┛┗┗┛┻┗┛┛┗  ┛┗┛┗┻┛  ┻ ┗┛┗┛┻┗┛┛┗
+    # *********************************************************************************************************************
+
+    # Try to come up with per-species number of changes
+    # When I mark "changes on a node", I mean that there was a change on the branch leading up to this node.
+    #  This logic applies to the species-level, but also to internal nodes.
+    #  For each node, there is a possibility to lose ALGs, or to gain fusions.
+    #  For the fusions, we must should consider that AxB fusing with CxD is just one event, and we should not count AxC and AxD and BxC and BxD as separate events.
+    #   To satisfy this we can build a graph and count connected components.
+    # Do this species-wise by iterative through the perspchrom df
+
+    # We need cutoffs to identify if something is missing or not
+    # The cutoffs for missing ALGs and missing ALG combos are different
+    # For an ALG to be missing, it is likely missing in the entire clade. To give some wiggle room,
+    #  we will ask if this ALG is missing in 80% of the comparison clade to determine whether it is absent or not.
+    #  ----- ALG PRESENCE ABSENCE -----
+    #  For each species, when we begin we must mark which ALGs are conserved in this species.
+    #  These can never be lost, so these will never appear in the changeString.
+    #  If the ALG is missing in 80% of the comparison clade,
+    #      and the ALG is absent in the sample, this means that the loss was earlier.
+    #          We don't do anything in this case.
+    #      but the ALG is present in the sample, this likely means that the ALG was
+    #          lost somewhere else in this clade.
+    #          We don't do anything in this case.
+    #  Otherwise (if the ALG is not missing in 80% of the comparison clade),
+    #      and if the ALG is absent in this sample, then this suggests that the ALG was
+    #          dispersed on this branch. We should mark this as a loss, and record the loss.
+    #      and if the ALG is is present in the sample, then this suggests that the ALG is conserved in both clades.
+    #          We don't need to do anything in this case.
+    perspchrom = perspchrom.reset_index(drop=True)
+    # We need to know the node for which the ALGs were inferred.
+    #  Once we hit this node in the NCBI taxonomy string, we place the remaining "lost ALGs" on the branch between the previous node and this node.
+    ALG_node = "1;131567;2759;33154;33208"
+    # First we need to track which ALGs are present in this dataset, and what combinations are tracked in the df.
+    remove_these = ["species", "taxid", "taxidstring", "changestrings"]
+    ALG_columns = [x for x in perspchrom.columns if not isinstance(x, tuple) and not x in remove_these]
+    ALG_combos  = [x for x in perspchrom.columns if isinstance(x, tuple) and not x in remove_these]
+    perspchrom["changestrings"] = ""
+
+    # This is a magic number used to determine whether an ALG is missing or not.
+    #  If an ALG is missing in 80%, or 0.8, of the clade in question, then we consider it missing.
+    min_for_missing = 0.8
+    # If the other clade's ALGs are detectable, and are not colocalized in at least 50% of the clade,
+    #  then we consider that this ALG pair is not colocalized in this clade.
+    min_for_noncolocalized = 0.5
+
+    for i, row in perspchrom.iterrows():
+        # ----- ALG PRESENCE ABSENCE -----
+        # For this species, we keep track of the changes on each branch with a structured list.
+        # The format is [taxid, "(gain|loss)", "taxid", "(gain|loss)", ...]
+        #  We add new entries as we go through the tree to the root.
+        #  At the end, we flip the order and make a parsable string
+        changeString = []
+        # we have access to ["species", "taxid", "taxidstring"]
+        thistaxidstring = row["taxidstring"]
+        ALGsAlreadyFused = []
+        # note the ALGs that have a value of 1 here. These are conserved in this species and will never be in changeString
+        ALGsConservedInThisSample    = [x for x in ALG_columns if row[x] == 1]
+        # Note the things specifically missing in this species. These will be added to the changeString at some point
+        #  This list will not be changed at all during execution of this loop. Only the next ALGsMissingInThisSampleAccountedFor will be changed.
+        ALGsMissingInThisSample      = [x for x in ALG_columns if row[x] == 0]
+        # We will add to this list as we go through the tree. This will be the list of ALGs that were lost on various branches.
+        ALGsMissingInThisSampleAccountedFor = [] # At the end, all of the missing ALGs must appear somewhere in ALGsMissingInThisSample
+
+        # ----- ALG COLOCALIZATION -----
+        # For each species, we similarly need to keep track of which ALG combos are gained on each branch.
+        ColocalizedPairsInThisSample             = [x for x in ALG_combos if row[x] == 1]
+        ColocalizedPairsInThisSampleAccountedFor = []
+
+        #print("Starting taxidstring: {}".format(thistaxidstring))
+        #print("species", row["species"])
+        #print("ALGsMissingInThisSample: {}".format(ALGsMissingInThisSample))
+        #print("ALGsConservedInThisSample: {}".format(ALGsConservedInThisSample))
+        #print("ColocalizedPairsInThisSample: {}".format(ColocalizedPairsInThisSample))
+
+        while thistaxidstring.count(";") > 0:
+            # we need to know where we came from. Keep the previous taxidstring
+            prevtaxidstring = thistaxidstring
+            thisdf = perspchrom[perspchrom["taxidstring"] == thistaxidstring]
+
+            # remove the last taxid from the string
+            thistaxidstring = ";".join(thistaxidstring.split(";")[:-1])
+
+            # these will be used to keep track of what is gained or lost on this branch
+            ALG_colocalizations_on_this_branch = []
+            ALG_losses_on_this_branch = []
+            #print("New shorter string: {}".format(thistaxidstring))
+
+            # Now we perform the logic of estimating whether an ALG was lost or gained on this branch,
+            #  and whether an ALG combo was gained on this branch.
+            if thistaxidstring == ALG_node:
+                # ----- ALG PRESENCE ABSENCE -----
+                # In this case we are at the node for which the ALGs were inferred.
+                # For example, for the BCnS ALGs, the node is Metazoa: "1;131567;2759;33154;33208"
+                #  We need to place the remaining ALGs on the branch between the previous node and this node.
+                ALG_losses_on_this_branch = [x for x in ALGsMissingInThisSample if x not in ALGsMissingInThisSampleAccountedFor]
+                # add all the new ALG losses to the ALGsMissingInThisSampleAccountedFor
+                ALGsMissingInThisSampleAccountedFor.extend(ALG_losses_on_this_branch)
+
+                # ----- ALG COLOCALIZATION EVENTS -----
+                ALG_colocalizations_on_this_branch = [x for x in ColocalizedPairsInThisSample if x not in ColocalizedPairsInThisSampleAccountedFor]
+                # add all the new ALG colocalizations to the ColocalizedPairsInThisSampleAccountedFor
+                ColocalizedPairsInThisSampleAccountedFor.extend(ALG_colocalizations_on_this_branch)
+            else:
+                # Because we're not at the last node we need to do some more work
+                # Get the subdf of the perspchrom df for rows with a taxidstring that contains the new thistaxidstring, but not the prevtaxidstring
+                #  Excluding the prevtaxidstring is important, because it compares this clade only to sister clades at the same level,
+                #  and removes the possibility of paraphyletic comparisons.
+                subdf = perspchrom[perspchrom["taxidstring"].str.contains(thistaxidstring) & ~perspchrom["taxidstring"].str.contains(prevtaxidstring)]
+                if len(subdf) == 0:
+                    # If there is nothing to compare to in this clade, then we don't need to do anything and can proceed to printing the changeString
+                    # In the future there could be an option to put ambiguous changes of gains or losses here, but for now
+                    #  we are just going to put the changes on the oldest nodes that we can find.
+                    pass
+                else:
+                    # ----- ALG PRESENCE ABSENCE -----
+                    # If there are some species to compare here then we apply the logic detailed above in the section ALG PRESENCE ABSENCE
+                    missingALGsInThisClade, presentALGsInThisClade = missing_present_ALGs(subdf, min_for_missing = min_for_missing)
+                    # The only time we mark a loss of an ALG is if it is not missing in 80% of the comparison clade.
+                    #  These are the things that are in the presentALGsInThisClade list.
+                    #  If there is something in presentALGsInThisClade, but in ALGsMissingInThisSample, then we mark it as a loss on this branch.
+                    ALGsLostOnThisBranch = [x for x in presentALGsInThisClade
+                                            if x in ALGsMissingInThisSample
+                                            and x not in ALGsMissingInThisSampleAccountedFor]
+                    #print("Present ALGs: {}".format(presentALGsInThisClade))
+                    #print("ALGs accounted for so far: {}".format(ALGsMissingInThisSampleAccountedFor))
+                    #print("ALGs lost on this branch: {}", ALGsLostOnThisBranch)
+                    # note that we have to print these.
+                    ALG_losses_on_this_branch.extend(ALGsLostOnThisBranch)
+                    # then update the dataframe saying that we know that these ALGs were lost on this branch
+                    ALGsMissingInThisSampleAccountedFor.extend(ALGsLostOnThisBranch)
+
+                    # ----- ALG COLOCALIZATION EVENTS -----
+                    notLocalizedInThisClade = separate_ALG_pairs(subdf, min_for_noncolocalized = min_for_noncolocalized)
+                    pairsColocalizedOnThisBranch = [x for x in notLocalizedInThisClade
+                                                    if x in ColocalizedPairsInThisSample
+                                                    and x not in ColocalizedPairsInThisSampleAccountedFor]
+                    #print("notLocalizedInThisClade: {}".format(notLocalizedInThisClade))
+                    #print("pairsColocalizedOnThisBranch: {}".format(pairsColocalizedOnThisBranch))
+                    # Mark which colocalizations we have accounted for already
+                    ColocalizedPairsInThisSampleAccountedFor.extend(pairsColocalizedOnThisBranch)
+                    # Mark which colocalizations we have gained on this branch
+                    ALG_colocalizations_on_this_branch.extend(pairsColocalizedOnThisBranch)
+                #print()
+            thisChange = "({}|{})".format(sorted(ALG_colocalizations_on_this_branch), sorted(ALG_losses_on_this_branch))
+            changeString.append(prevtaxidstring.split(";")[-1])
+            changeString.append(thisChange)
+        # Now we should check that ALGsMissingInThisSampleAccountedFor is the same as ALGsMissingInThisSample.
+        # This means that we have found all of the missing ALGs at some point in the tree.
+        # If this is not the case, then we need to raise an error.
+        if sorted(ALGsMissingInThisSampleAccountedFor) != sorted(ALGsMissingInThisSample):
+            raise IOError("There is a discrepancy between the ALGsMissingInThisSampleAccountedFor and ALGsMissingInThisSample. Write more debugging code to figure out what the issue is, because I haven't worked on this yet.")
+        # we should do the same for the colocalizations
+        if sorted(ColocalizedPairsInThisSampleAccountedFor) != sorted(ColocalizedPairsInThisSample):
+            raise IOError("There is a discrepancy between the ColocalizedPairsInThisSampleAccountedFor and ColocalizedPairsInThisSample. Write more debugging code to figure out what the issue is, because I haven't worked on this yet.")
+        # We have stepped out of the for loop, now we add the last taxidstring to the changeString
+        changeString.append(thistaxidstring)
+        # flip the changeString and make it a parsable string
+        changeString = "-".join(changeString[::-1])
+        # The final string will look something like this: 1-([]|[])-131567-([]|[])-2759-([]|[])-33154-([]|[])-33208-([]|['A1b', 'A2', 'B2', 'B3', 'C1', 'C2', 'D', 'Ea', 'F', 'G', 'H', 'I', 'J1', 'K', 'L', 'M', 'N', 'O1', 'P', 'Qa', 'Qb', 'Qc', 'Qd', 'R'])-6040-([]|[])-60882-([]|[])-60883-([]|[])-60884-([]|[])-472148-([]|[])-111877-([]|[])-111878
+        # We add the final string to the perspchrom df
+        perspchrom.at[i, "changestrings"] = changeString
+        # print a progress bar on the same line to tell the user how much longer we have to go
+        print("\r{}/{}          ".format(i+1, len(perspchrom)), end="")
+
+    # save the file to a tsv
+    perspchrom.to_csv("per_species_ALG_presence_fusions.tsv", sep='\t', index=False)
+
+    # ---------------------------------------------------------------------------------------------
+    #  Move onto the per-node analysis
+    # ---------------------------------------------------------------------------------------------
     # Get the labels. They have to be in the order that the leaves are returned
     leaves = [int(str(x).split("-")[-1]) for x in tree.get_leaves()]
     # Make a dict with the taxid and species cols, then make a label from the lookup with leaves
@@ -944,9 +1240,10 @@ def main():
             node_annotations[int(thisid)].add(spstring)
 
     # we now have a dictionary with which species belong in each node
-    # iterate through all of the nodes of the tree, recursively. ACTUALLY IT ISN"T DOING THAT NOW
+    # iterate through all of the nodes of the tree, recursively. ACTUALLY IT ISN'T DOING THAT NOW
     entries = []
     for taxid in node_annotations:
+        #print(taxid, node_annotations[taxid])
         thistaxid = int(taxid)
         thisnodename = ncbi.get_taxid_translator([thistaxid]).get(thistaxid, "Unknown")
         # get the NCBI taxid lineage for this node
@@ -990,6 +1287,10 @@ def main():
     # pull out a df of just these nodes. Use an exact match of the taxid column
     nodes_to_compare = [10197, 6040, 10226, 6073, 6231, 88770, 2697495, 7711, 7586, 10219]
     comparison_set_df = per_node_df[per_node_df["taxid"].isin(nodes_to_compare)]
+    # Sort the comparison set by the taxidstring of the nodes_to_compare list.
+    # Use the order of numbers in nodes_to_compare to sort the dataframe.
+    comparison_set_df = comparison_set_df.sort_values(by=["taxidstring"], ascending=True,
+                                                      key=lambda x: x.map(dict(zip(nodes_to_compare, range(len(nodes_to_compare))))))
     print("The species in the node comparison are:")
     print(comparison_set_df)
     standard_plot_out(comparison_set_df, "comparisonNodes")
