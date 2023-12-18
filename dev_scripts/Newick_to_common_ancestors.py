@@ -58,7 +58,7 @@ def parse_args():
     if not os.path.exists(args.newick):
         # raise an IO error
         raise IOError("The newick file does not exist: {}".format(args.newick))
- 
+
     # optional args
     if args.config:
         # make sure that the config file exists
@@ -276,7 +276,7 @@ def download_all_taxinfo(sp_binomials, output_prefix, email):
         - the values are the binomial "Genus species" string
       - The output prefix is what the files will be saved as
       - the email is the email address to use for programmatic access to NCBI
-      
+
     This controls a loop that handles downloading all of the taxinfo
     for all of the species in the sp_binomials object. Returns a dict of the taxinfo when
     done, and a path to the file where the taxinfo is stored.
@@ -375,7 +375,7 @@ class TaxIDtree:
         if taxinfoyaml:
             self.taxinfoyaml = taxinfoyaml["taxinfo"] 
             self.build_tree_from_yaml(self.taxinfoyaml)
-    
+
     def __str__(self) -> str:
         newoutstring = "- root\n"
         # now make a recursive algorithm to print the whole tree
@@ -394,7 +394,7 @@ class TaxIDtree:
         # go through all of the entries in the yaml
         for entry in taxinfoyaml:
             self.add_to_tree_from_yaml_entry(taxinfoyaml[entry])
-    
+
     def add_to_tree_from_yaml_entry(self, entry):
         """
         Takes a yaml entry and builds a tree from it.
@@ -440,7 +440,7 @@ class TaxIDtree:
         ancestor.children[taxid] = TaxNode(taxid, name, rank)
         # return the new node
         return ancestor.children[taxid]
-    
+
     def find_closest_relative(self, yaml_entry) -> TaxNode:
         """
         Uses a taxonomy entry to get the closest lineage. Returns a TaxNode object
@@ -514,7 +514,7 @@ def main():
         treetax_yaml, treetax_filepath = download_all_taxinfo(binomial_dict,
                                                               args.prefix + ".tree",
                                                               args.email)
-        
+
         # For each species in the config file, we need to find the closest species in the tree
         # We only need to map config -> tree for these reasons:
         #  - The point of the program is to get a list of genomes from the config file.
@@ -531,7 +531,7 @@ def main():
             closest_relative = TreeTaxStruct.find_closest_relative(taxinfo_yaml["taxinfo"][sp])
             closest_relative_dict[sp] = closest_relative.name
             #print("{}: {}".format(sp, closest_relative.name))
-        
+
         # Now construct the divergence_times_config dict with the species translated 
         divergence_times_config = {"divergence_times": {}}
         sp_names = list(sorted(closest_relative_dict.keys()))
@@ -559,6 +559,6 @@ def main():
                 config = yaml.safe_load(f2)
                 yaml.dump(config, f)
             yaml.dump(divergence_times_config, f)
- 
+
 if __name__ == "__main__":
     main()
