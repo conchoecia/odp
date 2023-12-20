@@ -37,9 +37,21 @@ if "directory" in config:
     if not os.path.isdir(config["directory"]):
         raise IOerror("The directory of TSV files you provided does not exist. {}".format(config["directory"]))
     # get the paths to the tsv files
-    config["annotated_genome_tsv"], config["unannotated_genome_tsv"] = GenDB.return_latest_accession_tsvs(config["directory"])
+    latest_accesions = GenDB.return_latest_accession_tsvs(config["directory"])
+    # This is the output of the above function:
+    #return_dict = {"annotated_chr":      os.path.join(directory_path, most_recent_annotated_chr_file),
+    #               "annotated_nonchr":   os.path.join(directory_path, most_recent_annotated_nonchr_file),
+    #               "unannotated_chr":    os.path.join(directory_path, most_recent_unannotated_chr_file),
+    #               "unannotated_nonchr": os.path.join(directory_path, most_recent_unannotated_nonchr_file)
+    #               }
+    config["annotated_genome_chr_tsv"]       = latest_accesions["annotated_chr"]
+    config["annotated_genome_nonchr_tsv"]    = latest_accesions["annotated_nonchr"]
+    config["unannotated_genome_chr_tsv"]     = latest_accesions["unannotated_chr"]
+    config["unannotated_genome_nonchr_tsv"]  = latest_accesions["unannotated_nonchr"]
+
     # now add the entries to the config file so we can download them or not
-    config["assemAnn"] = GenDB.determine_genome_accessions(config["annotated_genome_tsv"])
+    config["assemAnn"] = GenDB.determine_genome_accessions(config["annotated_genome_chr_tsv"])
+
     # get the list of GCAs to ignore in case we need to remove any
     ignore_list_path = os.path.join(snakefile_path, "assembly_ignore_list.txt")
     with open(ignore_list_path, "r") as f:

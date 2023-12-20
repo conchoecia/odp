@@ -62,9 +62,29 @@ if "directory" in config:
     if not os.path.isdir(config["directory"]):
         raise IOError("The directory of TSV files you provided does not exist. {}".format(config["directory"]))
     # get the paths to the tsv files
-    config["annotated_genome_tsv"], config["unannotated_genome_tsv"] = GenDB.return_latest_accession_tsvs(config["directory"])
+    latest_accesions = GenDB.return_latest_accession_tsvs(config["directory"])
+    # This is the output of the above function:
+    #return_dict = {"annotated_chr":      os.path.join(directory_path, most_recent_annotated_chr_file),
+    #               "annotated_nonchr":   os.path.join(directory_path, most_recent_annotated_nonchr_file),
+    #               "unannotated_chr":    os.path.join(directory_path, most_recent_unannotated_chr_file),
+    #               "unannotated_nonchr": os.path.join(directory_path, most_recent_unannotated_nonchr_file)
+    #               }
+    config["annotated_genome_chr_tsv"]       = latest_accesions["annotated_chr"]
+    config["annotated_genome_nonchr_tsv"]    = latest_accesions["annotated_nonchr"]
+    config["unannotated_genome_chr_tsv"]     = latest_accesions["unannotated_chr"]
+    config["unannotated_genome_nonchr_tsv"]  = latest_accesions["unannotated_nonchr"]
+
     # now add the entries to the config file so we can download them or not
-    config["assemAnn"] = GenDB.determine_genome_accessions(config["unannotated_genome_tsv"])
+    config["assemAnn"] = GenDB.determine_genome_accessions(config["unannotated_genome_chr_tsv"])
+    # get the list of GCAs to ignore in case we need to remove any
+    ignore_list_path = os.path.join(snakefile_path, "assembly_ignore_list.txt")
+    with open(ignore_list_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                if line in config["assemAnn"]:
+                    config["assemAnn"].remove(line)
+
 
 elif "accession_tsvs" in config:
     # ensure that the user also hasn't specified the directory
@@ -78,8 +98,8 @@ elif "accession_tsvs" in config:
 #  Before we accept the user's input, we need to parse the supplied
 #  directories to make sure that they are valid.
 LG_to_db_directory_dict = {}
-LG_to_rbh_dfs = {}
-LG_outfiles = []
+LG_to_rbh_dfs           = {}
+LG_outfiles             = []
 if len(LG_to_db_directory_dict) == 0: # only do this once
     if "LG_db_directories" not in config:
         raise ValueError("You have not specified the directories of LG databases. Please add the key 'LG_db_directories' to your config file.")
