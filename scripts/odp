@@ -989,7 +989,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     if sort_df["CC_group"].isnull().values.any():
         print("ERROR: there are Nones in the CC_group column")
         sys.exit()
-    
+
     # now we figure out the plotting order for both axes.
     # The algorithm is:
     #   - Find the largest x-scaffold that we have not yet plotted
