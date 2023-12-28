@@ -1,6 +1,6 @@
 """Reading and writing FASTA files.
 
-Copyright (c) 2022 by 
+Copyright (c) 2022 by
 Andrzej Zielezinski (a.zielezinski@gmail.com)
 Maciej Michalczyk (mccv99@gmail.com)
 
@@ -51,7 +51,7 @@ class Record:
         """Returns a description line (defline) of FASTA record.
 
         Example:
-            >>> record = Record(id='NP_055309.2', 
+            >>> record = Record(id='NP_055309.2',
             ...                 seq='MRELEAKAT',
             ...                 desc='TNRC6A')
             >>> print(record.description)
@@ -66,7 +66,7 @@ class Record:
         """Iterates over the letters in the sequence.
 
         Example:
-            >>> record = Record(id='NP_055309.2', 
+            >>> record = Record(id='NP_055309.2',
             ...                 seq='MRELEAKAT',
             ...                 desc='TNRC6A')
             >>> for amino_acid in record:
@@ -92,7 +92,7 @@ class Record:
         """Implements the 'in' keyword to search the sequence.
 
         Example:
-            >>> record = Record(id='NP_055309.2', 
+            >>> record = Record(id='NP_055309.2',
             ...                 seq='MRELEAKAT',
             ...                 desc='TNRC6A')
             >>> print('M' in record)
@@ -130,7 +130,7 @@ class Record:
 
         Args:
             wrap:
-                Optional line length to wrap sequence lines (default: 70 
+                Optional line length to wrap sequence lines (default: 70
                 characters). Use zero (or None) for no wrapping, giving
                 a single long line for the sequence.
 

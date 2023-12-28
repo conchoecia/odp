@@ -2,6 +2,8 @@
 """
 This program parses a NCBI GFF annotation and generates a .chrom file.
 see https://github.com/conchoecia/odp for the specification.
+
+There is
 """
 #NW_011887297.1	RefSeq	CDS	1566678	1566739	.	+	2	ID=cds-XP_004348322.1;Parent=rna-XM_004348272.1;Dbxref=GeneID:14898863,Genbank:XP_004348322.1;Name=XP_004348322.1;gbkey=CDS;locus_tag=CAOG_04494;product=hypothetical protein;protein_id=XP_004348322.1
 
@@ -33,6 +35,17 @@ def create_directories_recursive_notouch(path):
 
 # use the argparse library to get the gff filepath from the user
 def parse_args():
+    """
+    We need access to the following files:
+      -g --gff     : The gff file from NCBI
+      -f --fasta   : The genome fasta file from NCBI
+      -p --protein : The protein fasta file from NCBI
+
+    We also need the options:
+      -o --outprefix : The prefix for the output files. This program saves both a .chrom and .pep file.
+      -u --union     : A flag to indicate that we should only output proteins that exist on scaffolds in the genome fasta file.
+                       Default value is False. If this is True, it will affect the .chrom and .pep output files.
+    """
     parser = argparse.ArgumentParser(description='Parse a NCBI GFF annotation and generate a .chrom file.')
     parser.add_argument('-g', '--gff',     type=str, required = True, help='Path to the GFF file.')
     # add a flag for the genome fasta
@@ -41,6 +54,7 @@ def parse_args():
     parser.add_argument('-p', '--protein', type=str, required = True, help='Path to the protein fasta file.')
     # add a flag for the output prefix
     parser.add_argument('-o', '--outprefix',  type=str, required = True, help='Prefix for the output files.')
+    parser.add_argument('-u', '--union', action='store_true', help='A flag to indicate that we should only output proteins that exist on scaffolds in the genome fasta file. Default value is False. If this is True, it will affect the .chrom and .pep output files.')
     args = parser.parse_args()
 
     # ensure that the files exists
@@ -69,7 +83,7 @@ def get_gff_handle(gff_path):
 
 def get_fasta_headers_and_lengths(fastapath):
     """
-    # Get the scaffold names from the fasta file and the scaffold length. 
+    # Get the scaffold names from the fasta file and the scaffold length.
     """
     scaf_to_len = {}
     # use SeqIO to get the headers and lengths
@@ -81,7 +95,7 @@ def get_fasta_headers_and_lengths(fastapath):
             raise IOError("The sequence name {} appears more than once in the fasta file!".format(record.id))
     return scaf_to_len
 
-def print_chrom_report(prots, scafnames_to_size, protnames_to_size, outprefix):
+def print_chrom_report(prots, scafnames_to_size, protnames_to_size, outprefix, union_mode = False):
     """
     # Let's write the report first. We want to know how many proteins were in the gff file,
     #  how many proteins were in the headers passed in, and how many proteins were not in the gff file.
@@ -110,7 +124,10 @@ def print_chrom_report(prots, scafnames_to_size, protnames_to_size, outprefix):
     s += "#   - There were {} proteins in the protein fasta file.\n".format(len(protnames_to_size))
     s += "#   - There were {} proteins in the gff file.\n".format(len(prots))
     s += "#   - Therefore, {} proteins were present in the protein fasta file but not in the gff file.\n".format(len(prots_in_pep_but_not_gff))
-    s += "#   - Currently, this program does not run to completion if there are proteins in the gff file that are not in the protein fasta file.\n"
+    if union_mode == True:
+        s += "#   - Union mode = True: This program will run to completion if there are proteins in the gff file that are not in the protein fasta file.\n"
+    else:
+        s += "#   - Union mode = False: This program does not run to completion if there are proteins in the gff file that are not in the protein fasta file.\n"
     s += "#\n"
     num_scafs_genome = len(scafnames_to_size)
     scafname_set = set(scafnames_to_size.keys())
@@ -120,7 +137,10 @@ def print_chrom_report(prots, scafnames_to_size, protnames_to_size, outprefix):
     s += "#   - There were {} scaffolds in the genome fasta file.\n".format(len(scafname_set))
     s += "#   - There were {} scaffolds in the gff file.\n".format(len(scafs_in_gff_file))
     s += "#   - Therefore, {} scaffolds were present in the genome fasta file but not in the gff file.\n".format(len(scafs_in_genome_but_not_gff))
-    s += "#   - Currently, this program does not run to completion if there are scaffolds in the gff file that are not in the genome fasta file.\n"
+    if union_mode == True:
+        s += "#   - Union mode = True: This program will run to completion if there are scaffolds in the gff file that are not in the genome fasta file.\n"
+    else:
+        s += "#   - Union mode = False: This program does not run to completion if there are scaffolds in the gff file that are not in the genome fasta file.\n"
     s += "#\n"
     # now we need to calculate how many proteins were on each scaffold
     scaf2protcount = {}
@@ -161,7 +181,7 @@ def print_chrom_report(prots, scafnames_to_size, protnames_to_size, outprefix):
         basedir = os.path.dirname(report_path)
         # safely make the directory for the report if it does not yet exist
         create_directories_recursive_notouch(basedir)
-    
+
         outhandle = open(report_path, "w")
         print(s, file = outhandle)
         outhandle.close()
@@ -201,18 +221,28 @@ def fields_has_legal_protein_id(fields):
             return entry.replace("protein_id=", "")
     return None
 
-def gff_to_chrom(gffhandle, genome_headers_to_size, protein_headers_to_size, outprefix):
+def gff_to_chrom(gffhandle, genome_headers_to_size,
+                 protein_headers_to_size, outprefix, union_mode = False):
     """
     A chrom file has the following format:
     protein_id	scaffold	strand	start	stop
 
-    The protein_id must be present in the protein fasta file.
-    The scaffold must be present in the genome fasta file.
+    If union_mode is False, we output everything in the gff file and fail if something is missing.
+        The protein_id must be present in the protein fasta file.
+        The scaffold must be present in the genome fasta file.
+    If union_mode is True, we make a limited .chrom file:
+        - The requirements for this mode are that:
+            - The scaffold header is in the fasta file
+            - The protein header is in the protein fasta file
+            - The protein header and scaffold header are in the gff file
+        - This mode is useful in the case that the user wants to make a .chrom file
+          for a subset of the proteins in the gff file. In my case, I want to make a .chrom
+          file only for the chromosome-scale scaffolds.
 
     The input parameters are:
       - gffhandle: a handle to the gff file
-      - genome_headers_to_size:  an iterable of the scaffold names in the genome fasta file
-      - protein_headers_to_size: an iterable of the protein names in the protein fasta file
+      - genome_headers_to_size:  A dictionary of the {scaffold names: scaf lens} in the genome fasta file.
+      - protein_headers_to_size: A dictionary of the {protein names: prot lens} in the protein fasta file.
       - outprefix: the prefix for the output files. This script saves a .chrom and .pep file.
          N.B. - this script does not save over existing files. The program will throw an error
             if the output files already exist.
@@ -220,6 +250,7 @@ def gff_to_chrom(gffhandle, genome_headers_to_size, protein_headers_to_size, out
     The function saves the files:
       - .chrom file (safely saved to disk - no clobber)
       - .report.txt (safely saved to disk - no clobber)
+      - If union_mode is True, it also saves a .pep file (safely saved to disk - no clobber)
 
     The function returns:
       - a pandas dataframe of the chrom file. This can be used to filter proteins later.
@@ -243,22 +274,38 @@ def gff_to_chrom(gffhandle, genome_headers_to_size, protein_headers_to_size, out
                 pid = fields_has_legal_protein_id(splitd[8].split(";"))
                 if pid is not None:
                     scaf = splitd[0]
-                    # if this protein isn't in the protein fasta file, raise an error
-                    if pid not in protein_headers_to_size:
-                        raise IOError("The protein {} is not in the protein fasta file! Did you get the same annotation and protein file from NCBI?".format(pid))
-                    if scaf not in genome_headers_to_size:
-                        raise IOError("The scaffold {} is not in the genome fasta file! Did you get the same annotation and genome file from NCBI?".format(scaf))
                     strand = splitd[6]
                     start = int(splitd[3])
                     stop = int(splitd[3])
-                    if pid not in prots:
-                        prots[pid] = {"scaf": scaf, "strand": strand,
-                                      "start": start, "stop": stop}
-                    else:
-                        if start < prots[pid]["start"]:
-                            prots[pid]["start"] = start
-                        if stop > prots[pid]["stop"]:
-                            prots[pid]["stop"] = stop
+                    add_entry = False # use this to determine if we should add the entry to the prots dictionary
+
+                    # For both the union_mode True and union_mode False,
+                    #  for NCBI there should not be a protein in the gff file that is not in the protein fasta file.
+                    if pid not in protein_headers_to_size:
+                        raise IOError("The protein {} is not in the protein fasta file! Did you get the same annotation and protein file from NCBI?".format(pid))
+                    if union_mode == False:
+                        if scaf not in genome_headers_to_size:
+                            raise IOError("The scaffold {} is not in the genome fasta file! Did you get the same annotation and genome file from NCBI? If you meant to filter out entries from scaffolds not in the fasta file, use the --union option for the program.".format(scaf))
+                        # If we didn't trip an error, fine to add this protein to the dictionary
+                        add_entry = True
+                    elif union_mode == True:
+                        # In this case, we only add the entry if the chrom entry if:
+                        #  - The protein is in the protein fasta file (we tested this above, don't need to do it again)
+                        #  - The scaffold is in the genome fasta file
+                        if scaf in genome_headers_to_size:
+                            add_entry = True
+                        else:
+                            # The default value is already False, so we don't need to do anything here.
+                            pass
+                    if add_entry:
+                        if pid not in prots:
+                            prots[pid] = {"scaf": scaf, "strand": strand,
+                                          "start": start, "stop": stop}
+                        else:
+                            if start < prots[pid]["start"]:
+                                prots[pid]["start"] = start
+                            if stop > prots[pid]["stop"]:
+                                prots[pid]["stop"] = stop
     # If the length of the prots dictionary is 0, then something has gone very wrong.
     # There should be proteins detected in the GFF file.
     if len(prots) == 0:
@@ -266,12 +313,12 @@ def gff_to_chrom(gffhandle, genome_headers_to_size, protein_headers_to_size, out
     gffhandle.close()
 
     # print the report
-    print_chrom_report(prots, genome_headers_to_size, protein_headers_to_size, outprefix)
+    print_chrom_report(prots, genome_headers_to_size, protein_headers_to_size, outprefix, union_mode=union_mode)
 
     df = format_prots_to_df(prots)
 
     # now print the chrom file
-    chrom_path = "{}.chrom".format(outprefix) 
+    chrom_path = "{}.chrom".format(outprefix)
     if os.path.exists(chrom_path):
         raise IOError("The chrom file {} already exists! This program will not overwrite existing files.".format(report_path))
     else:
@@ -285,23 +332,42 @@ def gff_to_chrom(gffhandle, genome_headers_to_size, protein_headers_to_size, out
         df.to_csv(chrom_path, sep="\t", index=False, header=False)
         # DONE WITH THE REPORT
         # give a safe return value
-        return 0
+        return df
+
+def make_pep_file(chromdf, original_protein_fasta, outprefix) -> int:
+    """
+    This function is called if the user specifies the --union flag.
+    This makes a protein fasta file that only contains the proteins that are in the chrom file.
+    """
+    pep_path = "{}.pep".format(outprefix)
+    if os.path.exists(pep_path):
+        raise IOError("The pep file {} already exists! This program will not overwrite existing files.".format(pep_path))
+    else:
+        with open(pep_path, "w") as outhandle:
+            for record in fasta.parse(original_protein_fasta):
+                if record.id in chromdf["pid"].values:
+                    print(record.format(wrap=80), file=outhandle, end="")
+    # return a safe value
+    return 0
 
 def main():
     # first parse the args
     args = parse_args()
 
     # check if any of the output files already exist. Just quit if they do.
-    chrom_path = "{}.chrom".format(args.outprefix) 
+    print("Checking if the output files already exist.", file = sys.stderr)
+    chrom_path = "{}.chrom".format(args.outprefix)
     report_path = "{}.report.txt".format(args.outprefix)
     for filetype, filename in {"chrom": chrom_path, "report": report_path}.items():
         if os.path.exists(filename):
             raise IOError("The {} file {} already exists! This program will not overwrite existing files.".format(filetype, filename))
 
-    # get the scaffold names from the fasta file 
+    # get the scaffold names from the fasta file
+    print("Getting the scaffold names from the genome fasta file: {}".format(args.fasta), file = sys.stderr)
     scafnames = get_fasta_headers_and_lengths(args.fasta)
 
     # get the protein names from the protein fasta file
+    print("Getting the protein names from the protein fasta file: {}".format(args.protein), file = sys.stderr)
     prots = get_fasta_headers_and_lengths(args.protein)
 
     # now get a handle for the gff file
@@ -310,7 +376,14 @@ def main():
     # make and print a report. The report saves to <outprefix>.report.txt
     # This also makes a protein file saved to <outprefix>.pep
     #  and it makes a chrom file saved to <outprefix>.chrom
-    chromdf = gff_to_chrom(handle, scafnames, prots, args.outprefix)
+    print("Parsing the files to create a report out.", file = sys.stderr)
+    chromdf = gff_to_chrom(handle, scafnames, prots,
+                           args.outprefix, union_mode=args.union)
+
+    # If unionmode is true, print out a filtered protein fasta file
+    if args.union:
+        print("Printing the filtered protein fasta file to disk.", file = sys.stderr)
+        make_pep_file(chromdf, args.protein, args.outprefix)
 
 if __name__ == '__main__':
     main()

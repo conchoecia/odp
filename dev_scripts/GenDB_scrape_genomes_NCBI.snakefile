@@ -15,6 +15,9 @@ PREREQUISITES:
     ```
 """
 
+# Some specific NCBI taxids cause problems with the NCBI datasets tool.
+# This one, GCA_900186335.3, causes a parsing error: https://github.com/ncbi/datasets/issues/300
+hardcoded_ignore_accessions = ["GCA_900186335.3"]
 from ete3 import NCBITaxa
 import numpy as np
 import os
@@ -423,35 +426,52 @@ def append_to_list(inputlist, to_append):
     else:
         return inputlist + list(to_append)
 
-def prefer_representative_genomes(df):
+def get_best_row_for_each_assembly_accession(df):
     """
-    Prefers the representative genomes if there are multiple rows with the same WGS URL
+    Sometimes after running the datasets program, the same Assembly Accession will be listed multiple times.
+    For the annotated and chromosome-scale genomes, we want every assembly possible, including multiple assemblies per species.
 
-    Works similarly to prefer_SRA_over_others()
+    So, we need to filter out the duplicate assembly rows.
     """
-    # sort by WGS URL, then by Assembly Refseq Category. If one is representative, keep that row
-    gb = df.groupby("WGS URL")
+    gb = df.groupby("Assembly Accession")
     indices_to_keep = []
+    double_indices = []
     for name, group in gb:
         if len(group) == 1:
+            # just keep this row, this accession occurs only once
             indices_to_keep = append_to_list(indices_to_keep, group.index[0])
         else:
-            if "representative genome" in list(group["Assembly Refseq Category"].unique()):
-                # keep the rows with this value
-                indices_to_keep = append_to_list(indices_to_keep, group.index[group["Assembly Refseq Category"] == "representative genome"])
-            else:
-                # keep everything
-                indices_to_keep = append_to_list(indices_to_keep, group.index )
-    return df.loc[indices_to_keep]
+            double_indices = append_to_list(double_indices, group.index)
+            # sort the group by  "Assembly Stats Contig L50", ascending
+            group = group.sort_values(by="Assembly Stats Contig L50", ascending=True)
+            # just get the top row since it has the lowest contig L50, and probably the best assembly
+            indices_to_keep = append_to_list(indices_to_keep, group.index[0])
+    # print out the tsv of the groups that have multiple rows per Assembly Accession. Save it as double_indices.tsv
+    df.loc[double_indices].to_csv("double_indices.tsv", sep="\t", index=False)
+    sys.exit()
 
-def prefer_SRA_over_others(df):
+def return_stats_string(df):
+    """
+    Takes in a dataframe and returns a string with some stats about the dataframe.
+    This is useful for QCing the progression of the dataframe through the pipeline.
+
+    The example string is like this:
+    'There are {} annotated, chr-scale genomes, and {} assembly accessions, for {} unique taxids."
+    """
+    return "There are {} dataframe rows, and {} assembly accessions (genomes), for {} unique taxids.".format(
+        len(df),
+        len(df["Assembly Accession"].unique()),
+        len(df["Organism Taxonomic ID"].unique()))
+
+def prefer_SRA_over_others(df, groupby_col = "Assembly Accession"):
     """
     Sometimes other filters for duplicate assemblies do not completely remove duplicate entries.
     This function will preferentially select the SRA accession over the others.
     The column to look in is "Assembly BioSample Sample Identifiers Database"
     Works similarly to prefer_representative_genomes()
     """
-    gb = df.groupby("WGS URL")
+    # 20231228 - changed this to Assembly Accession instead of WGS URL - sometimes there is no URL
+    gb = df.groupby(groupby_col)
     indices_to_keep = []
     for name, group in gb:
         # just keep this row
@@ -468,17 +488,48 @@ def prefer_SRA_over_others(df):
                 indices_to_keep = append_to_list(indices_to_keep, group.index)
     return df.loc[indices_to_keep]
 
-def prefer_assemblies_with_no_superseded(df):
+def prefer_refseq(df, groupby_col = "Organism Taxonomic ID",
+                  groupby_col2 = "Assembly Stats Number of Contigs",
+                  groupby_col3 = "Assembly Stats Total Sequence Length"):
     """
-    prefer assemblies that have not been superseded by another assembly for the same species
+    For each taxonomic ID, prefer the NCBI RefSeq assembly over the others.
+    To do this, we find potential duplicate assemblies by grouping by taxonomic ID, the number of contigs,
+      and the total sequence length.
+
+    The RefSeq entries will look identical to other assemblies, except that they will have a different annotation.
     """
-    gb = df.groupby("Organism Taxonomic ID")
+    gb = df.groupby([groupby_col, groupby_col2, groupby_col3])
     indices_to_keep = []
     for name, group in gb:
         # just keep this row
         if len(group) == 1:
             indices_to_keep = append_to_list(indices_to_keep, group.index[0])
         else:
+            #if there is a value "NCBI RefSeq" in the column "Annotation Provider", then keep only those rows
+            FILT_COLUMN = "Annotation Provider"
+            KEEP_THIS   = "NCBI RefSeq"
+            if KEEP_THIS in list(group[FILT_COLUMN].unique()):
+                # keep the rows with this value
+                indices_to_keep = append_to_list(indices_to_keep, group.index[group[FILT_COLUMN] == KEEP_THIS])
+            else:
+                # keep everything
+                indices_to_keep = append_to_list(indices_to_keep, group.index)
+    return df.loc[list(set(indices_to_keep))]
+
+def prefer_assemblies_with_no_superseded(df, groupby_col = "Assembly Accession"):
+    """
+    prefer assemblies that have not been superseded by another assembly for the same species
+    """
+    gb = df.groupby(groupby_col)
+    indices_to_keep = []
+    indices_for_groups = []
+    for name, group in gb:
+        # just keep this row
+        if len(group) == 1:
+            indices_to_keep = append_to_list(indices_to_keep, group.index[0])
+        else:
+            # keep the rows that have multiple assemblies per species
+            indices_for_groups = append_to_list(indices_for_groups, group.index)
             FILT_COLUMN = "Assembly Notes"
             PREFERENTIALLY_GET_RID_OF_THIS   = "superseded by newer assembly for species"
 
@@ -488,7 +539,32 @@ def prefer_assemblies_with_no_superseded(df):
             else:
                 # keep everything
                 indices_to_keep = append_to_list(indices_to_keep, group.index)
-    return df.loc[indices_to_keep]
+    return df.loc[list(set(indices_to_keep))]
+
+def prefer_assembly_with_higher_N50(df, groupby_col = "Organism Taxonomic ID"):
+    """
+    Prefer assemblies that have a higher N50, be it a higher contig N50 or a higher scaffold N50.
+    """
+    gb = df.groupby(groupby_col)
+    indices_to_keep = []
+    indices_for_groups = []
+    for name, group in gb:
+        # just keep this row
+        if len(group) == 1:
+            indices_to_keep = append_to_list(indices_to_keep, group.index[0])
+        else:
+            # For each row get the highest N50 number, be it the contig N50 or the scaffold N50
+            # Only keep the one with the higher N50.
+            # If there is a tie, then keep both.
+            group_highest_N50 = 0
+            group_highest_N50_index = -1
+            for index, row in group.iterrows():
+                this_N50 = max(row["Assembly Stats Contig N50"], row["Assembly Stats Scaffold N50"])
+                if this_N50 > group_highest_N50:
+                    group_highest_N50 = this_N50
+                    group_highest_N50_index = index
+            indices_to_keep = append_to_list(indices_to_keep, group_highest_N50_index)
+    return df.loc[list(set(indices_to_keep))]
 
 def remove_specific_GCAs(df, filepath_of_GCAs):
     """
@@ -530,13 +606,13 @@ def remove_specific_GCAs(df, filepath_of_GCAs):
     # Remove rows that have values in assemblies_to_ignore values in the "Assembly Accession" column
     return df.loc[~df["Assembly Accession"].isin(assemblies_to_ignore)]
 
-def get_best_contig_L50_assembly(df):
+def get_best_contig_L50_assembly(df, groupby_col = "Assembly Accession"):
     """
     In great anticlimactic fashion we now pick the assembly with the lowest contig L50
 
     In almost all cases this assembly is the best chromosome-scale assembly
     """
-    gb = df.groupby("Organism Taxonomic ID")
+    gb = df.groupby(groupby_col)
     indices_to_keep = []
     for name, group in gb:
         # just keep this row
@@ -548,6 +624,19 @@ def get_best_contig_L50_assembly(df):
             # just get the top row since it has the lowest contig L50, and probably the best assembly
             indices_to_keep = append_to_list(indices_to_keep, group.index[0])
     return df.loc[indices_to_keep]
+
+def legal_True_final_group_df(df) -> bool:
+    """
+    For the final dataframes for everything that is chromosome-scale, there should be the same number of rows
+    as there are unique assembly accessions.
+
+    Returns True if the dataframe is legal, raises an exception if it is not.
+    """
+    if len(df) != len(df["Assembly Accession"].unique()):
+        raise Exception("There are {} rows in the dataframe, but {} unique assembly accessions.".format(
+            len(df),
+            len(df["Assembly Accession"].unique())))
+    return True
 
 rule get_representative_genomes:
     """
@@ -569,52 +658,150 @@ rule get_representative_genomes:
         mem_mb = 1000
     run:
         # load in the dataframe
-        df = pd.read_csv(input.report_tsv, sep="\t")
+        df = pd.read_csv(input.report_tsv, sep="\t", low_memory=False)
         # strip leading and trailing whitespace from the column names because pandas can screw up sometimes
         df.columns = df.columns.str.strip()
-        print("number of species is {}".format(len(df["Organism Taxonomic ID"].unique())))
-        print("len of raw df is {}".format(len(df)))
+        # remove all of the hardcoded assemblies that we know will cause problems. See the top of this file for more info.
+        df = df.loc[~df["Assembly Accession"].isin(hardcoded_ignore_accessions)]
+        # change column ["Organism Taxonomic ID", "Assembly Stats Number of Scaffolds", "Assembly Stats Total Sequence Length"] to integers
+        cols_to_change_to_int = ["Organism Taxonomic ID",
+                                 "Assembly Stats Number of Contigs",
+                                 "Assembly Stats Total Sequence Length"]
+        for thiscol in cols_to_change_to_int:
+            df[thiscol] = df[thiscol].astype(int)
+        # change these columns to ints, and if there is NaN the value is 0
+        cols_to_change_to_int = ["Assembly Stats Number of Scaffolds"]
+        for thiscol in cols_to_change_to_int:
+            df[thiscol] = df[thiscol].fillna(0).astype(int)
 
-        # remove assemblies that are not chromosome-scale
+        # remove rows that are absolute duplicates
+        df = df.drop_duplicates()
+        df["chrscale"] = False
+        df["annotated"] = False
+
+        print("Number of species is {}".format(len(df["Organism Taxonomic ID"].unique())), file = sys.stderr)
+        print("Len of raw df is {}".format(len(df)), file = sys.stderr)
+
+        # Remove assemblies that are not chromosome-scale.
+        # These genomes are likely those that we manually checked and know that we don't wan't.
         df = remove_specific_GCAs(df, input.assembly_ignore_list)
 
-        # Don't do this anymore, as the assemblies may be contigs that are whole chromosome-length
-        # 2023-12-19 - Tested the script without this and the next step, filtering for Scaffold N50, also removes the same assemblies.
-        #              So, just rely on the numbers instead of NCBI's analysis of contig level.
-        ## remove the assemblies that are simply contigs using "Assembly Level"
-        #df = df.loc[df["Assembly Level"] != "Contig"]
-        #print("len of df after filtering contigs is {}".format(len(df)))
-
-        # 2023-12-20: Not doing this anymore. I will already pick the best assembly per species, so this is redundant
-        ## remove assemblies with a scaffold N50 of 50kb.
-        ## This is rather generous, but I may raise the number later
-        #df = df.loc[df["Assembly Stats Scaffold N50"] >= 50000]
-        #print("len of df after filtering for N50 is {}".format(len(df)))
-
+        print("", file = sys.stderr)
+        print("*** GETTING THE CHR-SCALE, ANNOTATED ASSEMBLIES ***", file = sys.stderr)
+        # First we get the assemblies that have annotations and are chromosome-scale
+        df_annot_chr = df.loc[df["Annotation Release Date"].notna()]
+        df_annot_chr = df_annot_chr.loc[df_annot_chr["Assembly Level"] == "Chromosome"]
+        print("  - Getting the genomes that are annotated and chromosome-scale", file = sys.stderr)
+        print("    - {}".format(return_stats_string(df_annot_chr)), file = sys.stderr)
         # Filter out some duplicate assemblies, preferentially select the ones that are listed as representative genomes
-        df = prefer_representative_genomes(df)
-        print("len of df after keeping the representative sequences is {}".format(len(df)))
+        print("  - Getting the rows that are SRA versions of each assembly accession.", file = sys.stderr)
+        df_annot_chr = prefer_SRA_over_others(df_annot_chr, groupby_col = "Assembly Accession")
+        print("    - {}".format(return_stats_string(df_annot_chr)), file = sys.stderr)
+        # For each taxonomic ID, get the assembly with the lowest contig L50.
+        print("  - Getting the rows that have the lowest contig L50 for each assembly accession.", file = sys.stderr)
+        print("    This doesn't really do anything because at this point, these rows will be duplicates.", file = sys.stderr)
+        df_annot_chr = get_best_contig_L50_assembly(df_annot_chr, groupby_col = "Assembly Accession")
+        print("    - {}".format(return_stats_string(df_annot_chr)), file = sys.stderr)
+        df_annot_chr["chrscale"] = True
+        df_annot_chr["annotated"] = True
+        legal_True_final_group_df(df_annot_chr)
 
-        # For each species, prefer SRA repository over others.
-        df = prefer_SRA_over_others(df)
-        print("len of df after preferring SRA is {}".format(len(df)))
+        print("", file = sys.stderr)
+        print("*** GETTING THE CHR-SCALE, unANNOTATED ASSEMBLIES ***", file = sys.stderr)
+        # first we get the assemblies that have no annotations and are chromosome-scale
+        df_unannot_chr = df.loc[~df["Annotation Release Date"].notna()]
+        df_unannot_chr = df_unannot_chr.loc[df_unannot_chr["Assembly Level"] == "Chromosome"]
+        print("  - Getting the genomes that are unannotated and chromosome-scale", file = sys.stderr)
+        print("    - {}".format(return_stats_string(df_unannot_chr)), file = sys.stderr)
+        # Filter out some duplicate assemblies, preferentially select the ones that are listed as representative genomes
+        print("  - Getting the rows that are the SRA versions of each assembly accession.", file = sys.stderr)
+        df_unannot_chr = prefer_SRA_over_others(df_unannot_chr, groupby_col = "Assembly Accession")
+        print("    - {}".format(return_stats_string(df_unannot_chr)), file = sys.stderr)
+        # For each taxonomic ID, get the assembly with the lowest contig L50.
+        print("  - Getting the rows that have the lowest contig L50 for each assembly accession.", file = sys.stderr)
+        print("    This doesn't really do anything because at this point, these rows will be duplicates.", file = sys.stderr)
+        df_unannot_chr = get_best_contig_L50_assembly(df_unannot_chr, groupby_col = "Assembly Accession")
+        print("    - {}".format(return_stats_string(df_unannot_chr)), file = sys.stderr)
+        df_unannot_chr["chrscale"] = True
+        df_unannot_chr["annotated"] = False
+        legal_True_final_group_df(df_unannot_chr)
 
-        # For each taxonomic ID, prefer assemblies that have not been superseded.
-        df = prefer_assemblies_with_no_superseded(df)
-        print("len of df after preferring non-superseded is {}".format(len(df)))
+        # Generate a set of the species for which we have found chromosome-scale genomes already.
+        # We don't need to find sub-chromosome-scale genomes for these species.
+        # Everything is int already, so we don't need to cast.
+        set_of_species_chr_scale = set(df_annot_chr["Organism Taxonomic ID"]).union(set(df_unannot_chr["Organism Taxonomic ID"]))
 
-        # For each taxonomic ID, get the assembly with the lowest contig L50. This is almost invariably the best assembly for this species.
-        df = get_best_contig_L50_assembly(df)
-        print("len of df after keeping the lowest contig L50 assembly is {}".format(len(df)))
+        print("", file = sys.stderr)
+        print("*** GETTING THE non-CHR-SCALE, ANNOTATED ASSEMBLIES ***", file = sys.stderr)
+        # first we get the assemblies that have annotations and are not chromosome-scale
+        print("  - Getting the genomes that are annotated and not chromosome-scale", file = sys.stderr)
+        df_annot_nonchr = df.loc[df["Annotation Release Date"].notna()]
+        df_annot_nonchr = df_annot_nonchr.loc[df_annot_nonchr["Assembly Level"] != "Chromosome"]
+        print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
+        # Now we remove genomes of species that have already been found in the chromosome-scale datasets.
+        print("  - Removing genomes for species that already have chromosome-scale genomes.", file = sys.stderr)
+        print("    The information we will learn from non-chromosome-scale genomes is redundant.", file = sys.stderr)
+        df_annot_nonchr = df_annot_nonchr.loc[~df_annot_nonchr["Organism Taxonomic ID"].isin(set_of_species_chr_scale)]
+        print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
+        # Prefer the RefSeq versions of the genomes
+        print("  - Filtering duplicate entries to prefer the assembly with the NCBI RefSeq annotation.", file = sys.stderr)
+        df_annot_nonchr = prefer_refseq(df_annot_nonchr)
+        print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
+        # Prefer the SRA versions of the genomes
+        print("  - Getting the rows that are the SRA versions of each assembly accession.", file = sys.stderr)
+        df_annot_nonchr = prefer_SRA_over_others(df_annot_nonchr, groupby_col = "Assembly Accession")
+        print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
+        # filter out the duplicates now
+        print("  - Getting the rows that have the lowest contig L50 for each assembly accession.", file = sys.stderr)
+        print("    This doesn't really do anything because at this point, these rows will be duplicates.", file = sys.stderr)
+        df_annot_nonchr = get_best_contig_L50_assembly(df_annot_nonchr, groupby_col = "Assembly Accession")
+        print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
+        # prefer genomes with the higest N50, be it the scaffold or contig N50
+        print("  - For each species, getting the assembly with the highest N50, be it contig or scaffold.", file = sys.stderr)
+        df_annot_nonchr = prefer_assembly_with_higher_N50(df_annot_nonchr)
+        df_annot_nonchr["chrscale"] = False
+        df_annot_nonchr["annotated"] = True
+        print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
 
-        # 2023-12-20 - Not doing this anymore. I will do some extra filtering steps later if I need to.
-        ## Get rid of assemblies with more than 5000 scaffolds unless they are chromosome-scale
-        ## This is also generous - there is no reason a genome assembly should have even 5000 scaffolds now.
-        #df = df.loc[(df["Assembly Stats Number of Scaffolds"] <= 5000) | (df["Assembly Level"] == "Chromosome")]
-        #print("len of df after filtering out non-chr-scale assemblies with more than 5000 scaffolds {}".format(len(df)))
+        print("", file = sys.stderr)
+        print("*** GETTING THE non-CHR-SCALE, nonANNOTATED ASSEMBLIES ***", file = sys.stderr)
+        # first we get the assemblies that do not annotations and are not chromosome-scale
+        print("  - Getting the genomes that are unannotated and not chromosome-scale", file = sys.stderr)
+        df_unannot_nonchr = df.loc[~df["Annotation Release Date"].notna()]
+        df_unannot_nonchr = df_unannot_nonchr.loc[df_unannot_nonchr["Assembly Level"] != "Chromosome"]
+        print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
+        # Now we remove genomes of species that have already been found in the chromosome-scale datasets.
+        print("  - Removing genomes for species that already have chromosome-scale genomes.", file = sys.stderr)
+        print("    The information we will learn from non-chromosome-scale genomes is redundant.", file = sys.stderr)
+        df_unannot_nonchr = df_unannot_nonchr.loc[~df_unannot_nonchr["Organism Taxonomic ID"].isin(set_of_species_chr_scale)]
+        print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
+        # Prefer the SRA versions of the genomes
+        print("  - Getting the rows that are the SRA versions of each assembly accession.", file = sys.stderr)
+        df_unannot_nonchr = prefer_SRA_over_others(df_unannot_nonchr, groupby_col = "Assembly Accession")
+        print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
+        # filter out the duplicates now
+        print("  - Getting the rows that have the lowest contig L50 for each assembly accession.", file = sys.stderr)
+        print("    This doesn't really do anything because at this point, these rows will be duplicates.", file = sys.stderr)
+        df_unannot_nonchr = get_best_contig_L50_assembly(df_unannot_nonchr, groupby_col = "Assembly Accession")
+        print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
+        # prefer genomes with the higest N50, be it the scaffold or contig N50
+        print("  - For each species, getting the assembly with the highest N50, be it contig or scaffold.", file = sys.stderr)
+        df_unannot_nonchr = prefer_assembly_with_higher_N50(df_unannot_nonchr)
+        df_unannot_nonchr["chrscale"] = False
+        df_unannot_nonchr["annotated"] = False
+        print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
 
-        # convert data type of df["Organism Taxonomic ID"] to int
-        df["Organism Taxonomic ID"] = df["Organism Taxonomic ID"].astype(int)
+        # combine all of these into a new dataframe called df, line the original
+        df = pd.concat([df_annot_chr, df_unannot_chr, df_annot_nonchr, df_unannot_nonchr])
+
+        # print out a marginal table of the dataframes, the intersection of annotated, not annotated, chromosome-scale and not, plus the number of species in each category
+        # the sort order of chrscale, then annotated
+        #
+        summary = df.groupby(["chrscale", "annotated"]).agg({"Organism Taxonomic ID": "nunique"})
+        # now make a summary that is the total number of genomes
+        summary = df.groupby(["chrscale", "annotated"]).agg({"Organism Taxonomic ID": "count"})
+        print(summary)
+        sys.exit()
 
         # make a new column called Lineage. Get the NCBI Taxa lineage from ete3 NCBITaxa
         ncbi = NCBITaxa()

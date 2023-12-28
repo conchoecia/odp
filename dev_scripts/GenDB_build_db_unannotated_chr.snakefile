@@ -130,21 +130,6 @@ if len(LG_to_db_directory_dict) == 0: # only do this once
         outfile =config["tool"] + "/input/LG_proteins/{}.fasta".format(LG_name)
         LG_outfiles.append(outfile)
 
-#onstart:
-#    # NOTE: onstart doesn't execute if the workflow is run with the -n flag
-#    # If we need to build a big database, we likely will need to use an API key
-#    if config["require_API"] in [True, "true", "True", "TRUE", 1]:
-#        # now that we're sure that we want to use an API key, make sure that the user has not saved
-#        #  one to their file. This is not a secure way to do this. Instead we will prompt the user to type it in.
-#        if "API_key" in config:
-#            raise ValueError("You have specified that you want to use an API key, but you have saved one to your config file. This is not secure. Please remove the API key from your config file and run the program again. You will be prompted to enter your API key.")
-#        else:
-#            # prompt the user to enter their API key
-#            global API_key
-#            API_key = input("Please enter your NCBI API key then press enter: ")
-#    else:
-#        config["require_API"] = False
-
 wildcard_constraints:
     taxid="[0-9]+",
 
@@ -341,7 +326,6 @@ rule download_unzip:
     output:
         assembly = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/ncbi_dataset.zip"),
         fasta    = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta")
-        #fasta   = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta") # THIS NEEDS TO BE TEMP
     retries: 3
     params:
         outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/",
@@ -445,7 +429,7 @@ rule generate_assembled_config_entry:
     These will be gathered and concatenated later.
     """
     input:
-        unannot_genomes = config["unannotated_genome_tsv"],
+        unannot_genomes = config["unannotated_genome_chr_tsv"],
         genome          = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz",
         protein         = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.pep",
         chrom           = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.chrom",

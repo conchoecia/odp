@@ -13,75 +13,13 @@ from datetime import datetime
 import GenDB
 import yaml
 
-#if "datetime" not in config:
-#    config["datetime"] = datetime.now().strftime('%Y%m%d%H%M')
-
 # figure out where bin is because we need to use some outside tools
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
 bin_path = os.path.join(snakefile_path, "../bin")
 
-#if "API_key" not in locals():
-#    API_key = ""
-
 configfile: "config.yaml"
 config["tool"] = "odp_ncbi_genome_db"
-# Do some logic to see if the user has procided enough information for us to analyse the genomes
-if ("directory" not in config) and ("accession_tsvs" not in config):
-    raise IOerror("You must provide either a directory of the annotated and unannotated genome lists, or a list of the paths to those tsv files. Read the config file.")
-
-if "directory" in config:
-    # ensure that the user also hasn't specified the accession tsvs
-    if "accession_tsvs" in config:
-        raise IOerror("You cannot provide both a directory of tsv files ('directory') and specify the exact path of the TSVs ('accession_tsvs'). Read the config file.")
-    # ensure that the directory exists
-    if not os.path.isdir(config["directory"]):
-        raise IOerror("The directory of TSV files you provided does not exist. {}".format(config["directory"]))
-    # get the paths to the tsv files
-    latest_accesions = GenDB.return_latest_accession_tsvs(config["directory"])
-    # This is the output of the above function:
-    #return_dict = {"annotated_chr":      os.path.join(directory_path, most_recent_annotated_chr_file),
-    #               "annotated_nonchr":   os.path.join(directory_path, most_recent_annotated_nonchr_file),
-    #               "unannotated_chr":    os.path.join(directory_path, most_recent_unannotated_chr_file),
-    #               "unannotated_nonchr": os.path.join(directory_path, most_recent_unannotated_nonchr_file)
-    #               }
-    config["annotated_genome_chr_tsv"]       = latest_accesions["annotated_chr"]
-    config["annotated_genome_nonchr_tsv"]    = latest_accesions["annotated_nonchr"]
-    config["unannotated_genome_chr_tsv"]     = latest_accesions["unannotated_chr"]
-    config["unannotated_genome_nonchr_tsv"]  = latest_accesions["unannotated_nonchr"]
-
-    # now add the entries to the config file so we can download them or not
-    config["assemAnn"] = GenDB.determine_genome_accessions(config["annotated_genome_chr_tsv"])
-
-    # get the list of GCAs to ignore in case we need to remove any
-    ignore_list_path = os.path.join(snakefile_path, "assembly_ignore_list.txt")
-    with open(ignore_list_path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                if line in config["assemAnn"]:
-                    config["assemAnn"].remove(line)
-
-elif "accession_tsvs" in config:
-    # ensure that the user also hasn't specified the directory
-    if "directory" in config:
-        raise IOerror("You cannot provide both a directory of tsv files ('directory') and specify the exact path of the TSVs ('accession_tsvs'). Read the config file.")
-    # we haven't implemented this yet. I haven't found a use case where I would want to specifially pick a file path rather than just get the most recent one.
-    raise NotImplementedError("We haven't implemented this yet. I haven't found a use case where I would want to specifially pick a file path rather than just get the most recent one.")
-
-#onstart:
-#    # NOTE: onstart doesn't execute if the workflow is run with the -n flag
-#    # If we need to build a big database, we likely will need to use an API key
-#    if config["require_API"] in [True, "true", "True", "TRUE", 1]:
-#        # now that we're sure that we want to use an API key, make sure that the user has not saved
-#        #  one to their file. This is not a secure way to do this. Instead we will prompt the user to type it in.
-#        if "API_key" in config:
-#            raise ValueError("You have specified that you want to use an API key, but you have saved one to your config file. This is not secure. Please remove the API key from your config file and run the program again. You will be prompted to enter your API key.")
-#        else:
-#            # prompt the user to enter their API key
-#            global API_key
-#            API_key = input("Please enter your NCBI API key then press enter: ")
-#    else:
-#        config["require_API"] = False
+config = GenDB.opening_logic_GenDB_build_db(config, chr_scale = True, annotated = True)
 
 wildcard_constraints:
     taxid="[0-9]+",
@@ -89,79 +27,194 @@ wildcard_constraints:
 # first we must load in all of the files. Only do it once
 rule all:
     input:
-        #expand(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.yaml.part", assemAnn=config["assemAnn"]),
-        "NCBI_odp_db.yaml",
-        "NCBI_odp_sp_list.txt"
+        expand(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz",
+            assemAnn = config["assemAnn"]),
+        expand(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.pep.gz",
+            assemAnn = config["assemAnn"]),
+        expand(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.chrom.gz",
+            assemAnn = config["assemAnn"]),
+        "NCBI_odp_db.annotated.chr.yaml",
+        "NCBI_odp_sp_list.annotated.chr.txt"
 
-rule download_annotated_genomes:
+rule dlChrs:
     """
-    We have selected the annotated genomes to download. These are the easiest to handle since we don't have to annotate them ourselves.
+    We have selected the annotated genomes to download. We only want the chromosome-scale scaffolds.
+
+    To specifically download the chromosome-scale scaffolds, there is a series of commands with the NCBI datasets tool.
+      I found this set of instructions after opening a ticket on NCBI's github page: https://github.com/ncbi/datasets/issues/298
     """
     input:
         datasets = os.path.join(bin_path, "datasets")
     output:
-        assembly = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/ncbi_dataset.zip")
+        assembly = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/genomeDl/ncbi_dataset.zip"),
+        readme   = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/genomeDl/README.md"),
+        fetch    = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/genomeDl/ncbi_dataset/fetch.txt"),
+        fasta    = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta"),
+    retries: 3
     params:
-        outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/",
+        outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/genomeDl/",
+        rmdir    = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/genomeDl/ncbi_dataset/data/{assemAnn}/",
         APIstring = "" if "API_key" not in locals() else "--api-key {}".format(locals()["API_key"])
     threads: 1
     resources:
-        mem_mb = 1000
+        mem_mb = 500, # 500 MB of RAM - it never uses much
+        time   = 20  # 20 minutes.
     shell:
         """
+        # Wait a random amount of time up to 10 seconds to space out requests to the NCBI servers.
+        SLEEPTIME=$((1 + RANDOM % 10))
+        echo "Sleeping for $SLEEPTIME seconds to avoid overloading the NCBI servers."
+        sleep $SLEEPTIME
+
+        # Save the current directory
+        # Function to download the file
+        RETURNHERE=$(pwd)
         cd {params.outdir}
-        {input.datasets} download genome accession {wildcards.assemAnn} {params.APIstring} --include genome,protein,gff3,gtf
-        echo "Sleping for 5 minutes to avoid overloading the NCBI servers."
-        sleep 300
+        {input.datasets} download genome accession {wildcards.assemAnn} --chromosomes all \
+            {params.APIstring} --dehydrated || true
+
+        # now we try to unzip it
+        unzip -o ncbi_dataset.zip
+
+        # rehydrate the dataset
+        {input.datasets} rehydrate --directory . --match chr
+
+        # go back to the original directory
+        cd $RETURNHERE
+
+        # make the final assembly fasta file from the individual chromosome's .fna files
+        find {params.outdir} -name "*.fna" -exec cat {{}} \\; > {output.fasta}
+        # Remove the files that we no longer need.
+        find {params.outdir} -name "*.fna" -exec rm {{}} \\;
+
+        # remove a directory we no longer need
+        rm -rf {params.rmdir}
         """
 
-rule unzip_annotated_genomes:
+rule dlPepGff:
     """
-    We just downloaded the genome data packet. Now unzip it, delete the zip file, and rename things
+    Because the other rule downloads only the chromosome-scale scaffolds, we need to download
+      the pep file and gff file for this entry.
+
+    Same structure as the previous download task.
     """
     input:
-        assembly = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/ncbi_dataset.zip"
+        datasets = os.path.join(bin_path, "datasets")
     output:
-        genome   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.fasta",
-        protein  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.pep",
-        gff      = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gff",
-        #gtf      = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gtf"
+        readme   = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/pepDl/README.md"),
+        assembly = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/pepDl/{assemAnn}.pepAndGff.zip"),
+        protein  = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.pep"),
+        gff      = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gff")
+    retries: 3
+    params:
+        outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/pepDl/",
+        APIstring = "" if "API_key" not in locals() else "--api-key {}".format(locals()["API_key"])
     threads: 1
     resources:
-        mem_mb = 1000
-    params:
-        outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/"
+        mem_mb = 500, # Usually only uses 100MB of RAM
+        time   = 5  # 5 minutes.
     shell:
         """
-        TMPDIR=`pwd`
+        # Wait a random amount of time up to 10 seconds to space out requests to the NCBI servers.
+        SLEEPTIME=$((1 + RANDOM % 10))
+        echo "Sleeping for $SLEEPTIME seconds to avoid overloading the NCBI servers."
+        sleep $SLEEPTIME
+
+        # Save the current directory
+        # Function to download the file
+        RETURNHERE=$(pwd)
         cd {params.outdir}
-        unzip -o ncbi_dataset.zip
-        cd $TMPDIR
-        find {params.outdir} -name "*.fna" -exec mv {{}} {output.genome} \;
-        find {params.outdir} -name "*.faa" -exec mv {{}} {output.protein} \;
-        find {params.outdir} -name "*.gff" -exec mv {{}} {output.gff} \;
+        {input.datasets} download genome accession {wildcards.assemAnn} \
+            {params.APIstring} \
+            --include protein,gff3,gtf \
+            --filename {wildcards.assemAnn}.pepAndGff.zip || true
+
+        # now we try to unzip it
+        unzip -o {wildcards.assemAnn}.pepAndGff.zip
+
+        # go back to the original directory
+        cd $RETURNHERE
+
+        # move the gff and faa files to the correct location
+        find {params.outdir} -name "*.faa" -exec mv {{}} {output.protein} \\;
+        find {params.outdir} -name "*.gff" -exec mv {{}} {output.gff} \\;
+        # remove the gtf file if it exists
+        find {params.outdir} -name "*.gtf" -exec rm {{}} \\;
+        """
+
+rule gzip_fasta_file:
+    """
+    In this step zip the fasta file to conserve space.
+    """
+    input:
+        genome = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta",
+    output:
+        genome = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz"
+    threads: 1
+    resources:
+        mem_mb = 1000, # 1 GB of RAM
+        time   = 50   # Usually takes less than 10 minutes. Just do 50 for exceptional cases. Exceptional cases usually take 150 minutes.
+    params:
+        outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/",
+    shell:
+        """
+        echo "Gzipping the fasta file."
+        gzip {input.genome}
+        # remove the .fna files again, in case the last step failed
+        find {params.outdir} -name "*.fna" -exec rm {{}} \\;
         """
 
 rule prep_chrom_file_from_NCBI:
     """
     This takes the output files from the NCBI database and puts them into the file format we need for odp, clink, et cetera
+
+    This works with gzipped fasta files.
     """
     input:
-        genome   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.fasta",
+        genome   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz",
         protein  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.pep",
         gff      = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gff",
         chromgen = os.path.join(snakefile_path, "..", "scripts", "NCBIgff2chrom.py")
     output:
-        chrom   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrom",
-        report  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.report.txt"
+        chrom  = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.chrom"),
+        pep    = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.pep"),
+        report = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.report.txt"
     threads: 1
     resources:
-        mem_mb  = 1000
+        mem_mb  = 500, # shouldn't take much RAM, 231228 - I have seen mostly 200 MB or less
+        time    = 5 # 5 minutes
     params:
-        prefix  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}"
+        prefix  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt"
     shell:
         """
-        python {input.chromgen} -f {input.genome} -p {input.protein} -g {input.gff} -o {params.prefix}
+        python {input.chromgen} \
+            -f {input.genome} \
+            -p {input.protein} \
+            -g {input.gff} \
+            --union \
+            -o {params.prefix}
+        """
+
+rule gzPepGff:
+    """
+    This gzips the pep and gff files to conserve disk space.
+    """
+    input:
+        chrom  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.chrom",
+        pep    = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.pep",
+    output:
+        chrom  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.chrom.gz",
+        pep    = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.pep.gz",
+    threads: 1
+    resources:
+        mem_mb  = 1000, # shouldn't take a lot of RAM.
+        time    = 5 # 5 minutes
+    shell:
+        """
+        # first gzip the chrom file
+        gzip < {input.chrom} > {output.chrom}
+        # second gzip the pep file. This will be bigger.
+        gzip < {input.pep} > {output.pep}
         """
 
 rule generate_assembled_config_entry:
@@ -170,11 +223,11 @@ rule generate_assembled_config_entry:
     These will be gathered and concatenated later.
     """
     input:
-        annotated_genomes = config["annotated_genome_tsv"],
-        report            = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.report.txt",
-        genome            = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.fasta",
-        protein           = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.pep",
-        chrom             = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrom",
+        annotated_genomes = config["annotated_genome_chr_tsv"],
+        genome            = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz",
+        protein           = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.pep.gz",
+        chrom             = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.chrom.gz",
+        report            = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.report.txt",
     output:
         yaml   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.yaml.part",
     threads: 1
@@ -188,9 +241,7 @@ rule generate_assembled_config_entry:
 
         # read in the report into pandas if we can. Strip all the excess whitespace since the columns are formatted with whitespace
         reportdf = pd.read_csv(input.report, comment = "#", delim_whitespace=True)
-        # get only the scaffolds that comprise more than 0.5% of the annotated proteins
-        filtdf = reportdf.loc[reportdf["percent_of_proteins"] >= 0.05]
-        minscaflen = filtdf["scaflen"].min() - 1000
+        minscaflen = reportdf["scaflen"].min() - 1000
 
         row = df.loc[df["Assembly Accession"] == wildcards.assemAnn]
         taxid = int(row["Organism Taxonomic ID"].values[0])
@@ -248,7 +299,7 @@ rule collate_assembled_config_entries:
         yaml_parts = expand(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.yaml.part",
                             assemAnn=config["assemAnn"])
     output:
-        yaml = "NCBI_odp_db.yaml"
+        yaml = "NCBI_odp_db.annotated.chr.yaml"
     threads: 1
     resources:
         mem_mb  = 1000
@@ -264,9 +315,9 @@ rule generate_species_list_for_timetree:
     One species per line.
     """
     input:
-        yaml    = "NCBI_odp_db.yaml"
+        yaml    = "NCBI_odp_db.annotated.chr.yaml"
     output:
-        sp_list = "NCBI_odp_sp_list.txt"
+        sp_list = "NCBI_odp_sp_list.annotated.chr.txt"
     threads: 1
     resources:
         mem_mb  = 1000
