@@ -18,6 +18,7 @@ PREREQUISITES:
 # Some specific NCBI taxids cause problems with the NCBI datasets tool.
 # This one, GCA_900186335.3, causes a parsing error: https://github.com/ncbi/datasets/issues/300
 hardcoded_ignore_accessions = ["GCA_900186335.3"]
+import datetime
 from ete3 import NCBITaxa
 import numpy as np
 import os
@@ -366,7 +367,6 @@ fields_to_print = ["accession",
                   "assmstats-contig-l50",
                   "assmstats-contig-n50",
                   "assmstats-gaps-between-scaffolds-count",
-                  "assmstats-gc-count",
                   "assmstats-gc-percent",
                   "assmstats-genome-coverage",
                   "assmstats-number-of-component-sequences",
@@ -585,23 +585,36 @@ def remove_specific_GCAs(df, filepath_of_GCAs):
        GCA_905250025.1
        ```
     """
-    # first check that filepath_of_GCAs exists
-    if not os.path.exists(filepath_of_GCAs):
-        raise Exception("The file {} does not exist".format(filepath_of_GCAs))
+    # First check if the input type is an iterable or a filepath.
+    # If it is a filepath, then we should read in the file and get the set of GCAs to ignore.
+    # If it is an iterable, then we should just use that iterable.
 
     assemblies_to_ignore = set()
-    with open(filepath_of_GCAs, "r") as f:
-        for line in f:
-            # remove leading and trailing whitespace
-            line = line.strip()
-            # ignore lines that start with a comment character
-            if line.startswith("#"):
-                continue
-            # ignore empty lines
-            if len(line) == 0:
-                continue
-            # add this line to the set of assemblies to ignore
-            assemblies_to_ignore.add(line)
+    if isinstance(filepath_of_GCAs, str):
+        # IN THIS CASE WE HAVE PASSED A STRING. THIS IS A FILEPATH, BUT WE NEED TO CHECK IT.
+        # first check that filepath_of_GCAs exists
+        if not os.path.exists(filepath_of_GCAs):
+            raise Exception("The file {} does not exist".format(filepath_of_GCAs))
+
+        with open(filepath_of_GCAs, "r") as f:
+            for line in f:
+                # remove leading and trailing whitespace
+                line = line.strip()
+                # ignore lines that start with a comment character
+                if line.startswith("#"):
+                    continue
+                # ignore empty lines
+                if len(line) == 0:
+                    continue
+                # add this line to the set of assemblies to ignore
+                assemblies_to_ignore.add(line)
+    else:
+        # IN THIS CASE WE HAVE PASSED AN ITERABLE. USE THE ITERABLE.
+        # verify that it is a set or list of strings
+        acceptable_types = [set, list]
+        if not any(isinstance(filepath_of_GCAs, x) for x in acceptable_types):
+            raise Exception("The input type for filepath_of_GCAs is {}, but it should be a filepath or a set or list of strings.".format(type(filepath_of_GCAs)))
+        assemblies_to_ignore = set(x for x in filepath_of_GCAs)
 
     # Remove rows that have values in assemblies_to_ignore values in the "Assembly Accession" column
     return df.loc[~df["Assembly Accession"].isin(assemblies_to_ignore)]
@@ -638,6 +651,258 @@ def legal_True_final_group_df(df) -> bool:
             len(df["Assembly Accession"].unique())))
     return True
 
+def filter_raw_genome_df(df, hardcoded_ignore_accessions) -> pd.DataFrame:
+    """
+    This function filters out the raw list of genomes into a final list of genome assemblies that we want to use.
+    The basic algorithm is this:
+        1. Select the genomes that are chromosome-scale and are annotated.
+          - For now we even select multiple individuals per species. This means that sometimes both haplotypes get used from one individual.
+        2. Select the genomes that are chromosome-scale and are unannotated.
+          - We also select multiple individuals per species here, and even both haplotypes if there are haplotype-resolved assemblies.
+          - We also select species that also occur in the chromosome-scale, annotated list. This allows for more sampling.
+        3. Select the genomes that are not chromosome-scale and are annotated.
+          - We do not select genomes of species that already have chromosome-scale genomes.
+          - We only select one individual per species here. The rules are detailed below, but it basically is just the assembly with the highest N50 for that species.
+        4. Select the genomes that are not chromosome-scale and are not annotated.
+          - Again, we do not select genomes of species that had chromosome-scale genomes in steps 1 and 2.
+          - We only select one individual per species here.
+
+    Returns a pandas dataframe of the filtered genomes.
+    """
+    # remove rows that are absolute duplicates
+    df = df.drop_duplicates()
+
+    # Create new columns called "chrscale" and "annotated". Doing it this way avoids a SettingWithCopyWarning.
+    df = df.assign(chrscale=False, annotated=False)
+
+    print("Number of species is {}".format(len(df["Organism Taxonomic ID"].unique())), file = sys.stderr)
+    print("Len of raw df is {}".format(len(df)), file = sys.stderr)
+
+    print("", file = sys.stderr)
+    print("*** GETTING THE CHR-SCALE, ANNOTATED ASSEMBLIES ***", file = sys.stderr)
+    # First we get the assemblies that have annotations and are chromosome-scale
+    df_annot_chr = df.loc[df["Annotation Release Date"].notna()]
+    df_annot_chr = df_annot_chr.loc[df_annot_chr["Assembly Level"] == "Chromosome"]
+    print("  - Getting the genomes that are annotated and chromosome-scale", file = sys.stderr)
+    print("    - {}".format(return_stats_string(df_annot_chr)), file = sys.stderr)
+    # Filter out some duplicate assemblies, preferentially select the ones that are listed as representative genomes
+    print("  - Getting the rows that are SRA versions of each assembly accession.", file = sys.stderr)
+    df_annot_chr = prefer_SRA_over_others(df_annot_chr, groupby_col = "Assembly Accession")
+    print("    - {}".format(return_stats_string(df_annot_chr)), file = sys.stderr)
+    # For each taxonomic ID, get the assembly with the lowest contig L50.
+    print("  - Getting the rows that have the lowest contig L50 for each assembly accession.", file = sys.stderr)
+    print("    This doesn't really do anything because at this point, these rows will be duplicates.", file = sys.stderr)
+    df_annot_chr = get_best_contig_L50_assembly(df_annot_chr, groupby_col = "Assembly Accession")
+    print("    - {}".format(return_stats_string(df_annot_chr)), file = sys.stderr)
+    df_annot_chr["chrscale"] = True
+    df_annot_chr["annotated"] = True
+    legal_True_final_group_df(df_annot_chr)
+
+    print("", file = sys.stderr)
+    print("*** GETTING THE CHR-SCALE, unANNOTATED ASSEMBLIES ***", file = sys.stderr)
+    # first we get the assemblies that have no annotations and are chromosome-scale
+    df_unannot_chr = df.loc[~df["Annotation Release Date"].notna()]
+    df_unannot_chr = df_unannot_chr.loc[df_unannot_chr["Assembly Level"] == "Chromosome"]
+    print("  - Getting the genomes that are unannotated and chromosome-scale", file = sys.stderr)
+    print("    - {}".format(return_stats_string(df_unannot_chr)), file = sys.stderr)
+    # Filter out some duplicate assemblies, preferentially select the ones that are listed as representative genomes
+    print("  - Getting the rows that are the SRA versions of each assembly accession.", file = sys.stderr)
+    df_unannot_chr = prefer_SRA_over_others(df_unannot_chr, groupby_col = "Assembly Accession")
+    print("    - {}".format(return_stats_string(df_unannot_chr)), file = sys.stderr)
+    # For each taxonomic ID, get the assembly with the lowest contig L50.
+    print("  - Getting the rows that have the lowest contig L50 for each assembly accession.", file = sys.stderr)
+    print("    This doesn't really do anything because at this point, these rows will be duplicates.", file = sys.stderr)
+    df_unannot_chr = get_best_contig_L50_assembly(df_unannot_chr, groupby_col = "Assembly Accession")
+    print("    - {}".format(return_stats_string(df_unannot_chr)), file = sys.stderr)
+    df_unannot_chr["chrscale"] = True
+    df_unannot_chr["annotated"] = False
+    legal_True_final_group_df(df_unannot_chr)
+
+    # Generate a set of the species for which we have found chromosome-scale genomes already.
+    # We don't need to find sub-chromosome-scale genomes for these species.
+    # Everything is int already, so we don't need to cast.
+    set_of_species_chr_scale = set(df_annot_chr["Organism Taxonomic ID"]).union(set(df_unannot_chr["Organism Taxonomic ID"]))
+
+    print("", file = sys.stderr)
+    print("*** GETTING THE non-CHR-SCALE, ANNOTATED ASSEMBLIES ***", file = sys.stderr)
+    # first we get the assemblies that have annotations and are not chromosome-scale
+    print("  - Getting the genomes that are annotated and not chromosome-scale", file = sys.stderr)
+    df_annot_nonchr = df.loc[df["Annotation Release Date"].notna()]
+    df_annot_nonchr = df_annot_nonchr.loc[df_annot_nonchr["Assembly Level"] != "Chromosome"]
+    print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
+    # Now we remove genomes of species that have already been found in the chromosome-scale datasets.
+    print("  - Removing genomes for species that already have chromosome-scale genomes.", file = sys.stderr)
+    print("    The information we will learn from non-chromosome-scale genomes is redundant.", file = sys.stderr)
+    df_annot_nonchr = df_annot_nonchr.loc[~df_annot_nonchr["Organism Taxonomic ID"].isin(set_of_species_chr_scale)]
+    print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
+    # Prefer the RefSeq versions of the genomes
+    print("  - Filtering duplicate entries to prefer the assembly with the NCBI RefSeq annotation.", file = sys.stderr)
+    df_annot_nonchr = prefer_refseq(df_annot_nonchr)
+    print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
+    # Prefer the SRA versions of the genomes
+    print("  - Getting the rows that are the SRA versions of each assembly accession.", file = sys.stderr)
+    df_annot_nonchr = prefer_SRA_over_others(df_annot_nonchr, groupby_col = "Assembly Accession")
+    print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
+    # filter out the duplicates now
+    print("  - Getting the rows that have the lowest contig L50 for each assembly accession.", file = sys.stderr)
+    print("    This doesn't really do anything because at this point, these rows will be duplicates.", file = sys.stderr)
+    df_annot_nonchr = get_best_contig_L50_assembly(df_annot_nonchr, groupby_col = "Assembly Accession")
+    print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
+    # prefer genomes with the higest N50, be it the scaffold or contig N50
+    print("  - For each species, getting the assembly with the highest N50, be it contig or scaffold.", file = sys.stderr)
+    df_annot_nonchr = prefer_assembly_with_higher_N50(df_annot_nonchr)
+    print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
+    df_annot_nonchr["chrscale"] = False
+    df_annot_nonchr["annotated"] = True
+    legal_True_final_group_df(df_annot_nonchr)
+
+
+    print("", file = sys.stderr)
+    print("*** GETTING THE non-CHR-SCALE, nonANNOTATED ASSEMBLIES ***", file = sys.stderr)
+    # first we get the assemblies that do not annotations and are not chromosome-scale
+    print("  - Getting the genomes that are unannotated and not chromosome-scale", file = sys.stderr)
+    df_unannot_nonchr = df.loc[~df["Annotation Release Date"].notna()]
+    df_unannot_nonchr = df_unannot_nonchr.loc[df_unannot_nonchr["Assembly Level"] != "Chromosome"]
+    print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
+    # Now we remove genomes of species that have already been found in the chromosome-scale datasets.
+    print("  - Removing genomes for species that already have chromosome-scale genomes.", file = sys.stderr)
+    print("    The information we will learn from non-chromosome-scale genomes is redundant.", file = sys.stderr)
+    df_unannot_nonchr = df_unannot_nonchr.loc[~df_unannot_nonchr["Organism Taxonomic ID"].isin(set_of_species_chr_scale)]
+    print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
+    # Prefer the SRA versions of the genomes
+    print("  - Getting the rows that are the SRA versions of each assembly accession.", file = sys.stderr)
+    df_unannot_nonchr = prefer_SRA_over_others(df_unannot_nonchr, groupby_col = "Assembly Accession")
+    print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
+    # filter out the duplicates now
+    print("  - Getting the rows that have the lowest contig L50 for each assembly accession.", file = sys.stderr)
+    print("    This doesn't really do anything because at this point, these rows will be duplicates.", file = sys.stderr)
+    df_unannot_nonchr = get_best_contig_L50_assembly(df_unannot_nonchr, groupby_col = "Assembly Accession")
+    print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
+    # prefer genomes with the higest N50, be it the scaffold or contig N50
+    print("  - For each species, getting the assembly with the highest N50, be it contig or scaffold.", file = sys.stderr)
+    df_unannot_nonchr = prefer_assembly_with_higher_N50(df_unannot_nonchr)
+    print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
+    df_unannot_nonchr["chrscale"] = False
+    df_unannot_nonchr["annotated"] = False
+    legal_True_final_group_df(df_annot_nonchr)
+
+    # combine all of these into a new dataframe called df, line the original
+    return pd.concat([df_annot_chr, df_unannot_chr, df_annot_nonchr, df_unannot_nonchr])
+
+def load_and_cleanup_NCBI_datasets_tsv_df(tsv_filepath, ignore_list) -> pd.DataFrame:
+    """
+    This function is responsible for cleaning the dataframe that is output by the NCBI datasets program.
+    A lot of times the fields are improperly formatted.
+    """
+    df = pd.read_csv(tsv_filepath, sep="\t", low_memory=False)
+    # strip leading and trailing whitespace from the column names because pandas can screw up sometimes
+    df.columns = df.columns.str.strip()
+
+    # Remove assemblies that are not chromosome-scale.
+    # These genomes are likely those that we manually checked and know that we don't wan't.
+    df = remove_specific_GCAs(df, ignore_list)
+
+    # change these columns to integers. There should not be any missing values.
+    cols_to_change_to_int = [
+                             "Assembly Stats Contig L50",
+                             "Assembly Stats Contig N50",
+                             "Assembly Stats Number of Component Sequences",
+                             "Assembly Stats Number of Contigs",
+                             "Assembly Stats Total Sequence Length",
+                             "Assembly Stats Total Ungapped Length",
+                             "Organism Taxonomic ID",
+                            ]
+    for thiscol in cols_to_change_to_int:
+        # check that the column exists, if not, tell the user
+        if thiscol not in df.columns:
+            raise Exception("The column {} is not in the dataframe.".format(thiscol))
+        df[thiscol] = df[thiscol].astype(int)
+
+    # change these columns to ints, and if there is NaN the value is 0
+    cols_to_change_to_int = ["Annotation BUSCO Total Count",
+                             "Annotation Count Gene Non-coding",
+                             "Annotation Count Gene Other",
+                             "Annotation Count Gene Protein-coding",
+                             "Annotation Count Gene Pseudogene",
+                             "Annotation Count Gene Total",
+                             "Assembly Stats Number of Scaffolds",
+                             "Assembly Stats Scaffold L50",
+                             "Assembly Stats Scaffold N50"
+                            ]
+    for thiscol in cols_to_change_to_int:
+        # check that the column exists, if not, tell the user
+        if thiscol not in df.columns:
+            raise Exception("The column {} is not in the dataframe.".format(thiscol))
+        df[thiscol] = df[thiscol].fillna(0).astype(int)
+    return df
+
+def dataset_summary_table(df, assembly_release_date = "9999-99-99") -> pd.DataFrame:
+    """
+    This function takes in a dataframe and returns a summary table of the dataframe.
+
+    The final dataframe looks like this, and has all the information needed for marginal tables:
+            coltype chrscale annotated  num_species  num_genomes assembly_release_date_cutoff
+            cell    False     False         4745         4745                   2023-12-29
+            cell    False      True          851          851                   2023-12-29
+            cell     True     False         2163         2837                   2023-12-29
+            cell     True      True          648          789                   2023-12-29
+        marginal    False       all         5248         5596                   2023-12-29
+        marginal     True       all         2287         3626                   2023-12-29
+        marginal      all     False         6908         7582                   2023-12-29
+        marginal      all      True         1499         1640                   2023-12-29
+           total      all       all         7535         9222                   2023-12-29
+    """
+    # if the assembly_release date is 9999-99-99, then return today's date
+    if assembly_release_date == "9999-99-99":
+        assembly_release_date = datetime.today().strftime('%Y-%m-%d')
+
+    # print out a marginal table of the dataframes, the intersection of annotated, not annotated, chromosome-scale and not, plus the number of species in each category
+    # the sort order of chrscale, then annotated
+    #
+    all_dfs = []
+    summary_entries = []
+    aggs = [["Organism Taxonomic ID", "nunique", "num_species"],
+            ["Organism Taxonomic ID", "count", "num_genomes"]
+           ]
+    for thisagg in aggs:
+        summary = df.groupby(["chrscale", "annotated"]).agg({thisagg[0]: thisagg[1]})
+        # renmae the columns
+        summary.columns = [thisagg[2]]
+        summary_entries.append(summary)
+    summary = pd.concat(summary_entries, axis=1).reset_index()
+    # add
+    summary = summary.assign(coltype="cell")
+    all_dfs.append(summary)
+
+    opposite = {"chrscale": "annotated", "annotated": "chrscale"}
+    for marginal in ["chrscale", "annotated"]:
+        marginal_entries = []
+        for thisagg in aggs:
+            summary = df.groupby([marginal]).agg({thisagg[0]: thisagg[1]})
+            # renmae the columns
+            summary.columns = [thisagg[2]]
+            marginal_entries.append(summary)
+        summary = pd.concat(marginal_entries, axis=1).reset_index()
+        # add the other column
+        summary = summary.assign(**{opposite[marginal]: "all", "coltype": "marginal"})
+        all_dfs.append(summary)
+
+    # now just get the number of genomes and number of species for the whole dataframe
+    # make a new dataframe with the number of genomes and number of species
+    totdf = pd.DataFrame({"num_genomes": len(df["Assembly Accession"].unique()),
+                          "num_species": len(df["Organism Taxonomic ID"].unique()),
+                          "chrscale": "all",
+                          "annotated": "all",
+                          "coltype": "total"}, index=[0])
+    all_dfs.append(totdf)
+    # swap the columns so that coltype is first, then chrscale, then annotated, then num_species, then num_genomes
+    all_dfs = [x[["coltype", "chrscale", "annotated", "num_species", "num_genomes"]] for x in all_dfs]
+    # print out the concatenated dataframe
+    finaldf = pd.concat(all_dfs).sort_values(by=["coltype", "chrscale", "annotated"]).reset_index(drop=True)
+    # add a column of the assembly_release_date_cutoff
+    finaldf = finaldf.assign(assembly_release_date_cutoff = assembly_release_date)
+    return finaldf
+
 rule get_representative_genomes:
     """
     This rule is responsible for parsing the genome report and selecting the representative genomes
@@ -657,151 +922,33 @@ rule get_representative_genomes:
         time  = 5, # 5 minutes
         mem_mb = 1000
     run:
-        # load in the dataframe
-        df = pd.read_csv(input.report_tsv, sep="\t", low_memory=False)
-        # strip leading and trailing whitespace from the column names because pandas can screw up sometimes
-        df.columns = df.columns.str.strip()
-        # remove all of the hardcoded assemblies that we know will cause problems. See the top of this file for more info.
-        df = df.loc[~df["Assembly Accession"].isin(hardcoded_ignore_accessions)]
-        # change column ["Organism Taxonomic ID", "Assembly Stats Number of Scaffolds", "Assembly Stats Total Sequence Length"] to integers
-        cols_to_change_to_int = ["Organism Taxonomic ID",
-                                 "Assembly Stats Number of Contigs",
-                                 "Assembly Stats Total Sequence Length"]
-        for thiscol in cols_to_change_to_int:
-            df[thiscol] = df[thiscol].astype(int)
-        # change these columns to ints, and if there is NaN the value is 0
-        cols_to_change_to_int = ["Assembly Stats Number of Scaffolds"]
-        for thiscol in cols_to_change_to_int:
-            df[thiscol] = df[thiscol].fillna(0).astype(int)
+        # first we get the list of things to ignore
+        # remove things that are in assembly_ignore_list.txt
+        ignore_list = []
+        with open(input.assembly_ignore_list, "r") as f:
+            for line in f:
+                # remove leading and trailing whitespace
+                line = line.strip()
+                # ignore lines that start with a comment character
+                if line.startswith("#"):
+                    continue
+                # ignore empty lines
+                if len(line) == 0:
+                    continue
+                # add this line to the set of assemblies to ignore
+                ignore_list.append(line)
+        # add hardcoded_ignore_accessions to the ignore_list
+        ignore_list = set(ignore_list + hardcoded_ignore_accessions)
 
-        # remove rows that are absolute duplicates
-        df = df.drop_duplicates()
-        df["chrscale"] = False
-        df["annotated"] = False
+        # load in and clean up the dataframe
+        df = load_and_cleanup_NCBI_datasets_tsv_df(input.report_tsv, ignore_list)
 
-        print("Number of species is {}".format(len(df["Organism Taxonomic ID"].unique())), file = sys.stderr)
-        print("Len of raw df is {}".format(len(df)), file = sys.stderr)
+        # Perform filtering of the dataset to make sure that we have the best possible genomes.
+        df = filter_raw_genome_df(df, hardcoded_ignore_accessions)
 
-        # Remove assemblies that are not chromosome-scale.
-        # These genomes are likely those that we manually checked and know that we don't wan't.
-        df = remove_specific_GCAs(df, input.assembly_ignore_list)
-
-        print("", file = sys.stderr)
-        print("*** GETTING THE CHR-SCALE, ANNOTATED ASSEMBLIES ***", file = sys.stderr)
-        # First we get the assemblies that have annotations and are chromosome-scale
-        df_annot_chr = df.loc[df["Annotation Release Date"].notna()]
-        df_annot_chr = df_annot_chr.loc[df_annot_chr["Assembly Level"] == "Chromosome"]
-        print("  - Getting the genomes that are annotated and chromosome-scale", file = sys.stderr)
-        print("    - {}".format(return_stats_string(df_annot_chr)), file = sys.stderr)
-        # Filter out some duplicate assemblies, preferentially select the ones that are listed as representative genomes
-        print("  - Getting the rows that are SRA versions of each assembly accession.", file = sys.stderr)
-        df_annot_chr = prefer_SRA_over_others(df_annot_chr, groupby_col = "Assembly Accession")
-        print("    - {}".format(return_stats_string(df_annot_chr)), file = sys.stderr)
-        # For each taxonomic ID, get the assembly with the lowest contig L50.
-        print("  - Getting the rows that have the lowest contig L50 for each assembly accession.", file = sys.stderr)
-        print("    This doesn't really do anything because at this point, these rows will be duplicates.", file = sys.stderr)
-        df_annot_chr = get_best_contig_L50_assembly(df_annot_chr, groupby_col = "Assembly Accession")
-        print("    - {}".format(return_stats_string(df_annot_chr)), file = sys.stderr)
-        df_annot_chr["chrscale"] = True
-        df_annot_chr["annotated"] = True
-        legal_True_final_group_df(df_annot_chr)
-
-        print("", file = sys.stderr)
-        print("*** GETTING THE CHR-SCALE, unANNOTATED ASSEMBLIES ***", file = sys.stderr)
-        # first we get the assemblies that have no annotations and are chromosome-scale
-        df_unannot_chr = df.loc[~df["Annotation Release Date"].notna()]
-        df_unannot_chr = df_unannot_chr.loc[df_unannot_chr["Assembly Level"] == "Chromosome"]
-        print("  - Getting the genomes that are unannotated and chromosome-scale", file = sys.stderr)
-        print("    - {}".format(return_stats_string(df_unannot_chr)), file = sys.stderr)
-        # Filter out some duplicate assemblies, preferentially select the ones that are listed as representative genomes
-        print("  - Getting the rows that are the SRA versions of each assembly accession.", file = sys.stderr)
-        df_unannot_chr = prefer_SRA_over_others(df_unannot_chr, groupby_col = "Assembly Accession")
-        print("    - {}".format(return_stats_string(df_unannot_chr)), file = sys.stderr)
-        # For each taxonomic ID, get the assembly with the lowest contig L50.
-        print("  - Getting the rows that have the lowest contig L50 for each assembly accession.", file = sys.stderr)
-        print("    This doesn't really do anything because at this point, these rows will be duplicates.", file = sys.stderr)
-        df_unannot_chr = get_best_contig_L50_assembly(df_unannot_chr, groupby_col = "Assembly Accession")
-        print("    - {}".format(return_stats_string(df_unannot_chr)), file = sys.stderr)
-        df_unannot_chr["chrscale"] = True
-        df_unannot_chr["annotated"] = False
-        legal_True_final_group_df(df_unannot_chr)
-
-        # Generate a set of the species for which we have found chromosome-scale genomes already.
-        # We don't need to find sub-chromosome-scale genomes for these species.
-        # Everything is int already, so we don't need to cast.
-        set_of_species_chr_scale = set(df_annot_chr["Organism Taxonomic ID"]).union(set(df_unannot_chr["Organism Taxonomic ID"]))
-
-        print("", file = sys.stderr)
-        print("*** GETTING THE non-CHR-SCALE, ANNOTATED ASSEMBLIES ***", file = sys.stderr)
-        # first we get the assemblies that have annotations and are not chromosome-scale
-        print("  - Getting the genomes that are annotated and not chromosome-scale", file = sys.stderr)
-        df_annot_nonchr = df.loc[df["Annotation Release Date"].notna()]
-        df_annot_nonchr = df_annot_nonchr.loc[df_annot_nonchr["Assembly Level"] != "Chromosome"]
-        print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
-        # Now we remove genomes of species that have already been found in the chromosome-scale datasets.
-        print("  - Removing genomes for species that already have chromosome-scale genomes.", file = sys.stderr)
-        print("    The information we will learn from non-chromosome-scale genomes is redundant.", file = sys.stderr)
-        df_annot_nonchr = df_annot_nonchr.loc[~df_annot_nonchr["Organism Taxonomic ID"].isin(set_of_species_chr_scale)]
-        print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
-        # Prefer the RefSeq versions of the genomes
-        print("  - Filtering duplicate entries to prefer the assembly with the NCBI RefSeq annotation.", file = sys.stderr)
-        df_annot_nonchr = prefer_refseq(df_annot_nonchr)
-        print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
-        # Prefer the SRA versions of the genomes
-        print("  - Getting the rows that are the SRA versions of each assembly accession.", file = sys.stderr)
-        df_annot_nonchr = prefer_SRA_over_others(df_annot_nonchr, groupby_col = "Assembly Accession")
-        print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
-        # filter out the duplicates now
-        print("  - Getting the rows that have the lowest contig L50 for each assembly accession.", file = sys.stderr)
-        print("    This doesn't really do anything because at this point, these rows will be duplicates.", file = sys.stderr)
-        df_annot_nonchr = get_best_contig_L50_assembly(df_annot_nonchr, groupby_col = "Assembly Accession")
-        print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
-        # prefer genomes with the higest N50, be it the scaffold or contig N50
-        print("  - For each species, getting the assembly with the highest N50, be it contig or scaffold.", file = sys.stderr)
-        df_annot_nonchr = prefer_assembly_with_higher_N50(df_annot_nonchr)
-        df_annot_nonchr["chrscale"] = False
-        df_annot_nonchr["annotated"] = True
-        print("    - {}".format(return_stats_string(df_annot_nonchr)), file = sys.stderr)
-
-        print("", file = sys.stderr)
-        print("*** GETTING THE non-CHR-SCALE, nonANNOTATED ASSEMBLIES ***", file = sys.stderr)
-        # first we get the assemblies that do not annotations and are not chromosome-scale
-        print("  - Getting the genomes that are unannotated and not chromosome-scale", file = sys.stderr)
-        df_unannot_nonchr = df.loc[~df["Annotation Release Date"].notna()]
-        df_unannot_nonchr = df_unannot_nonchr.loc[df_unannot_nonchr["Assembly Level"] != "Chromosome"]
-        print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
-        # Now we remove genomes of species that have already been found in the chromosome-scale datasets.
-        print("  - Removing genomes for species that already have chromosome-scale genomes.", file = sys.stderr)
-        print("    The information we will learn from non-chromosome-scale genomes is redundant.", file = sys.stderr)
-        df_unannot_nonchr = df_unannot_nonchr.loc[~df_unannot_nonchr["Organism Taxonomic ID"].isin(set_of_species_chr_scale)]
-        print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
-        # Prefer the SRA versions of the genomes
-        print("  - Getting the rows that are the SRA versions of each assembly accession.", file = sys.stderr)
-        df_unannot_nonchr = prefer_SRA_over_others(df_unannot_nonchr, groupby_col = "Assembly Accession")
-        print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
-        # filter out the duplicates now
-        print("  - Getting the rows that have the lowest contig L50 for each assembly accession.", file = sys.stderr)
-        print("    This doesn't really do anything because at this point, these rows will be duplicates.", file = sys.stderr)
-        df_unannot_nonchr = get_best_contig_L50_assembly(df_unannot_nonchr, groupby_col = "Assembly Accession")
-        print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
-        # prefer genomes with the higest N50, be it the scaffold or contig N50
-        print("  - For each species, getting the assembly with the highest N50, be it contig or scaffold.", file = sys.stderr)
-        df_unannot_nonchr = prefer_assembly_with_higher_N50(df_unannot_nonchr)
-        df_unannot_nonchr["chrscale"] = False
-        df_unannot_nonchr["annotated"] = False
-        print("    - {}".format(return_stats_string(df_unannot_nonchr)), file = sys.stderr)
-
-        # combine all of these into a new dataframe called df, line the original
-        df = pd.concat([df_annot_chr, df_unannot_chr, df_annot_nonchr, df_unannot_nonchr])
-
-        # print out a marginal table of the dataframes, the intersection of annotated, not annotated, chromosome-scale and not, plus the number of species in each category
-        # the sort order of chrscale, then annotated
-        #
-        summary = df.groupby(["chrscale", "annotated"]).agg({"Organism Taxonomic ID": "nunique"})
-        # now make a summary that is the total number of genomes
-        summary = df.groupby(["chrscale", "annotated"]).agg({"Organism Taxonomic ID": "count"})
-        print(summary)
-        sys.exit()
+        # print out the dataset summary table
+        # TODO: Save this to its own file. Might have to do this in the next rule, after the checkpoint.
+        summarydf = dataset_summary_table(df)
 
         # make a new column called Lineage. Get the NCBI Taxa lineage from ete3 NCBITaxa
         ncbi = NCBITaxa()
@@ -874,6 +1021,3 @@ checkpoint split_into_annotated_and_unannotated_and_chr_nonchr:
         annot_nonchr_df.to_csv(  output.annotated_genomes_nonchr,   sep="\t", index=False)
         unann_chr_df.to_csv(     output.unannotated_genomes_chr,    sep="\t", index=False)
         unann_nonchr_df.to_csv(  output.unannotated_genomes_nonchr, sep="\t", index=False)
-
-
-
