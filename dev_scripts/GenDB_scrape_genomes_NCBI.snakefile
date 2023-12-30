@@ -883,17 +883,36 @@ def dataset_summary_table(df, assembly_release_date = "9999-99-99") -> pd.DataFr
         summary.columns = [thisagg[2]]
         summary_entries.append(summary)
     summary = pd.concat(summary_entries, axis=1).reset_index()
-    # add
+    # If any of these rows are missing from the dataframe, then add them with 0s
+    # Specifically, the summary df must have values for all combinations of True/False for chrscale and annotated
+    #  chrscale annotated  num_species  num_genomes
+    #  False     False         4745         4745
+    #  False      True          851          851
+    #   True     False         2163         2837
+    #   True      True          648          789
+    colcombos = list(itertools.product([True, False], repeat=2))
+    for thiscombo in colcombos:
+        if (thiscombo[0], thiscombo[1]) not in list(zip(summary["chrscale"], summary["annotated"])):
+            summary = summary.append({"chrscale": thiscombo[0],
+                                      "annotated": thiscombo[1],
+                                      "num_species": 0,
+                                      "num_genomes": 0},
+                                     ignore_index=True)
     summary = summary.assign(coltype="cell")
     all_dfs.append(summary)
+    # DONE WITH THE CELL TABLE
 
+    # NOW WE CALCULATE THE MARGINALS
     opposite = {"chrscale": "annotated", "annotated": "chrscale"}
     for marginal in ["chrscale", "annotated"]:
         marginal_entries = []
         for thisagg in aggs:
             summary = df.groupby([marginal]).agg({thisagg[0]: thisagg[1]})
-            # renmae the columns
+            # rename the columns
             summary.columns = [thisagg[2]]
+            # if there is no value for this marginal, then add it with 0s
+            if marginal not in list(summary.index):
+                summary = summary.append({thisagg[2]: 0}, ignore_index=True)
             marginal_entries.append(summary)
         summary = pd.concat(marginal_entries, axis=1).reset_index()
         # add the other column
@@ -910,6 +929,7 @@ def dataset_summary_table(df, assembly_release_date = "9999-99-99") -> pd.DataFr
     all_dfs.append(totdf)
     # swap the columns so that coltype is first, then chrscale, then annotated, then num_species, then num_genomes
     all_dfs = [x[["coltype", "chrscale", "annotated", "num_species", "num_genomes"]] for x in all_dfs]
+
     # print out the concatenated dataframe
     finaldf = pd.concat(all_dfs).sort_values(by=["coltype", "chrscale", "annotated"]).reset_index(drop=True)
     # add a column of the assembly_release_date_cutoff
