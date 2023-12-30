@@ -21,10 +21,12 @@ hardcoded_ignore_accessions = ["GCA_900186335.3"]
 import datetime
 from datetime import timedelta
 from ete3 import NCBITaxa
+import itertools
 import numpy as np
 import os
 import pandas as pd
 from datetime import datetime
+
 
 import yaml
 import time
@@ -893,11 +895,14 @@ def dataset_summary_table(df, assembly_release_date = "9999-99-99") -> pd.DataFr
     colcombos = list(itertools.product([True, False], repeat=2))
     for thiscombo in colcombos:
         if (thiscombo[0], thiscombo[1]) not in list(zip(summary["chrscale"], summary["annotated"])):
-            summary = summary.append({"chrscale": thiscombo[0],
-                                      "annotated": thiscombo[1],
-                                      "num_species": 0,
-                                      "num_genomes": 0},
-                                     ignore_index=True)
+            # make a dataframe of len 1 with the values of this combo
+            tempdf = pd.DataFrame({"chrscale": thiscombo[0],
+                                   "annotated": thiscombo[1],
+                                   "num_species": 0,
+                                   "num_genomes": 0},
+                                  index=[0])
+            # update the df
+            summary = pd.concat([summary, tempdf]).reset_index(drop=True)
     summary = summary.assign(coltype="cell")
     all_dfs.append(summary)
     # DONE WITH THE CELL TABLE
@@ -910,13 +915,28 @@ def dataset_summary_table(df, assembly_release_date = "9999-99-99") -> pd.DataFr
             summary = df.groupby([marginal]).agg({thisagg[0]: thisagg[1]})
             # rename the columns
             summary.columns = [thisagg[2]]
-            # if there is no value for this marginal, then add it with 0s
-            if marginal not in list(summary.index):
-                summary = summary.append({thisagg[2]: 0}, ignore_index=True)
             marginal_entries.append(summary)
         summary = pd.concat(marginal_entries, axis=1).reset_index()
         # add the other column
         summary = summary.assign(**{opposite[marginal]: "all", "coltype": "marginal"})
+        # At this point, every single time we should have a dataframe that looks like this:
+        # When the marginal is chrscale, the summary df should look like this:
+        #    chrscale  num_species  num_genomes annotated   coltype
+        # 0     False         5269         5652       all  marginal
+        # 1      True         2287         3633       all  marginal
+        # To be explicit, the marginal column should have a "True" and "False row",
+        #   the opposite column should say "all", every value in "coltype" should be "marginal"
+        for thismarginal in [True, False]:
+            if thismarginal not in list(summary[marginal]):
+                # make a dataframe of len 1 with the values of this combo
+                tempdf = pd.DataFrame({marginal: thismarginal,
+                                       "num_species": 0,
+                                       "num_genomes": 0,
+                                       opposite[marginal]: "all",
+                                       "coltype": "marginal"},
+                                      index=[0])
+                # update the df
+                summary = pd.concat([summary, tempdf]).reset_index(drop=True)
         all_dfs.append(summary)
 
     # now just get the number of genomes and number of species for the whole dataframe
@@ -1023,7 +1043,7 @@ rule history_of_assemblies:
             summarydf = dataset_summary_table(dftemp, assembly_release_date = current_date)
             historical_view_dfs.append(summarydf)
             current_date = datetime.strptime(current_date, '%Y-%m-%d')
-            current_date = (current_date - timedelta(days=7)).strftime('%Y-%m-%d')
+            current_date = (current_date - timedelta(days=150)).strftime('%Y-%m-%d')
         # print a newline to keep the progress bar on the screen/in the log
         print("   Filtering on or before date: {}".format(current_date), file=sys.stderr)
         # concatenate all the dataframes together
