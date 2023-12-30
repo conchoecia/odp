@@ -6,15 +6,20 @@ The program requires that either a directory of the annotated and unannotated ge
 Otherwise the user has to specify specific paths to those tsv files.
 """
 
-import os
 import pandas as pd
-import sys
 from datetime import datetime
 import GenDB
 import yaml
 
-# figure out where bin is because we need to use some outside tools
+# This block imports fasta-parser as fasta
+import os
+import sys
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
+
+# figure out where bin is because we need to use some outside tools
 bin_path = os.path.join(snakefile_path, "../bin")
 
 configfile: "config.yaml"
@@ -82,6 +87,13 @@ rule dlChrs:
         # go back to the original directory
         cd $RETURNHERE
 
+        # First we remove any .fna files that have the assembly name in them. The files that have chr01.fna, chr02.fna, etc. are the ones we want.
+        # See the error on github here: https://github.com/ncbi/datasets/issues/298
+        find {params.outdir} -name "*genomic.fna" -exec rm {{}} \\;
+        # We also should remove the unplaced scaffolds that are sometimes downloaded with the chromosome-scale scaffolds.
+        find {params.outdir} -name "*unplaced.scaf.fna" -exec rm {{}} \\;
+
+        # Now that we have removed the files that we don't want, we are (hopefully) left with just the chromosome-scale scaffolds.
         # make the final assembly fasta file from the individual chromosome's .fna files
         find {params.outdir} -name "*.fna" -exec cat {{}} \\; > {output.fasta}
         # Remove the files that we no longer need.
@@ -90,6 +102,71 @@ rule dlChrs:
         # remove a directory we no longer need
         rm -rf {params.rmdir}
         """
+
+rule gzip_fasta_file:
+    """
+    In this step zip the fasta file to conserve space.
+    """
+    input:
+        genome = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta",
+    output:
+        genome = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz"
+    threads: 1
+    resources:
+        mem_mb = 1000, # 1 GB of RAM
+        time   = 50   # Usually takes less than 10 minutes. Just do 50 for exceptional cases. Exceptional cases usually take 150 minutes.
+    params:
+        outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/",
+    shell:
+        """
+        echo "Gzipping the fasta file."
+        gzip {input.genome}
+        # remove the .fna files again, in case the last step failed
+        find {params.outdir} -name "*.fna" -exec rm {{}} \\;
+        """
+
+def verChr_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for the script depends on the size of the input genome.
+    """
+    attemptdict = {1: 1000,
+                   2: 2000,
+                   3: 4000,
+                   4: 8000,
+                   5: 16000,
+                   6: 32000,
+                   7: 64000,
+                   8: 128000}
+    return attemptdict[attempt]
+
+rule verChr:
+    """
+    This rule does some basic checks on the chromosome-scale genome assemblies to make sure that they are valid.
+    Uses the fasta module included in the odp package to do this.
+      - Checks that the fasta entries appear no more than once.
+    """
+    input:
+        fasta = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz"
+    output:
+        report = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz.CHECKED"
+    threads: 1
+    retries: 8
+    resources:
+        mem_mb = verChr_get_mem_mb, # 1 GB of RAM
+        time   = 5  # 5 minutes.
+    run:
+        seen_entries = set()
+        for record in fasta.parse(input.fasta):
+            if record.id in seen_entries:
+                raise ValueError("The fasta entry {} appears more than once in the file {}.".format(record.id, input.fasta))
+            else:
+                seen_entries.add(record.id)
+        # if we get to this point, then the fasta file is valid. We can write the report file.
+        with open(output.report, "w") as f:
+            f.write("The fasta file {} is valid.\n".format(input.fasta))
+            f.write("It contains {} entries.\n".format(len(seen_entries)))
+            f.write("The entries are: {}\n".format(seen_entries))
+            f.write("None of the entires occur more than once.\n")
 
 rule dlPepGff:
     """
@@ -142,27 +219,33 @@ rule dlPepGff:
         find {params.outdir} -name "*.gtf" -exec rm {{}} \\;
         """
 
-rule gzip_fasta_file:
+def prep_chrom_get_mem_mb(wildcards, attempt):
     """
-    In this step zip the fasta file to conserve space.
+    The amount of RAM needed for the script depends on the size of the input genome, the number of proteins, and the gff size.
     """
-    input:
-        genome = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta",
-    output:
-        genome = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz"
-    threads: 1
-    resources:
-        mem_mb = 1000, # 1 GB of RAM
-        time   = 50   # Usually takes less than 10 minutes. Just do 50 for exceptional cases. Exceptional cases usually take 150 minutes.
-    params:
-        outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/",
-    shell:
-        """
-        echo "Gzipping the fasta file."
-        gzip {input.genome}
-        # remove the .fna files again, in case the last step failed
-        find {params.outdir} -name "*.fna" -exec rm {{}} \\;
-        """
+    attemptdict = {1: 4000,
+                   2: 8000,
+                   3: 16000,
+                   4: 32000,
+                   5: 64000,
+                   6: 128000,
+                   7: 256000,
+                   8: 512000}
+    return attemptdict[attempt]
+
+def prep_chrom_get_time(wildcards, attempt):
+    """
+    The amount of minutes needed varies depending on the input size.
+    """
+    attemptdict = {1: 16,
+                   2: 32,
+                   3: 64,
+                   4: 128,
+                   5: 256,
+                   6: 512,
+                   7: 1024,
+                   8: 2048}
+    return attemptdict[attempt]
 
 rule prep_chrom_file_from_NCBI:
     """
@@ -172,6 +255,7 @@ rule prep_chrom_file_from_NCBI:
     """
     input:
         genome   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz",
+        report = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz.CHECKED", # we need this to verify that the fasta file is legal
         protein  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.pep",
         gff      = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gff",
         chromgen = os.path.join(snakefile_path, "..", "scripts", "NCBIgff2chrom.py")
@@ -180,13 +264,15 @@ rule prep_chrom_file_from_NCBI:
         pep    = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.pep"),
         report = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.report.txt"
     threads: 1
+    retries: 7
     resources:
-        mem_mb  = 500, # shouldn't take much RAM, 231228 - I have seen mostly 200 MB or less
-        time    = 5 # 5 minutes
+        mem_mb  = prep_chrom_get_mem_mb, # shouldn't take much RAM, 231228 - I have seen mostly 200 MB or less. Sometimes it blows up to multiple GB.
+        time    = prep_chrom_get_time    # Most of these end by 5 minutes, but occassionally they take longer.
     params:
         prefix  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt"
     shell:
         """
+        rm -f {output.chrom} {output.pep} {output.report} 2>/dev/null
         python {input.chromgen} \
             -f {input.genome} \
             -p {input.protein} \
@@ -225,6 +311,7 @@ rule generate_assembled_config_entry:
     input:
         annotated_genomes = config["annotated_genome_chr_tsv"],
         genome            = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz",
+        genome_checked    = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz.CHECKED", # we need this to verify that the fasta file is legal
         protein           = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.pep.gz",
         chrom             = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.chrom.gz",
         report            = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.report.txt",
@@ -232,7 +319,8 @@ rule generate_assembled_config_entry:
         yaml   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.yaml.part",
     threads: 1
     resources:
-        mem_mb  = 1000
+        mem_mb  = 1000,
+        time    = 5
     run:
         # load in the dataframe of the annotated genomes
         df = pd.read_csv(input.annotated_genomes, sep="\t")
@@ -274,7 +362,9 @@ rule generate_assembled_config_entry:
         # cleanup the species name
         species = species.replace("sp.", "sp")
 
-        spstring = "{}{}{}".format(genus, species, taxid)
+        if "|" in [genus, species, taxid, wildcards.assemAnn]:
+            raise ValueError("You cannot have a | character in the genus, species, taxid, or assembly accession.")
+        spstring = "{}{}|{}|{}".format(genus, species, taxid, wildcards.assemAnn)
         h = "  "
         s = ""
         s += h + "{}:\n".format(spstring)

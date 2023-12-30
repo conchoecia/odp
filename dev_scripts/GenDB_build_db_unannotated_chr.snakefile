@@ -54,44 +54,7 @@ config["temp"] = config["tempdir"].rstrip("/").rstrip("\\")
 if not os.path.isdir(config["tempdir"]):
     raise IOError("The temporary directory you provided does not exist. {}".format(config["tempdir"]))
 
-if "directory" in config:
-    # ensure that the user also hasn't specified the accession tsvs
-    if "accession_tsvs" in config:
-        raise IOError("You cannot provide both a directory of tsv files ('directory') and specify the exact path of the TSVs ('accession_tsvs'). Read the config file.")
-    # ensure that the directory exists
-    if not os.path.isdir(config["directory"]):
-        raise IOError("The directory of TSV files you provided does not exist. {}".format(config["directory"]))
-    # get the paths to the tsv files
-    latest_accesions = GenDB.return_latest_accession_tsvs(config["directory"])
-    # This is the output of the above function:
-    #return_dict = {"annotated_chr":      os.path.join(directory_path, most_recent_annotated_chr_file),
-    #               "annotated_nonchr":   os.path.join(directory_path, most_recent_annotated_nonchr_file),
-    #               "unannotated_chr":    os.path.join(directory_path, most_recent_unannotated_chr_file),
-    #               "unannotated_nonchr": os.path.join(directory_path, most_recent_unannotated_nonchr_file)
-    #               }
-    config["annotated_genome_chr_tsv"]       = latest_accesions["annotated_chr"]
-    config["annotated_genome_nonchr_tsv"]    = latest_accesions["annotated_nonchr"]
-    config["unannotated_genome_chr_tsv"]     = latest_accesions["unannotated_chr"]
-    config["unannotated_genome_nonchr_tsv"]  = latest_accesions["unannotated_nonchr"]
-
-    # now add the entries to the config file so we can download them or not
-    config["assemAnn"] = GenDB.determine_genome_accessions(config["unannotated_genome_chr_tsv"])
-    # get the list of GCAs to ignore in case we need to remove any
-    ignore_list_path = os.path.join(snakefile_path, "assembly_ignore_list.txt")
-    with open(ignore_list_path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                if line in config["assemAnn"]:
-                    config["assemAnn"].remove(line)
-
-
-elif "accession_tsvs" in config:
-    # ensure that the user also hasn't specified the directory
-    if "directory" in config:
-        raise IOError("You cannot provide both a directory of tsv files ('directory') and specify the exact path of the TSVs ('accession_tsvs'). Read the config file.")
-    # we haven't implemented this yet. I haven't found a use case where I would want to specifially pick a file path rather than just get the most recent one.
-    raise NotImplementedError("We haven't implemented this yet. I haven't found a use case where I would want to specifially pick a file path rather than just get the most recent one.")
+config = GenDB.opening_logic_GenDB_build_db(config, chr_scale = True, annotated = False)
 
 # One key feature of this script is that we will map proteins from
 #  LG databases to annotate those genomes with the LG identities.
@@ -138,14 +101,86 @@ rule all:
     input:
         expand(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz", assemAnn=config["assemAnn"]),
         #LG_outfiles,
-        expand(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.chrom",
+        expand(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.chrom.gz",
                assemAnn=config["assemAnn"], LG_name=LG_to_db_directory_dict.keys()),
-        expand(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.pep",
+        expand(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.pep.gz",
                assemAnn=config["assemAnn"], LG_name=LG_to_db_directory_dict.keys()),
         expand("NCBI_odp_db.unannotated.{LG_name}.yaml",
                LG_name=LG_to_db_directory_dict.keys()),
         expand("NCBI_odp_sp_list.unannotated.{LG_name}.txt",
                LG_name=LG_to_db_directory_dict.keys()),
+
+rule download_unzip:
+    """
+    We have selected the unannotated genomes to download.
+    For these genomes we need to find a way to annotate them.
+
+    To specifically download the chromosome-scale scaffolds, there is a series of commands with the NCBI datasets tool.
+      I found this set of instructions after opening a ticket on NCBI's github page: https://github.com/ncbi/datasets/issues/298
+    """
+    input:
+        datasets = os.path.join(bin_path, "datasets")
+    output:
+        assembly = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/ncbi_dataset.zip"),
+        fasta    = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta")
+    retries: 3
+    params:
+        outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/",
+        APIstring = "" if "API_key" not in locals() else "--api-key {}".format(locals()["API_key"])
+    threads: 1
+    resources:
+        mem_mb = 2000, # 1 GB of RAM
+        time   = 20  # 20 minutes.
+    shell:
+        """
+        ## Wait a random amount of time up to 2 minutes to avoid overloading the NCBI servers.
+        #SLEEPTIME=$((1 + RANDOM % 120))
+        #echo "Sleeping for $SLEEPTIME seconds to avoid overloading the NCBI servers."
+        #sleep $SLEEPTIME
+
+        # Save the current directory
+        # Function to download the file
+        RETURNHERE=$(pwd)
+        cd {params.outdir}
+        {input.datasets} download genome accession {wildcards.assemAnn} --chromosomes all \
+            {params.APIstring} --dehydrated || true
+
+        # now we try to unzip it
+        unzip -o ncbi_dataset.zip
+
+        # rehydrate the dataset
+        {input.datasets} rehydrate --directory . --match chr
+
+        # go back to the original directory
+        cd $RETURNHERE
+
+        # make the final assembly fasta file from the individual chromosome's .fna files
+        find {params.outdir} -name "*.fna" -exec cat {{}} \\; > {output.fasta}
+        # Remove the files that we no longer need.
+        find {params.outdir} -name "*.fna" -exec rm {{}} \\;
+        """
+
+rule gzip_fasta_file:
+    """
+    In this step zip the fasta file to conserve space.
+    """
+    input:
+        genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta",
+    output:
+        genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz"
+    threads: 1
+    resources:
+        mem_mb = 1000, # 1 GB of RAM
+        time   = 50   # Usually takes less than 10 minutes. Just do 50 for exceptional cases. Exceptional cases usually take 150 minutes.
+    params:
+        outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/",
+    shell:
+        """
+        echo "Gzipping the fasta file."
+        gzip {input.genome}
+        # remove the .fna files again, in case the last step failed
+        find {params.outdir} -name "*.fna" -exec rm {{}} \\;
+        """
 
 rule generate_LG_fasta_sequence:
     """
@@ -278,8 +313,8 @@ rule paf_to_chrom_and_pep:
         paf = config["tool"] + "/output/mapped_reads/{assemAnn}/{LG_name}_to_{assemAnn}.filt.paf",
         pep  = config["tool"] + "/input/LG_proteins/{LG_name}.fasta"
     output:
-        chrom = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.chrom",
-        pep   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.pep"
+        chrom = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.chrom"),
+        pep   = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.pep")
     threads: 1
     resources:
         mem_mb = 500, # I can't forsee using a GB of RAM, but easy to request.
@@ -313,115 +348,28 @@ rule paf_to_chrom_and_pep:
                 if record.id in chromdf["query"].values:
                     o.write(">{}\n{}\n".format(record.id, record.seq))
 
-rule download_unzip:
+rule gzChrom:
     """
-    We have selected the unannotated genomes to download.
-    For these genomes we need to find a way to annotate them.
-
-    To specifically download the chromosome-scale scaffolds, there is a series of commands with the NCBI datasets tool.
-      I found this set of instructions after opening a ticket on NCBI's github page: https://github.com/ncbi/datasets/issues/298
+    just gzips the chrom file
     """
     input:
-        datasets = os.path.join(bin_path, "datasets")
+        chrom = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.chrom",
+        pep   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.pep"
     output:
-        assembly = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/ncbi_dataset.zip"),
-        fasta    = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta")
-    retries: 3
-    params:
-        outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/",
-        APIstring = "" if "API_key" not in locals() else "--api-key {}".format(locals()["API_key"])
+        chrom = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.chrom.gz",
+        pep   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.pep.gz"
     threads: 1
     resources:
-        mem_mb = 2000, # 1 GB of RAM
-        time   = 20  # 20 minutes.
+        mem_mb  = 1000, # shouldn't take a lot of RAM.
+        time    = 5 # 5 minutes
     shell:
         """
-        ## Wait a random amount of time up to 2 minutes to avoid overloading the NCBI servers.
-        #SLEEPTIME=$((1 + RANDOM % 120))
-        #echo "Sleeping for $SLEEPTIME seconds to avoid overloading the NCBI servers."
-        #sleep $SLEEPTIME
-
-        # Save the current directory
-        # Function to download the file
-        RETURNHERE=$(pwd)
-        cd {params.outdir}
-        {input.datasets} download genome accession {wildcards.assemAnn} --chromosomes all \
-            {params.APIstring} --dehydrated || true
-
-        # now we try to unzip it
-        unzip -o ncbi_dataset.zip
-
-        # rehydrate the dataset
-        {input.datasets} rehydrate --directory . --match chr
-
-        # go back to the original directory
-        cd $RETURNHERE
-
-        # make the final assembly fasta file from the individual chromosome's .fna files
-        find {params.outdir} -name "*.fna" -exec cat {{}} \\; > {output.fasta}
-        # Remove the files that we no longer need.
-        find {params.outdir} -name "*.fna" -exec rm {{}} \\;
+        # first gzip the chrom file
+        gzip < {input.chrom} > {output.chrom}
+        # second gzip the pep file. This will be bigger.
+        gzip < {input.pep} > {output.pep}
         """
 
-#rule filter_fasta:
-#    """
-#    This filters the fasta to only contain the chromosome-scale scaffolds.
-#
-#    This rule will be very bespoke for the different sources of genome assemblies.
-#
-#    Sources of genome assemblies and features that define them:
-#      - Sanger Darwin Tree of Life Project:
-#        - jsonl: {"accession":"GCA_940337035.1","assemblyInfo":{"assemblyLevel":"Chromosome","assemblyName":"PGI_AGRIOTES_LIN_V1","assemblyStatus":"current","assemblyType":"haploid","bioprojectAccession":"PRJEB47908","bioprojectLineage":[{"bioprojects":[{"accession":"PRJEB47908","title":"Agriotes lineatus genome and annotation from the Pest Genomics Initiative."}]}],"biosample":{"accession":"SAMEA13407341","attributes":[{"name":"ENA first public","value":"2022-06-14"},{"name":"ENA last update","value":"2022-06-14"},{"name":"ENA-CHECKLIST","value":"ERC000011"},{"name":"External Id","value":"SAMEA13407341"},{"name":"INSDC center alias","value":"ROTHAMSTED RESEARCH"},{"name":"INSDC center name","value":"ROTHAMSTED RESEARCH"},{"name":"INSDC first public","value":"2022-06-14T00:18:37Z"},{"name":"INSDC last update","value":"2022-06-14T00:18:37Z"},{"name":"INSDC status","value":"public"},{"name":"Submitter Id","value":"Agriotes_lineatus_genome"},{"name":"collection_date","value":"2020"},{"name":"common name","value":"click beetle"},{"name":"geo_loc_name","value":"Canada"},{"name":"sample_name","value":"Agriotes_lineatus_genome"}],"description":{"comment":"Genome assembly of Agriotes lineatus. HiFi data assembled using Hifiasm. Dovetail genomics did the assembly and annotation processes (Maker). Single individual, unknown sex used for HiFi PacBio but with low coverage x5 and Omni-C Illumina reads. Sample taken: Canada","organism":{"organismName":"Agriotes lineatus","taxId":292458},"title":"Genome assembly of Agriotes lineatus from the Pest Genomics Initiative."},"lastUpdated":"2022-07-15T14:46:57.000","models":["Generic"],"owner":{"name":"EBI"},"package":"Generic.1.0","publicationDate":"2022-06-14T00:00:00.000","sampleIds":[{"db":"SRA","value":"ERS11009814"}],"status":{"status":"live","when":"2022-06-16T08:48:17.480"},"submissionDate":"2022-06-15T10:35:13.640"},"blastUrl":"https://blast.ncbi.nlm.nih.gov/Blast.cgi?PAGE_TYPE=BlastSearch&PROG_DEF=blastn&BLAST_SPEC=GDH_GCA_940337035.1","refseqCategory":"representative genome","releaseDate":"2022-06-24","submitter":"ROTHAMSTED RESEARCH"},"assemblyStats":{"contigL50":4905,"contigN50":201347,"gcCount":"1143871914","gcPercent":36.0,"genomeCoverage":"6.0x","numberOfComponentSequences":14154,"numberOfContigs":23837,"numberOfScaffolds":14154,"scaffoldL50":10,"scaffoldN50":95282374,"totalNumberOfChromosomes":10,"totalSequenceLength":"3159863714","totalUngappedLength":"3159019153"},"currentAccession":"GCA_940337035.1","organism":{"organismName":"Agriotes lineatus","taxId":292458},"sourceDatabase":"SOURCE_DATABASE_GENBANK","wgsInfo":{"masterWgsUrl":"https://www.ncbi.nlm.nih.gov/nuccore/CALNHX000000000.1","wgsContigsUrl":"https://www.ncbi.nlm.nih.gov/Traces/wgs/CALNHX01","wgsProjectAccession":"CALNHX01"}}
-#        - The chromosome-scale scaffolds appear to start with the prefix "OW", and look like "OW679194.1"
-#        - The whole string for the chromosome-scale scaffolds is like this: ">OW679194.1 Agriotes lineatus genome assembly, chromosome: 1"
-#        - The unplaced scaffolds start with the prefix "CA"
-#        - The whole string for the unplaced scaffolds look like this: ">CALNHX010000001.1 Agriotes lineatus genome assembly, contig: Scaffold_11__1_contigs__length_1480898, whole genome shotgun sequence"
-#      - ?? source
-#        - chromosome-scale strings look like this: ">CM057117.1 Ailuropoda melanoleuca isolate CPB_GP_2021 chromosome 10, whole genome shotgun sequence"
-#        - scaffold-level strings look like this:   ">JAJSAN010000990.1 Ailuropoda melanoleuca isolate CPB_GP_2021 Scaffold_1001, whole genome shotgun sequence"
-#        - jsonl: {"accession":"GCA_029963865.1","assemblyInfo":{"assemblyLevel":"Chromosome","assemblyMethod":"FALCON v. May-2020","assemblyName":"CPB_AME_v1","assemblyStatus":"current","assemblyType":"haploid","bioprojectAccession":"PRJNA784095","bioprojectLineage":[{"bioprojects":[{"accession":"PRJNA784095","title":"Ailuropoda melanoleuca isolate:CPB_GP_2021 Genome sequencing and assembly"}]}],"biosample":{"accession":"SAMN23470118","attributes":[{"name":"isolate","value":"CPB_GP_2021"},{"name":"age","value":"20"},{"name":"sex","value":"female"},{"name":"tissue","value":"blood"}],"bioprojects":[{"accession":"PRJNA784095"}],"description":{"organism":{"organismName":"Ailuropoda melanoleuca","taxId":9646},"title":"Model organism or animal sample from Ailuropoda melanoleuca"},"lastUpdated":"2023-05-13T00:40:21.613","models":["Model organism or animal"],"owner":{"contacts":[{}],"name":"Sichuan Key Laboratory of Conservation Biology on Endangered Wildlife"},"package":"Model.organism.animal.1.0","publicationDate":"2023-05-13T00:40:21.613","sampleIds":[{"label":"Sample name","value":"GPv1"},{"db":"SRA","value":"SRS11275548"}],"status":{"status":"live","when":"2023-05-13T00:40:21.613"},"submissionDate":"2021-11-27T11:56:02.827"},"blastUrl":"https://blast.ncbi.nlm.nih.gov/Blast.cgi?PAGE_TYPE=BlastSearch&PROG_DEF=blastn&BLAST_SPEC=GDH_GCA_029963865.1","releaseDate":"2023-05-12","sequencingTech":"PacBio","submitter":"Sichuan Key Laboratory of Conservation Biology on Endangered Wildlife"},"assemblyStats":{"contigL50":27,"contigN50":28556066,"gcCount":"1038989641","gcPercent":42.0,"genomeCoverage":"113.9x","numberOfComponentSequences":1335,"numberOfContigs":2111,"numberOfScaffolds":1335,"scaffoldL50":8,"scaffoldN50":134169173,"totalNumberOfChromosomes":21,"totalSequenceLength":"2478972487","totalUngappedLength":"2475793874"},"currentAccession":"GCA_029963865.1","organism":{"commonName":"giant panda","infraspecificNames":{"isolate":"CPB_GP_2021","sex":"female"},"organismName":"Ailuropoda melanoleuca","taxId":9646},"sourceDatabase":"SOURCE_DATABASE_GENBANK","wgsInfo":{"masterWgsUrl":"https://www.ncbi.nlm.nih.gov/nuccore/JAJSAN000000000.1","wgsContigsUrl":"https://www.ncbi.nlm.nih.gov/Traces/wgs/JAJSAN01","wgsProjectAccession":"JAJSAN01"}}
-#    """
-#    input:
-#        fasta = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.fasta",
-#    output:
-#        fasta = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.filt.fasta",
-#    threads: 1
-#    resources:
-#        mem_mb = 1000, # 1 GB of RAM
-#        time   = 10  # 10 minutes.
-#    run:
-#        # open up the fasta file and print out the biggest 50 scaffolds
-#        scaf_to_size = {}
-#        for record in fasta.parse(input.fasta):
-#            scaf_to_size[record.id] = len(record.seq)
-#        # sort the scaffolds by size
-#        sorted_scafs = sorted(scaf_to_size, key=scaf_to_size.get, reverse=True)
-#        # print the top 50 scaffolds and their size
-#        for i in range(50):
-#            print(sorted_scafs[i], scaf_to_size[sorted_scafs[i]])
-#        sys.exit()
-
-rule gzip_fasta_file:
-    """
-    In this step zip the fasta file to conserve space.
-    """
-    input:
-        genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta",
-    output:
-        genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz"
-    threads: 1
-    resources:
-        mem_mb = 1000, # 1 GB of RAM
-        time   = 50   # Usually takes less than 10 minutes. Just do 50 for exceptional cases. Exceptional cases usually take 150 minutes.
-    params:
-        outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/",
-    shell:
-        """
-        echo "Gzipping the fasta file."
-        gzip {input.genome}
-        # remove the .fna files again, in case the last step failed
-        find {params.outdir} -name "*.fna" -exec rm {{}} \\;
-        """
 
 rule generate_assembled_config_entry:
     """
@@ -431,8 +379,8 @@ rule generate_assembled_config_entry:
     input:
         unannot_genomes = config["unannotated_genome_chr_tsv"],
         genome          = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz",
-        protein         = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.pep",
-        chrom           = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.chrom",
+        protein = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.pep.gz",
+        chrom   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.chrom.gz"
     output:
         yaml   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}_annotated_with_{LG_name}.yaml.part",
     threads: 1
@@ -474,7 +422,9 @@ rule generate_assembled_config_entry:
             species = "None"
 
         minscaflen = 100000
-        spstring = "{}{}{}".format(genus, species, taxid)
+        if "|" in [genus, species, taxid, wildcards.assemAnn]:
+            raise ValueError("You cannot have a | character in the genus, species, taxid, or assembly accession.")
+        spstring = "{}{}|{}|{}".format(genus, species, taxid, wildcards.assemAnn)
         h = "  "
         s = ""
         s += h + "{}:\n".format(spstring)

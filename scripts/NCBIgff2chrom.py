@@ -57,10 +57,12 @@ def parse_args():
     parser.add_argument('-u', '--union', action='store_true', help='A flag to indicate that we should only output proteins that exist on scaffolds in the genome fasta file. Default value is False. If this is True, it will affect the .chrom and .pep output files.')
     args = parser.parse_args()
 
+    print(args)
     # ensure that the files exists
     for thisfile in [args.gff, args.fasta, args.protein]:
-        if not(os.path.isfile(thisfile)):
-            parser.error("The file {} does not exist!".format(args.gff))
+        print("checking this file: {}".format(thisfile), file = sys.stderr)
+        if not(os.path.exists(thisfile)):
+            parser.error("The file {} does not exist!".format(thisfile))
 
     return parser.parse_args()
 
