@@ -102,9 +102,18 @@ rule all:
                 datetime = config["datetime"]),
         expand(config["tool"] + "/output/unannotated_genomes_nonchr_{datetime}.tsv",
                 datetime = config["datetime"]),
+        # report of the final dataset
         expand(config["tool"] + "/input/report_{taxid}.tsv",
                 taxid = config["taxids"]),
-        expand(config["tool"] + "/input/report_history_{taxid}.tsv",
+        # report and plot of the filtered dataset
+        expand(config["tool"] + "/input/report_history_filtered_{taxid}.tsv",
+                taxid = config["taxids"]),
+        expand(config["tool"] + "/input/report_history_filtered_{taxid}.pdf",
+                taxid = config["taxids"]),
+        # report and plot of the unfiltered dataset. This is more appropriate for looking at the growth of NCBI genomes.
+        expand(config["tool"] + "/input/report_history_raw_{taxid}.tsv",
+                taxid = config["taxids"]),
+        expand(config["tool"] + "/input/report_history_raw_{taxid}.pdf",
                 taxid = config["taxids"])
 
 rule install_datasets:
@@ -1010,19 +1019,88 @@ rule get_representative_genomes:
         # save the dataframe to the output
         df.to_csv(output.representative_genomes, sep="\t", index=False)
 
-rule history_of_assemblies:
+rule history_of_assemblies_filtered:
     """
     Takes in the genome report and outputs the stats of the dataframe for different points in time.
+      - This rule is for the filtered version of the dataset, in which each species can occur in multiple categories.
+      - This is better for looking at the datasets that will be used for whole-genome comparisons.
     Step backward 7 days in time until we run out of assemblies to consider.
     """
     input:
         report_tsv = config["tool"] + "/input/{taxid}.tsv",
     output:
-        report = config["tool"]     + "/input/report_history_{taxid}.tsv",
+        report     = config["tool"] + "/input/report_history_filtered_{taxid}.tsv",
     threads: 1
     resources:
         time  = 5, # 5 minutes
         mem_mb = 1000
+    params:
+        day_step = 7
+    run:
+        historical_view_dfs = []
+        # load in and clean up the dataframe
+        df = load_and_cleanup_NCBI_datasets_tsv_df(input.report_tsv, hardcoded_ignore_accessions)
+
+        # go back in time 7 days at a time until we run out of assemblies to consider
+        # go back until January 2000
+        jan2000 = datetime.strptime("2000-01-01", '%Y-%m-%d')
+        current_date = datetime.today().strftime('%Y-%m-%d')
+        while current_date >= jan2000.strftime('%Y-%m-%d'):
+            # print to sys.stderr in a progress-bar type configuration that just prints out the date
+            print("   Filtering on or before date: {}".format(current_date), file=sys.stderr, end="\r")
+            # filter the dataframe to only include assemblies that were released before seven_days_ago
+            dftemp = df.loc[df["Assembly Release Date"] <= current_date]
+            # annotations may have come at a later date
+            dftemp.loc[dftemp["Annotation Release Date"] > current_date, "Annotation Release Date"] = np.nan
+            # if there are no assemblies left, then we are done
+            # print out the dataset summary table
+            dftemp = filter_raw_genome_df(dftemp, [], suppress_text = True)
+            summarydf = dataset_summary_table(dftemp, assembly_release_date = current_date)
+            historical_view_dfs.append(summarydf)
+            current_date = datetime.strptime(current_date, '%Y-%m-%d')
+            current_date = (current_date - timedelta(days=params.day_step)).strftime('%Y-%m-%d')
+        # print a newline to keep the progress bar on the screen/in the log
+        print("   Filtering on or before date: {}".format(current_date), file=sys.stderr)
+        # concatenate all the dataframes together
+        concatdf = pd.concat(historical_view_dfs)
+        # save to the output
+        concatdf.to_csv(output.report, sep="\t", index=False)
+
+rule assembly_report_plot_filtered:
+    """
+    Make a pdf of the filtered dataset assembly report.
+    """
+    input:
+        report          = config["tool"] + "/input/report_history_filtered_{taxid}.tsv",
+        plotting_script = os.path.join(snakefile_path, "../scripts/plot_NCBI_genomes_history.py")
+    output:
+        pdf             = config["tool"] + "/input/report_history_filtered_{taxid}.pdf",
+    threads: 1
+    resources:
+        time  = 1, # 5 minutes
+        mem_mb = 500
+    shell:
+        """
+        python {input.plotting_script} -i {input.report} -o {output.pdf}
+        """
+
+rule history_of_assemblies_raw:
+    """
+    Takes in the genome report and outputs the stats of the dataframe for different points in time.
+      - This rule is for the raw version of the dataset, in which each species can only occur in one category.
+      - This is more accurate for looking at the absolute growth of the NCBI dataset over time.
+    Step backward 7 days in time until we run out of assemblies to consider.
+    """
+    input:
+        report_tsv = config["tool"] + "/input/{taxid}.tsv",
+    output:
+        report     = config["tool"] + "/input/report_history_raw_{taxid}.tsv",
+    threads: 1
+    resources:
+        time  = 5, # 5 minutes
+        mem_mb = 1000
+    params:
+        day_step = 7
     run:
         historical_view_dfs = []
         # load in and clean up the dataframe
@@ -1039,17 +1117,47 @@ rule history_of_assemblies:
             dftemp = df.loc[df["Assembly Release Date"] <= current_date]
             # if there are no assemblies left, then we are done
             # print out the dataset summary table
-            dftemp = filter_raw_genome_df(dftemp, [], suppress_text = True)
+            # sort by Assembly Accession, then Annotation release date, preferring the ones with annotations first
+            dftemp = dftemp.sort_values(by=["Assembly Accession", "Annotation Release Date"], ascending=[True, False])
+            # drop duplicates, keeping the first one
+            dftemp = dftemp.drop_duplicates(subset=["Assembly Accession"], keep="first")
+            # add the columns called "chrscale" and "annotated", set them to False
+            dftemp = dftemp.assign(chrscale=False, annotated=False)
+            # for "Annotation Release Date", make the cells after current date NaN
+            dftemp.loc[dftemp["Annotation Release Date"] > current_date, "Annotation Release Date"] = np.nan
+            # if Annotation Release Date is NaN, then set "annotated" to False, otherwise True. We already handled False, just do True
+            dftemp.loc[~dftemp["Annotation Release Date"].isna(), "annotated"] = True
+            # if Assembly level == "Chromosome", then set "chrscale" to True
+            dftemp.loc[dftemp["Assembly Level"] == "Chromosome", "chrscale"] = True
             summarydf = dataset_summary_table(dftemp, assembly_release_date = current_date)
             historical_view_dfs.append(summarydf)
             current_date = datetime.strptime(current_date, '%Y-%m-%d')
-            current_date = (current_date - timedelta(days=150)).strftime('%Y-%m-%d')
+            current_date = (current_date - timedelta(days=params.day_step)).strftime('%Y-%m-%d')
         # print a newline to keep the progress bar on the screen/in the log
         print("   Filtering on or before date: {}".format(current_date), file=sys.stderr)
         # concatenate all the dataframes together
         concatdf = pd.concat(historical_view_dfs)
         # save to the output
         concatdf.to_csv(output.report, sep="\t", index=False)
+
+rule assembly_report_plot_raw:
+    """
+    Make a pdf of the raw dataset assembly report.
+    """
+    input:
+        report          = config["tool"] + "/input/report_history_raw_{taxid}.tsv",
+        plotting_script = os.path.join(snakefile_path, "../scripts/plot_NCBI_genomes_history.py")
+    output:
+        pdf             = config["tool"] + "/input/report_history_raw_{taxid}.pdf",
+    threads: 1
+    resources:
+        time  = 1, # 5 minutes
+        mem_mb = 500
+    shell:
+        """
+        python {input.plotting_script} -i {input.report} -o {output.pdf}
+        """
+
 
 # this checkpoint triggers re-evaluation of the DAG
 checkpoint split_into_annotated_and_unannotated_and_chr_nonchr:
