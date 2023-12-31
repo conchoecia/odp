@@ -41,67 +41,46 @@ rule all:
         "NCBI_odp_db.annotated.chr.yaml",
         "NCBI_odp_sp_list.annotated.chr.txt"
 
+def dlChrs_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for the script depends on the size of the input genome.
+    """
+    attemptdict = {1: 4000,
+                   2: 16000,
+                   3: 64000
+                  }
+    return attemptdict[attempt]
+
 rule dlChrs:
     """
     We have selected the annotated genomes to download. We only want the chromosome-scale scaffolds.
 
     To specifically download the chromosome-scale scaffolds, there is a series of commands with the NCBI datasets tool.
       I found this set of instructions after opening a ticket on NCBI's github page: https://github.com/ncbi/datasets/issues/298
+
+    Notes:
+      - 12-31-2023 - Using the command line had too many edge cases that didn't work, so I resorted to using python to do a more careful job.
+        This verifies that the files are downloaded and unzipped correctly, and contain all of the expected sequences.
+        Therefore, we do not need additional verification steps for the assembly file.
     """
     input:
         datasets = os.path.join(bin_path, "datasets")
     output:
-        assembly = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/genomeDl/ncbi_dataset.zip"),
-        readme   = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/genomeDl/README.md"),
-        fetch    = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/genomeDl/ncbi_dataset/fetch.txt"),
-        fasta    = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta"),
+       fasta   = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta"),
+       allscaf = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.all.tsv",
+       chrscaf = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.chr.tsv",
     retries: 3
     params:
-        outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/genomeDl/",
-        rmdir    = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/genomeDl/ncbi_dataset/data/{assemAnn}/",
-        APIstring = "" if "API_key" not in locals() else "--api-key {}".format(locals()["API_key"])
+        outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/",
     threads: 1
     resources:
-        mem_mb = 500, # 500 MB of RAM - it never uses much
+        mem_mb = dlChrs_get_mem_mb, # the amount of RAM needed depends on the size of the input genome. Just scale UP.
         time   = 20  # 20 minutes.
-    shell:
-        """
-        # Wait a random amount of time up to 10 seconds to space out requests to the NCBI servers.
-        SLEEPTIME=$((1 + RANDOM % 10))
-        echo "Sleeping for $SLEEPTIME seconds to avoid overloading the NCBI servers."
-        sleep $SLEEPTIME
-
-        # Save the current directory
-        # Function to download the file
-        RETURNHERE=$(pwd)
-        cd {params.outdir}
-        {input.datasets} download genome accession {wildcards.assemAnn} --chromosomes all \
-            {params.APIstring} --dehydrated || true
-
-        # now we try to unzip it
-        unzip -o ncbi_dataset.zip
-
-        # rehydrate the dataset
-        {input.datasets} rehydrate --directory . --match chr
-
-        # go back to the original directory
-        cd $RETURNHERE
-
-        # First we remove any .fna files that have the assembly name in them. The files that have chr01.fna, chr02.fna, etc. are the ones we want.
-        # See the error on github here: https://github.com/ncbi/datasets/issues/298
-        find {params.outdir} -name "*genomic.fna" -exec rm {{}} \\;
-        # We also should remove the unplaced scaffolds that are sometimes downloaded with the chromosome-scale scaffolds.
-        find {params.outdir} -name "*unplaced.scaf.fna" -exec rm {{}} \\;
-
-        # Now that we have removed the files that we don't want, we are (hopefully) left with just the chromosome-scale scaffolds.
-        # make the final assembly fasta file from the individual chromosome's .fna files
-        find {params.outdir} -name "*.fna" -exec cat {{}} \\; > {output.fasta}
-        # Remove the files that we no longer need.
-        find {params.outdir} -name "*.fna" -exec rm {{}} \\;
-
-        # remove a directory we no longer need
-        rm -rf {params.rmdir}
-        """
+    run:
+        result = GenDB.download_unzip_genome(wildcards.assemAnn, params.outdir,
+                                             input.datasets, chrscale = True)
+        if result != 0:
+            raise ValueError("The download of the genome {} failed.".format(wildcards.assemAnn))
 
 rule gzip_fasta_file:
     """
@@ -124,49 +103,6 @@ rule gzip_fasta_file:
         # remove the .fna files again, in case the last step failed
         find {params.outdir} -name "*.fna" -exec rm {{}} \\;
         """
-
-def verChr_get_mem_mb(wildcards, attempt):
-    """
-    The amount of RAM needed for the script depends on the size of the input genome.
-    """
-    attemptdict = {1: 1000,
-                   2: 4000,
-                   3: 16000,
-                   4: 64000,
-                   5: 256000,
-                   6: 512000,
-                   7: 1024000,
-                   8: 1512000}
-    return attemptdict[attempt]
-
-rule verChr:
-    """
-    This rule does some basic checks on the chromosome-scale genome assemblies to make sure that they are valid.
-    Uses the fasta module included in the odp package to do this.
-      - Checks that the fasta entries appear no more than once.
-    """
-    input:
-        fasta = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz"
-    output:
-        report = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz.CHECKED"
-    threads: 1
-    retries: 8
-    resources:
-        mem_mb = verChr_get_mem_mb, # 1 GB of RAM
-        time   = 5  # 5 minutes.
-    run:
-        seen_entries = set()
-        for record in fasta.parse(input.fasta):
-            if record.id in seen_entries:
-                raise ValueError("The fasta entry {} appears more than once in the file {}.".format(record.id, input.fasta))
-            else:
-                seen_entries.add(record.id)
-        # if we get to this point, then the fasta file is valid. We can write the report file.
-        with open(output.report, "w") as f:
-            f.write("The fasta file {} is valid.\n".format(input.fasta))
-            f.write("It contains {} entries.\n".format(len(seen_entries)))
-            f.write("The entries are: {}\n".format(seen_entries))
-            f.write("None of the entires occur more than once.\n")
 
 rule dlPepGff:
     """
@@ -255,7 +191,6 @@ rule prep_chrom_file_from_NCBI:
     """
     input:
         genome   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz",
-        report = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz.CHECKED", # we need this to verify that the fasta file is legal
         protein  = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.pep",
         gff      = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gff",
         chromgen = os.path.join(snakefile_path, "..", "scripts", "NCBIgff2chrom.py")
@@ -311,7 +246,6 @@ rule generate_assembled_config_entry:
     input:
         annotated_genomes = config["annotated_genome_chr_tsv"],
         genome            = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz",
-        genome_checked    = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz.CHECKED", # we need this to verify that the fasta file is legal
         protein           = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.pep.gz",
         chrom             = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.chrom.gz",
         report            = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.report.txt",
@@ -392,7 +326,8 @@ rule collate_assembled_config_entries:
         yaml = "NCBI_odp_db.annotated.chr.yaml"
     threads: 1
     resources:
-        mem_mb  = 1000
+        mem_mb  = 1000,
+        time    = 5
     shell:
         """
         echo "species:" > {output.yaml}
@@ -410,7 +345,8 @@ rule generate_species_list_for_timetree:
         sp_list = "NCBI_odp_sp_list.annotated.chr.txt"
     threads: 1
     resources:
-        mem_mb  = 1000
+        mem_mb  = 1000,
+        time    = 5
     run:
         # open the yaml file into a dictionary
         with open(input.yaml, "r") as f:

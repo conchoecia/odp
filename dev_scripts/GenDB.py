@@ -11,6 +11,8 @@ This python program contains functions that are used to download genomes from NC
 
 import os
 import pandas as pd
+from io import StringIO
+from random import randint
 import shutil
 import subprocess
 import sys
@@ -147,7 +149,8 @@ def download_assembly_scaffold_df(assembly_accession, datasetsEx, chrscale = Tru
     if p.returncode != 0:
         raise ValueError("Unzip for {} returned a non-zero exit code. Something went wrong. {}".format(assembly_accession, err))
     # the output is json lines. Convert it to a pandas dataframe
-    df = pd.read_json(out, lines=True)
+    json_buffer = StringIO(out)
+    df = pd.read_json(json_buffer, lines=True)
     # return an error if the dataframe is empty
     if df.empty:
         raise ValueError("The dataframe is empty. This is probably because the assembly accession number you provided is not valid. {}".format(assembly_accession))
@@ -202,8 +205,9 @@ def filter_scaffold_df_keep_chrs(df) -> pd.DataFrame:
         raise ValueError("The dataframe is empty after filtering for chromosome-scale scaffolds. The start length of the df was {}. The assembly_accession is {}".format(start_length, assembly_accession))
     return df
 
-def download_chr_scale_genome_from_df(chr_df, datasetsEx, output_dir):
+def download_chr_scale_genome_from_df_WORKING(chr_df, datasetsEx, output_dir):
     """
+    NOTE: THIS FUNCTION IS ONLY TO BE USED UNTIL https://github.com/ncbi/datasets/issues/298 IS FIXED
     This function takes in a dataframe of known chromosome-scale scaffolds for a specific assembly accession number,
       and downloads the genome from NCBI.
 
@@ -232,12 +236,157 @@ def download_chr_scale_genome_from_df(chr_df, datasetsEx, output_dir):
     create_directories_recursive_notouch(output_dir)
 
     # DOWNLOAD THE SCAFFOLDS
+    # We download the entire genome, and then filter it down to just the chromosome-scale scaffolds.
+    # use the assembly accession number to name the output zip file
+    outzip = os.path.join(output_dir, "{}.zip".format(assembly_accession))
+    # set up the download process using the datasets executable
+    cmd = [datasetsEx, "download", "genome", "accession", assembly_accession, "--filename", outzip]
+    print("the command is {}".format(" ".join(cmd)), file = sys.stderr)
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text = True)
+    # wait for the process to finish
+    out, err = p.communicate()
+    sys.stdout.write(out)
+    sys.stderr.write(err)
+    if p.returncode != 0:
+        raise ValueError("The datasets executable for {} returned a non-zero exit code. Something went wrong. {}".format(assembly_accession, err))
+    # check that the output zip file exists
+    if not os.path.exists(outzip):
+        raise ValueError("The output zip file does not exist. Something went wrong with the download. {}".format(outzip))
+
+    # UNZIP THE SCAFFOLDS
+    # unzip the file, forcing it to overwrite any existing files, excluding the file called README.md
+    unzip_dir = os.path.join(output_dir, assembly_accession)
+    cmd = ["unzip", "-o", outzip, "-d", unzip_dir]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text = True)
+    # wait for the process to finish
+    out, err = p.communicate()
+    sys.stdout.write(out)
+    sys.stderr.write(err)
+    if p.returncode != 0:
+        raise ValueError("Unzip for {} returned a non-zero exit code. Something went wrong. {}".format(assembly_accession, err))
+    # check that the output directory exists
+    if not os.path.isdir(unzip_dir):
+        raise ValueError("The output directory does not exist. Something went wrong with the unzip. {}".format(output_dir))
+
+    # CHECK THAT THE MAIN ASSEMBLY FILE IS THERE. It will be called GCF_905220415.1_{something}_genomic.fna
+    found_file = False
+    target_dir = os.path.join(unzip_dir, "ncbi_dataset/data/{}".format(assembly_accession))
+    target_file = ""
+    for thisfile in os.listdir(target_dir):
+        if thisfile.endswith("_genomic.fna"):
+            found_file = True
+            target_file = os.path.join(target_dir, thisfile)
+            break
+    if not found_file:
+        # The file does not exist. Something went wrong with the download of one of the chromosomes
+        raise IOError("For Assembly Accession {}, the file {}/{}_something_genomic.fna does not exist. Something went wrong with the download of this chromosome.".format(assembly_accession, target_dir, thisfile))
+    print(target_file)
+
+    # CHECK THAT THE SCAFFOLDS ARE THE CORRECT LENGTH AND SAVE TO NEW FILE
+    # To keep track of which scaffolds we need to include in the output file, use a copy of the chr_df and delete rows as we go.
+    outfile = os.path.join(output_dir, "{}.chr.fasta".format(assembly_accession))
+    outhandle = open(outfile, "w")
+    scafs_to_parse_df = chr_df.copy()
+    # depending on whether there is a refseq accession number or not, we need to check either the "genbank_accession" or "refseq_accession" column
+    # Prefer "refseq_accession"
+    col_to_check = "genbank_accession"
+    if "refseq_accession" in scafs_to_parse_df.columns:
+        col_to_check = "refseq_accession"
+
+    # Iterate through the files in the directory and:
+    #  - go through each entry in the fasta file
+    #    - check if the scaffold is in scafs_to_parse_df
+    #    - if it is, then check that the length is correct
+    #    - print it out to the outhandle
+    #    - remove the corresponding row from scafs_to_parse_df
+    for record in fasta.parse(target_file):
+        # get the corresponding row from scafs_to_parse_df. could be either "genbank_accession" or "refseq_accession"
+        if record.id in scafs_to_parse_df[col_to_check].tolist():
+            # there is a row in the dataframe that corresponds to this scaffold
+            # Get all the indices that correspond to this scaffold, using either the "genbank_accession" or "refseq_accession" column
+            matching_indices = scafs_to_parse_df.index[scafs_to_parse_df[col_to_check] == record.id].tolist()
+            if len(matching_indices) > 1:
+                # There should only be one row that matches this scaffold. If there are more, then something went wrong.
+                raise ValueError("There are multiple rows in the dataframe that match this scaffold. Something went wrong (Presumably with NCBI datasets, as this dataframe was generated with 'datasets summary genome accession ACC --report sequence --as-json-lines'). {}".format(record.id))
+            # If we get here, then there is only one row that matches this scaffold. Get the index of that row.
+            rowix = matching_indices[0]
+            # Get the expected length of this scaffold, based on this row's "length" column
+            expected_length = scafs_to_parse_df.loc[rowix, "length"]
+            # After passing these checks, safe to print to the output file
+            print(record.format(wrap=80), file=outhandle, end="")
+            # remove the row from scafs_to_parse_df, reset the index
+            scafs_to_parse_df = scafs_to_parse_df.drop(rowix).reset_index(drop=True)
+        else:
+            # This scaffold is not in the dataframe. We shouldn't be here, but maybe one unrequested scaffold was downloaded by the NCBI datasets tool.
+            # One instance in which this happens often is when we tell datasets to download specific chromosomes, but it also downloads separate fasta files for the unplaced scaffolds.
+            pass
+    # close the output file
+    outhandle.close()
+    # check if there are any rows left in scafs_to_parse_df. If there are, then we didn't see one chromosome's sequence for some reason.
+    if not scafs_to_parse_df.empty:
+        # remove the output fasta file, since it is broken
+        os.remove(outfile)
+        # remove the unzipped directory and the zip file
+        os.remove(outzip)
+        shutil.rmtree(unzip_dir)
+        raise ValueError("There are still rows in scafs_to_parse_df. This means that we didn't see one of the chromosomes. Something went wrong. {}".format(scafs_to_parse_df))
+    # Just to be completely sure that we don't have any doubled scaffolds appearing in the output fasta file, read through it again with the fasta package
+    seen_once = []
+    for record in fasta.parse(outfile):
+        if record.id in seen_once:
+            raise ValueError("The scaffold {} appears twice in the output fasta file. Something went wrong.".format(record.id))
+        else:
+            seen_once.append(record.id)
+    # Another excessive check, just make sure that the length of seen_once is the same length as the number of rows in the chr_df
+    if not len(seen_once) == len(chr_df):
+        raise ValueError("The number of scaffolds in the output fasta file is not the same as the number of scaffolds in the input dataframe. Something went wrong. Assembly acession: {}".format(assembly_accession))
+    # If we get here, then everything probably worked as we intended. Remove the unneeded files.
+    os.remove(outzip)
+    shutil.rmtree(unzip_dir)
+    return 0
+
+
+def download_chr_scale_genome_from_df(chr_df, datasetsEx, output_dir):
+    """
+    NOTE: THIS WILL ONLY WORK WHEN https://github.com/ncbi/datasets/issues/298 IS FIXED
+    This function takes in a dataframe of known chromosome-scale scaffolds for a specific assembly accession number,
+      and downloads the genome from NCBI.
+
+    Special checks that are made along the way to make sure we get exactly what is needed:
+      - We check that we only add each needed scaffold exactly once. This avoids a problem of using a bash-based solution
+        where we cannot finely control which fasta files are concatenated together.
+      - We check that each fasta entry is exactly the length that is expected. This will help find cases where the
+        download or decompression did not work for some reason.
+
+    Other features:
+      - This function will delete all of the unneeded intermediate files.
+
+    Inputs:
+        - chr_df:      a pandas dataframe containing only the chromosome-scale scaffolds
+        - datasetsEx:  path to the NCBI datasets executable
+        - output_dir:  The directory to which additional files will be saved.
+                         Everything will be prefixed with the assembly_accession value.
+    Outputs:
+        - Outputs 0 if the function completes successfully.
+        - Saves a fasta file to the output_dir that contains all of the chromosome-scale scaffolds.
+          The file will be saved at {output_dir}/{assembly_accession}.chr.fasta
+    """
+    # get the most common value of the assembly_accession column
+    assembly_accession = chr_df["assembly_accession"].mode()[0]
+    # First, we need to check that the output directory exists. If it doesn't, then we need to create it.
+    create_directories_recursive_notouch(output_dir)
+    # cast the chr_name column to strings so we can work with them as strings later
+    chr_df["chr_name"] = chr_df["chr_name"].astype(str)
+
+    # DOWNLOAD THE SCAFFOLDS
     # Now we need to figure out which scaffolds we need to download. To do this, we can use the chromosome names and prompt the datasets tool to download them
     chrom_download_string = ",".join(chr_df["chr_name"].tolist())
+    print("the chrom download string is {}".format(chrom_download_string), file = sys.stderr)
     # use the assembly accession number to name the output zip file
     outzip = os.path.join(output_dir, "{}.zip".format(assembly_accession))
     # set up the download process using the datasets executable
     cmd = [datasetsEx, "download", "genome", "accession", assembly_accession, "--chromosomes", chrom_download_string, "--filename", outzip]
+    print("the command is {}".format(" ".join(cmd)), file = sys.stderr)
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text = True)
     # wait for the process to finish
     out, err = p.communicate()
@@ -298,8 +447,9 @@ def download_chr_scale_genome_from_df(chr_df, datasetsEx, output_dir):
                 # Get the expected length of this scaffold, based on this row's "length" column
                 expected_length = scafs_to_parse_df.loc[rowix, "length"]
                 # if the expected length doesn't match the actual length, then something went wrong.
-                if not expected_length == len(record.seq):
-                    raise ValueError("The expected length of scaffold {} from assembly accession {} is {}, but the actual length is {}. Something went wrong.".format(record.id, assembly_accession, expected_length, len(record.seq)))
+                # THIS IS COMMENTED OUT UNTIL https://github.com/ncbi/datasets/issues/301 IS FIXED
+                #if not expected_length == len(record.seq):
+                #    raise ValueError("The expected length of scaffold {} from assembly accession {} is {}, but the actual length is {}. Something went wrong.".format(record.id, assembly_accession, expected_length, len(record.seq)))
                 # After passing these checks, safe to print to the output file
                 print(record.format(wrap=80), file=outhandle, end="")
                 # remove the row from scafs_to_parse_df, reset the index
@@ -333,9 +483,7 @@ def download_chr_scale_genome_from_df(chr_df, datasetsEx, output_dir):
     shutil.rmtree(unzip_dir)
     return 0
 
-def download_unzip_genome(assembly_accession, output_dir,
-                          final_fasta_filepath,
-                          datasetsEx, dataformatEx,
+def download_unzip_genome(assembly_accession, output_dir, datasetsEx,
                           chrscale = True):
     """
     Given an assembly accession number, download the genome from NCBI and unzip it.
@@ -362,10 +510,9 @@ def download_unzip_genome(assembly_accession, output_dir,
     """
     # First, strip the white space surrounding the assembly accession number
     assembly_accession = assembly_accession.strip()
-    ## wait a random amount of time up to 10 seconds to space out requests to the NCBI servers.
-    #sleeptime = random.randint(1,10)
-    #print("Sleeping for {} seconds to avoid overloading the NCBI servers.".format(sleeptime))
-    sleeptime = 0.5
+    # wait a random amount of time up to 10 seconds to space out requests to the NCBI servers.
+    sleeptime = randint(1,10)
+    print("Sleeping for {} seconds to avoid overloading the NCBI servers.".format(sleeptime), file = sys.stderr)
     time.sleep(sleeptime)
 
     # save the current directory in case we need to go back to it
@@ -384,7 +531,7 @@ def download_unzip_genome(assembly_accession, output_dir,
         chr_df_filepath = os.path.join(output_dir, assembly_accession + ".scaffold_df.chr.tsv")
         chr_df.to_csv(chr_df_filepath, sep="\t", index=False)
         # Figure out which scaffolds we need to download. To do this, we can use the chromosome names and prompt the datasets tool to download them
-        download_chr_scale_genome_from_df(chr_df, datasetsEx, output_dir)
+        download_chr_scale_genome_from_df_WORKING(chr_df, datasetsEx, output_dir)
         # check that there is a file in the output
         if not os.path.exists(os.path.join(output_dir, assembly_accession + ".chr.fasta")):
             raise IOError("The output fasta file does not exist. Something went wrong with the download. {}".format(os.path.join(output_dir, assembly_accession + ".chr.fasta")))
