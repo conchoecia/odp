@@ -130,13 +130,13 @@ def verChr_get_mem_mb(wildcards, attempt):
     The amount of RAM needed for the script depends on the size of the input genome.
     """
     attemptdict = {1: 1000,
-                   2: 2000,
-                   3: 4000,
-                   4: 8000,
-                   5: 16000,
-                   6: 32000,
-                   7: 64000,
-                   8: 128000}
+                   2: 4000,
+                   3: 16000,
+                   4: 64000,
+                   5: 256000,
+                   6: 512000,
+                   7: 1024000,
+                   8: 1512000}
     return attemptdict[attempt]
 
 rule verChr:

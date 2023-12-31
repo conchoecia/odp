@@ -17,7 +17,10 @@ PREREQUISITES:
 
 # Some specific NCBI taxids cause problems with the NCBI datasets tool.
 # This one, GCA_900186335.3, causes a parsing error: https://github.com/ncbi/datasets/issues/300
-hardcoded_ignore_accessions = ["GCA_900186335.3"]
+hardcoded_ignore_accessions = ["GCA_900186335.3",
+                               "GCA_000002165.1", # This is the 2009 Celera Genomics mouse genome. It was found to be contaminated, and too large.
+                               "GCF_000002265.2", # This is the Celera Genomics rat genome. It is currently suppressed.
+                               ]
 import datetime
 from datetime import timedelta
 from ete3 import NCBITaxa

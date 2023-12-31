@@ -221,7 +221,7 @@ rule miniprot:
     Doing it this way prevents keeping a ton of temporary data on the hard drive.
     """
     input:
-        pep  = config["tool"] + "/input/LG_proteins/{LG_name}.fasta",
+        pep    = config["tool"] + "/input/LG_proteins/{LG_name}.fasta",
         genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz",
     output:
         paf  = config["tool"] + "/output/mapped_reads/{assemAnn}/{LG_name}_to_{assemAnn}.paf"
