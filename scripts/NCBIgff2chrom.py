@@ -95,6 +95,10 @@ def get_fasta_headers_and_lengths(fastapath):
             scaf_to_len[record.id] = len(record.seq)
         else:
             raise IOError("The sequence name {} appears more than once in the fasta file!".format(record.id))
+    # Raise an error if there are no sequences in the fasta file. This will help debug problems later.
+    # There should absolutely be sequences here, regardless of whether we are passing a protein or nucleotide fasta file.
+    if len(scaf_to_len) == 0:
+        raise IOError("There are no sequences in the fasta file {}!".format(fastapath))
     return scaf_to_len
 
 def print_chrom_report(prots, scafnames_to_size, protnames_to_size, outprefix, union_mode = False):
