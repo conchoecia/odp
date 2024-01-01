@@ -175,6 +175,7 @@ def filter_scaffold_df_keep_chrs(df) -> pd.DataFrame:
         - DO NOT filter on "Chromosome" in the "assigned_molecule_location_type" column. This will remove linkage groups, which are also chromosome-scale scaffolds.
           Instead remove "Mitochondrion" entries from the "assigned_molecule_location_type" column.
     """
+    startdf = df.copy()
     # get the most common assembly accession number in the df
     assembly_accession = df["assembly_accession"].mode()[0]
     start_length = len(df)
@@ -192,16 +193,9 @@ def filter_scaffold_df_keep_chrs(df) -> pd.DataFrame:
     if "chr_name" in df.columns:
         # remove chr_name Un
         df = df[df["chr_name"] != "Un"]
-    if "gc_count" in df.columns:
-        # remove gc_count NaN
-        df = df[df["gc_count"].notna()]
-        # change the column type to ints
-        df["gc_count"] = df["gc_count"].astype(int)
-    if "gc_percent" in df.columns:
-        # remove gc_percent NaN
-        df = df[df["gc_percent"].notna()]
     # raise an error if the dataframe is empty - we expect there to be at least one chromosome-scale scaffold
     if df.empty:
+        print("This was the startdf: \n{}".format(startdf), file = sys.stderr)
         raise ValueError("The dataframe is empty after filtering for chromosome-scale scaffolds. The start length of the df was {}. The assembly_accession is {}".format(start_length, assembly_accession))
     return df
 
@@ -287,11 +281,23 @@ def download_chr_scale_genome_from_df_WORKING(chr_df, datasetsEx, output_dir):
     outfile = os.path.join(output_dir, "{}.chr.fasta".format(assembly_accession))
     outhandle = open(outfile, "w")
     scafs_to_parse_df = chr_df.copy()
-    # depending on whether there is a refseq accession number or not, we need to check either the "genbank_accession" or "refseq_accession" column
-    # Prefer "refseq_accession"
-    col_to_check = "genbank_accession"
-    if "refseq_accession" in scafs_to_parse_df.columns:
-        col_to_check = "refseq_accession"
+
+    col_to_check = ""
+    # go through the fasta file of the assembly, and look for whether the earliest scaffolds (chrs) are genbank_accession or refseq_accession
+    # Based on this result, we will know which column to check
+    for record in fasta.parse(target_file):
+        if record.id in scafs_to_parse_df["genbank_accession"].tolist():
+            col_to_check = "genbank_accession"
+            break
+        elif record.id in scafs_to_parse_df["refseq_accession"].tolist():
+            col_to_check = "refseq_accession"
+            break
+        else:
+            # This scaffold is not in the dataframe. We shouldn't be here, but maybe one unrequested scaffold was downloaded by the NCBI datasets tool.
+            # One instance in which this happens often is when we tell datasets to download specific chromosomes, but it also downloads separate fasta files for the unplaced scaffolds.
+            pass
+    if col_to_check == "":
+        raise ValueError("We didn't find any scaffolds in the fasta file that were in the dataframe. Something went wrong. Assembly accession: {}".format(assembly_accession))
 
     # Iterate through the files in the directory and:
     #  - go through each entry in the fasta file

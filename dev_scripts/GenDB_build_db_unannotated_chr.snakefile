@@ -110,55 +110,48 @@ rule all:
         expand("NCBI_odp_sp_list.unannotated.{LG_name}.txt",
                LG_name=LG_to_db_directory_dict.keys()),
 
-rule download_unzip:
+def dlChrs_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for the script depends on the size of the input genome.
+    """
+    attemptdict = {1: 4000,
+                   2: 16000,
+                   3: 64000
+                  }
+    return attemptdict[attempt]
+
+rule dlChrs:
     """
     We have selected the unannotated genomes to download.
     For these genomes we need to find a way to annotate them.
 
     To specifically download the chromosome-scale scaffolds, there is a series of commands with the NCBI datasets tool.
       I found this set of instructions after opening a ticket on NCBI's github page: https://github.com/ncbi/datasets/issues/298
+
+    Notes:
+      - 12-31-2023 - Using the command line had too many edge cases that didn't work, so I resorted to using python to do a more careful job.
+        This verifies that the files are downloaded and unzipped correctly, and contain all of the expected sequences.
+        Therefore, we do not need additional verification steps for the assembly file.
     """
     input:
         datasets = os.path.join(bin_path, "datasets")
     output:
-        assembly = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/ncbi_dataset.zip"),
-        fasta    = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta")
+       fasta   = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta"),
+       allscaf =      config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.all.tsv",
+       chrscaf =      config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.chr.tsv",
     retries: 3
     params:
         outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/",
-        APIstring = "" if "API_key" not in locals() else "--api-key {}".format(locals()["API_key"])
     threads: 1
     resources:
-        mem_mb = 2000, # 1 GB of RAM
+        mem_mb = dlChrs_get_mem_mb, # 1 GB of RAM
         time   = 20  # 20 minutes.
-    shell:
-        """
-        ## Wait a random amount of time up to 2 minutes to avoid overloading the NCBI servers.
-        #SLEEPTIME=$((1 + RANDOM % 120))
-        #echo "Sleeping for $SLEEPTIME seconds to avoid overloading the NCBI servers."
-        #sleep $SLEEPTIME
+    run:
+        result = GenDB.download_unzip_genome(wildcards.assemAnn, params.outdir,
+                                             input.datasets, chrscale = True)
+        if result != 0:
+            raise ValueError("The download of the genome {} failed.".format(wildcards.assemAnn))
 
-        # Save the current directory
-        # Function to download the file
-        RETURNHERE=$(pwd)
-        cd {params.outdir}
-        {input.datasets} download genome accession {wildcards.assemAnn} --chromosomes all \
-            {params.APIstring} --dehydrated || true
-
-        # now we try to unzip it
-        unzip -o ncbi_dataset.zip
-
-        # rehydrate the dataset
-        {input.datasets} rehydrate --directory . --match chr
-
-        # go back to the original directory
-        cd $RETURNHERE
-
-        # make the final assembly fasta file from the individual chromosome's .fna files
-        find {params.outdir} -name "*.fna" -exec cat {{}} \\; > {output.fasta}
-        # Remove the files that we no longer need.
-        find {params.outdir} -name "*.fna" -exec rm {{}} \\;
-        """
 
 rule gzip_fasta_file:
     """
