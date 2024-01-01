@@ -285,12 +285,14 @@ def download_chr_scale_genome_from_df_WORKING(chr_df, datasetsEx, output_dir):
     col_to_check = ""
     # go through the fasta file of the assembly, and look for whether the earliest scaffolds (chrs) are genbank_accession or refseq_accession
     # Based on this result, we will know which column to check
+    scaf_to_col = {}
+    for thiscol in ["genbank_accession", "refseq_accession"]:
+        if thiscol in scafs_to_parse_df.columns:
+            for thisscaf in scafs_to_parse_df[thiscol].tolist():
+                scaf_to_col[thisscaf] = thiscol
     for record in fasta.parse(target_file):
-        if record.id in scafs_to_parse_df["genbank_accession"].tolist():
-            col_to_check = "genbank_accession"
-            break
-        elif record.id in scafs_to_parse_df["refseq_accession"].tolist():
-            col_to_check = "refseq_accession"
+        if record.id in scaf_to_col:
+            col_to_check = scaf_to_col[record.id]
             break
         else:
             # This scaffold is not in the dataframe. We shouldn't be here, but maybe one unrequested scaffold was downloaded by the NCBI datasets tool.
@@ -516,8 +518,8 @@ def download_unzip_genome(assembly_accession, output_dir, datasetsEx,
     """
     # First, strip the white space surrounding the assembly accession number
     assembly_accession = assembly_accession.strip()
-    # wait a random amount of time up to 10 seconds to space out requests to the NCBI servers.
-    sleeptime = randint(1,10)
+    # wait a random amount of time up to 120 seconds to space out requests to the NCBI servers.
+    sleeptime = randint(1,120)
     print("Sleeping for {} seconds to avoid overloading the NCBI servers.".format(sleeptime), file = sys.stderr)
     time.sleep(sleeptime)
 

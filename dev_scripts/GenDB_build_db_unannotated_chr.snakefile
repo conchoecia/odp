@@ -137,21 +137,21 @@ rule dlChrs:
         datasets = os.path.join(bin_path, "datasets")
     output:
        fasta   = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta"),
-       allscaf =      config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.all.tsv",
-       chrscaf =      config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.chr.tsv",
+       allscaf = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.all.tsv",
+       chrscaf = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.chr.tsv",
     retries: 3
     params:
         outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/",
     threads: 1
     resources:
         mem_mb = dlChrs_get_mem_mb, # 1 GB of RAM
-        time   = 20  # 20 minutes.
+        time   = 20,  # 20 minutes.
+        load   = 10   ten units
     run:
         result = GenDB.download_unzip_genome(wildcards.assemAnn, params.outdir,
                                              input.datasets, chrscale = True)
         if result != 0:
             raise ValueError("The download of the genome {} failed.".format(wildcards.assemAnn))
-
 
 rule gzip_fasta_file:
     """
