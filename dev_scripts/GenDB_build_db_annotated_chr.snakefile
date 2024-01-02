@@ -66,9 +66,9 @@ rule dlChrs:
     input:
         datasets = os.path.join(bin_path, "datasets")
     output:
-       fasta   = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta"),
-       allscaf = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.all.tsv",
-       chrscaf = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.chr.tsv",
+       fasta   = temp(ensure(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta", non_empty=True)),
+       allscaf = ensure(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.all.tsv", non_empty=True),
+       chrscaf = ensure(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.chr.tsv", non_empty=True)
     retries: 3
     params:
         outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/",
@@ -117,8 +117,8 @@ rule dlPepGff:
     output:
         readme   = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/pepDl/README.md"),
         assembly = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/pepDl/{assemAnn}.pepAndGff.zip"),
-        protein  = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.pep"),
-        gff      = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gff")
+        protein  = temp(ensure(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.pep", non_empty=True)),
+        gff      = temp(ensure(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gff", non_empty=True))
     retries: 3
     params:
         outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/pepDl/",
@@ -197,9 +197,9 @@ rule prep_chrom_file_from_NCBI:
         gff      = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.gff",
         chromgen = os.path.join(snakefile_path, "..", "scripts", "NCBIgff2chrom.py")
     output:
-        chrom  = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.chrom"),
-        pep    = temp(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.pep"),
-        report = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.report.txt"
+        chrom  = temp(ensure(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.chrom", non_empty=True)),
+        pep    = temp(ensure(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.pep",   non_empty=True)),
+        report = ensure(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.report.txt", non_empty=True)
     threads: 1
     retries: 7
     resources:
@@ -252,7 +252,7 @@ rule generate_assembled_config_entry:
         chrom             = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.chrom.gz",
         report            = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chrFilt.report.txt",
     output:
-        yaml   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.yaml.part",
+        yaml   = ensure(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.yaml.part", non_empty=True),
     threads: 1
     resources:
         mem_mb  = 1000,
@@ -325,7 +325,7 @@ rule collate_assembled_config_entries:
         yaml_parts = expand(config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.yaml.part",
                             assemAnn=config["assemAnn"])
     output:
-        yaml = "NCBI_odp_db.annotated.chr.yaml"
+        yaml = ensure("NCBI_odp_db.annotated.chr.yaml", non_empty=True)
     threads: 1
     resources:
         mem_mb  = 1000,
@@ -344,7 +344,7 @@ rule generate_species_list_for_timetree:
     input:
         yaml    = "NCBI_odp_db.annotated.chr.yaml"
     output:
-        sp_list = "NCBI_odp_sp_list.annotated.chr.txt"
+        sp_list = ensure("NCBI_odp_sp_list.annotated.chr.txt", non_empty = True)
     threads: 1
     resources:
         mem_mb  = 1000,
