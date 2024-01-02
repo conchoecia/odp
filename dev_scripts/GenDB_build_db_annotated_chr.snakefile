@@ -73,9 +73,11 @@ rule dlChrs:
     params:
         outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/",
     threads: 1
+    group: "dlgz"
     resources:
         mem_mb = dlChrs_get_mem_mb, # the amount of RAM needed depends on the size of the input genome. Just scale UP.
-        time   = 20  # 20 minutes.
+        time   = 20,  # 20 minutes.
+        download_slots = 1
     run:
         result = GenDB.download_unzip_genome(wildcards.assemAnn, params.outdir,
                                              input.datasets, chrscale = True)
@@ -91,6 +93,7 @@ rule gzip_fasta_file:
     output:
         genome = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz"
     threads: 1
+    group: "dlgz"
     resources:
         mem_mb = 1000, # 1 GB of RAM
         time   = 50   # Usually takes less than 10 minutes. Just do 50 for exceptional cases. Exceptional cases usually take 150 minutes.
@@ -99,9 +102,7 @@ rule gzip_fasta_file:
     shell:
         """
         echo "Gzipping the fasta file."
-        gzip {input.genome}
-        # remove the .fna files again, in case the last step failed
-        find {params.outdir} -name "*.fna" -exec rm {{}} \\;
+        gzip < {input.genome} > {output.genome}
         """
 
 rule dlPepGff:
@@ -125,7 +126,8 @@ rule dlPepGff:
     threads: 1
     resources:
         mem_mb = 500, # Usually only uses 100MB of RAM
-        time   = 5  # 5 minutes.
+        time   = 5,  # 5 minutes.
+        download_slots = 1
     shell:
         """
         # Wait a random amount of time up to 10 seconds to space out requests to the NCBI servers.

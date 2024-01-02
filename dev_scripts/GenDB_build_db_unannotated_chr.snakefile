@@ -93,6 +93,11 @@ if len(LG_to_db_directory_dict) == 0: # only do this once
         outfile =config["tool"] + "/input/LG_proteins/{}.fasta".format(LG_name)
         LG_outfiles.append(outfile)
 
+resource_scopes:
+    mem_mb="local",
+    time="local",
+    download_slots="global"
+
 wildcard_constraints:
     taxid="[0-9]+",
 
@@ -138,15 +143,16 @@ rule dlChrs:
     output:
        fasta   = temp(config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta"),
        allscaf = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.all.tsv",
-       chrscaf = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.chr.tsv",
+       chrscaf = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.scaffold_df.chr.tsv"
     retries: 3
     params:
         outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/",
     threads: 1
+    group: "dlgz"
     resources:
         mem_mb = dlChrs_get_mem_mb, # 1 GB of RAM
         time   = 20,  # 20 minutes.
-        load   = 10   ten units
+        download_slots = 1
     run:
         result = GenDB.download_unzip_genome(wildcards.assemAnn, params.outdir,
                                              input.datasets, chrscale = True)
@@ -162,17 +168,14 @@ rule gzip_fasta_file:
     output:
         genome = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/{assemAnn}.chr.fasta.gz"
     threads: 1
+    group: "dlgz"
     resources:
         mem_mb = 1000, # 1 GB of RAM
         time   = 50   # Usually takes less than 10 minutes. Just do 50 for exceptional cases. Exceptional cases usually take 150 minutes.
-    params:
-        outdir   = config["tool"] + "/output/source_data/unannotated_genomes/{assemAnn}/",
     shell:
         """
         echo "Gzipping the fasta file."
-        gzip {input.genome}
-        # remove the .fna files again, in case the last step failed
-        find {params.outdir} -name "*.fna" -exec rm {{}} \\;
+        gzip < {input.genome} > {output.genome}
         """
 
 rule generate_LG_fasta_sequence:

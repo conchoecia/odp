@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import time
+import warnings
 
 # use the fasta package included with this repo
 snakefile_path = os.path.dirname(os.path.realpath(__file__))
@@ -82,6 +83,8 @@ def opening_logic_GenDB_build_db(config, chr_scale = None, annotated = None):
                 chosen_file = config["unannotated_genome_chr_tsv"]
             else:
                 chosen_file = config["unannotated_genome_nonchr_tsv"]
+        #if chosen_file is None:
+        #    raise IOError("You provided a directory for us to find the lists of genomes {}, but")
         # Use the chosen file, and add the entries to the config file so we can download them or not
         config["assemAnn"] = determine_genome_accessions(chosen_file)
 
@@ -129,6 +132,11 @@ def download_assembly_scaffold_df(assembly_accession, datasetsEx, chrscale = Tru
         345    GCA_026151205.1  Primary Assembly                      Chromosome       Un         NaN         NaN  JAIOUN010000346.1      1772   unplaced-scaffold
         346    GCA_026151205.1       non-nuclear                   Mitochondrion       MT      2109.0        20.0         CM047416.1     10476  assembled-molecule
     """
+    # wait a random amount of time up to 120 seconds to space out requests to the NCBI servers.
+    sleeptime = randint(1,120)
+    print("About to download the assembly df for {}.\nSleeping for {} seconds to avoid overloading the NCBI servers.".format(assembly_accession,sleeptime), file = sys.stderr)
+    time.sleep(sleeptime)
+
     # first use the datasets executable to get a list of scaffolds to download
     # launch it as a process from bash and collect the output to sys.stdout
     # ./datasets summary genome accession GCF_000001405.40 --report sequence --as-json-lines
@@ -226,6 +234,12 @@ def download_chr_scale_genome_from_df_WORKING(chr_df, datasetsEx, output_dir):
     """
     # get the most common value of the assembly_accession column
     assembly_accession = chr_df["assembly_accession"].mode()[0]
+
+    # wait a random amount of time up to 120 seconds to space out requests to the NCBI servers.
+    sleeptime = randint(1,120)
+    print("About to download the genome assembly for {}.\nSleeping for {} seconds to avoid overloading the NCBI servers.".format(assembly_accession, sleeptime), file = sys.stderr)
+    time.sleep(sleeptime)
+
     # First, we need to check that the output directory exists. If it doesn't, then we need to create it.
     create_directories_recursive_notouch(output_dir)
 
@@ -518,10 +532,6 @@ def download_unzip_genome(assembly_accession, output_dir, datasetsEx,
     """
     # First, strip the white space surrounding the assembly accession number
     assembly_accession = assembly_accession.strip()
-    # wait a random amount of time up to 120 seconds to space out requests to the NCBI servers.
-    sleeptime = randint(1,120)
-    print("Sleeping for {} seconds to avoid overloading the NCBI servers.".format(sleeptime), file = sys.stderr)
-    time.sleep(sleeptime)
 
     # save the current directory in case we need to go back to it
     current_dir = os.getcwd()
@@ -576,6 +586,27 @@ def return_latest_accession_tsvs(directory_path):
     annotated_nonchr_files   = [f for f in files if f.startswith("annotated_genomes_nonchr")   and f.endswith(".tsv") and contains_date(f)]
     unannotated_chr_files    = [f for f in files if f.startswith("unannotated_genomes_chr")    and f.endswith(".tsv") and contains_date(f)]
     unannotated_nonchr_files = [f for f in files if f.startswith("unannotated_genomes_nonchr") and f.endswith(".tsv") and contains_date(f)]
+
+    # It is fine if the files are empty, but there needs to at least be a file to look at
+    cycledict = {"annotated_chr_files":      annotated_chr_files,
+                    "annotated_nonchr_files":   annotated_nonchr_files,
+                    "unannotated_chr_files":    unannotated_chr_files,
+                    "unannotated_nonchr_files": unannotated_nonchr_files}
+    for thiskey in cycledict:
+        if len(cycledict[thiskey]) == 0:
+            outmsg = "There are no accession TSV files for this filetype: {}".format(thiskey)
+            outmsg = outmsg + "\nThe directory in which I looked was: {}".format(directory_path)
+            outmsg = outmsg + "\n  - The files that we found in the directory are:"
+            for thisfile in os.listdir(directory_path):
+                outmsg = outmsg + "\n    - {}".format(thisfile)
+            outmsg = outmsg + "\nThe names of the files that we need to find are found like so:"
+            outmsg = outmsg + "\n    [f for f in files if f.startswith(\"annotated_genomes_chr\")      and f.endswith(\".tsv\") and contains_date(f)]"
+            outmsg = outmsg + "\n    [f for f in files if f.startswith(\"annotated_genomes_nonchr\")   and f.endswith(\".tsv\") and contains_date(f)]"
+            outmsg = outmsg + "\n    [f for f in files if f.startswith(\"unannotated_genomes_chr\")    and f.endswith(\".tsv\") and contains_date(f)]"
+            outmsg = outmsg + "\n    [f for f in files if f.startswith(\"unannotated_genomes_nonchr\") and f.endswith(\".tsv\") and contains_date(f)]"
+            outmsg = outmsg + "\nIt is fine if the files are empty, but there needs to at least be a file to look at."
+            warnings.warn(outmsg) # using a warning for now, as it is not a fatal error. In case something is missing, this will just not run.
+
     # sort the files by date, using YYYYMMDDHHMM as the sorting key
     annotated_chr_files.sort(        key=lambda x: int(x.split("_")[-1].split(".")[0]), reverse=True)
     annotated_nonchr_files.sort(     key=lambda x: int(x.split("_")[-1].split(".")[0]), reverse=True)
