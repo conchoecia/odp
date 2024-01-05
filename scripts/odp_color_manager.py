@@ -19,6 +19,12 @@ import pandas as pd
 import random
 import sys
 
+snakefile_path = os.path.dirname(os.path.abspath(__file__))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
+
+
 def is_valid_hex_code(hex_code):
     return len(hex_code) == 7 and all(c in '0123456789ABCDEFabcdef' for c in hex_code[1:])
 
@@ -27,7 +33,7 @@ class LG_db:
     This class ingests a directory of an odp linkage database,
      checks to see if the input is legal based on the LG db spec,
      and makes data structures to access the information later.
-    
+
     One special thing that is done to process the linkage database is
      to find if there are some cases where the same protein is in
      multiple columns. This is likely due to one species' proteome
@@ -78,11 +84,13 @@ class LG_db:
         # Open the hmm file and parse it to check that each ortholog has a HMM.
         rbh_orthologs = set(list(self.rbhdf["rbh"]))
         hmm_orthologs = set()
-        with open(self.hmmfile, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line and line.startswith("NAME "):
-                    hmm_orthologs.add(line.replace("NAME ", "").strip())
+        # if the file is gzipped, then we must use gzip.open
+        filehandle = fasta.get_open_func(self.hmmfile)
+        for line in filehandle:
+            line = line.strip()
+            if line and line.startswith("NAME "):
+                hmm_orthologs.add(line.replace("NAME ", "").strip())
+        filehandle.close()
 
         # if any of these fail, the rbh and hmm files don't match completely
         if len(rbh_orthologs - hmm_orthologs) != 0:

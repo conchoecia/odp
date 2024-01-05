@@ -36,9 +36,11 @@ import odp_color_manager as oc
 from odp_color_manager import generate_random_color as grc
 
 # other standard python libraries
+import gzip
 from itertools import permutations
 from itertools import combinations
 import logging
+import shutil
 import subprocess
 
 # non-standard dependencies
@@ -75,6 +77,7 @@ else:
 # check if species in the snakefile
 if "species" not in config:
     raise IOError("You must have a 'species' fields in the config file.")
+
 
 # make sure none of the sample names have underscores
 for thissample in config["species"]:
@@ -236,8 +239,8 @@ if config["plot_LG_decay"]:
            hmm = config["prot_to_color"], sp = config["species"])
 
 wildcard_constraints:
-    sample1="[A-Za-z0-9]+",
-    sample2="[A-Za-z0-9]+",
+    sample1="[A-Za-z0-9-.]+",
+    sample2="[A-Za-z0-9-.]+",
     #datatype="[A-Za-z0-9]+",
     #kmer="[A-Za-z0-9]+",
     #nom="[A-Za-z0-9.]+",
@@ -312,7 +315,7 @@ rule filter_prots:
         chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"],
         input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
-        pep = config["tool"] + "/db/{sample}_prots.pep"
+        pep = config["tool"] + "/db/{sample}_prots.pep.gz"
     retries: 6
     resources:
         mem_mb = filtprot_get_mem_mb, # should be small
@@ -327,15 +330,16 @@ rule make_diamond_and_blast_db:
     We only do this one the sample has passed the input QC checks.
     """
     input:
-        pep = ancient(config["tool"] + "/db/{sample}_prots.pep"),
+        pep = ancient(config["tool"] + "/db/{sample}_prots.pep.gz"),
         input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
-        dmnd = config["tool"] + "/db/dmnd/{sample}_prots.dmnd",
-        phr  = config["tool"] + "/db/{sample}_prots.pep.phr",
-        pin  = config["tool"] + "/db/{sample}_prots.pep.pin",
-        psq  = config["tool"] + "/db/{sample}_prots.pep.psq"
+        dmnd = config["tool"] + "/db/dmnd/{sample}_prots.gz.dmnd",
+        phr  = config["tool"] + "/db/{sample}_prots.pep.gz.phr",
+        pin  = config["tool"] + "/db/{sample}_prots.pep.gz.pin",
+        psq  = config["tool"] + "/db/{sample}_prots.pep.gz.psq"
     params:
-        outdir = config["tool"] + "/db/dmnd"
+        outdir = config["tool"] + "/db/dmnd",
+        title  = "{sample}_prots.pep.gz"
     resources:
         mem_mb = 1000, # should be small
         time   = 10  # ten minutes
@@ -344,13 +348,17 @@ rule make_diamond_and_blast_db:
         """
         mkdir -p {params.outdir}
         diamond makedb --in {input.pep} --db {output.dmnd}
-        makeblastdb -in {input.pep} -dbtype prot
+        zcat {input.pep} | makeblastdb -in -out {input.pep} -title {params.title} -dbtype prot
         """
 
 rule diamond_blast:
+    """
+    This blasts the proteins against the proteins of another sample.
+    TODO: the blastp output needs to be switched to gzipped files to save space.
+    """
     input:
-        pep1  = ancient(config["tool"] + "/db/{sample1}_prots.pep"),
-        pep2  = ancient(config["tool"] + "/db/{sample2}_prots.pep"),
+        pep1  = ancient(config["tool"] + "/db/{sample1}_prots.pep.gz"),
+        pep2  = ancient(config["tool"] + "/db/{sample2}_prots.pep.gz"),
         phr   = ancient(config["tool"] + "/db/{sample2}_prots.pep.phr"),
         pin   = ancient(config["tool"] + "/db/{sample2}_prots.pep.pin"),
         psq   = ancient(config["tool"] + "/db/{sample2}_prots.pep.psq"),
@@ -367,7 +375,7 @@ rule diamond_blast:
     shell:
         """
         if [ "{params.search_method}" = "blastp" ]; then
-            blastp -query {input.pep1} -db {input.pep2} -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
+            zcat {input.pep1} | blastp -db {input.pep2} -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
         elif [ "{params.search_method}" = "diamond" ]; then
             diamond blastp --query {input.pep1} --db {input.dmnd2} --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
         fi
@@ -383,7 +391,7 @@ rule reciprocal_best_hits:
         blastp2to1 = config["tool"] + "/step0-blastp_results/{sample2}_against_{sample1}.blastp"
     output:
         blastp1to2 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample1}_and_{sample2}_recip.temp.blastp",
-        blastp2to1 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample2}_and_{sample1}_recip.temp.blastp",
+        blastp2to1 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample2}_and_{sample1}_recip.temp.blastp"
     resources:
         mem_mb = 1000, # Should be small
         time   = 20  # 20 minutes in seconds
@@ -2031,6 +2039,24 @@ rule plot_synteny_nocolor:
                      params.orthology_method,
                      sort_y_by_x = sort_y_by_x)
 
+rule temp_unzip_protein:
+    """
+    Temporarily unzip the protein file for usage in the hmmsearch.
+    The program hmmsearch needs a regular text file to be able to navigate line-by-line.
+    """
+    input:
+        proteins = config["tool"] + "/db/{sample}_prots.pep.gz",
+    output:
+        protein = temp(config["tool"] + "/db/{sample}_prots.pep")
+    threads: 1
+    resources:
+        mem_mb = 1000, # Some example consumption for single cores: 500M, 120M, 288M
+        time   = 5
+    shell:
+        """
+        zcat {input.proteins} > {output.protein}
+        """
+
 rule hmm_against_prots:
     """
     This runs hmmsearch of an LG_db against one species.
@@ -2063,9 +2089,10 @@ rule hmm_against_prots:
             config["prot_to_color"][wildcards.coloredby]))
                                       if x.endswith(".hmm")][0]),
         rbh = lambda wildcards: config["prot_to_color_rbh"][wildcards.coloredby],
-        proteins = config["tool"] + "/db/{sample}_prots.pep",
+        proteins = config["tool"] + "/db/{sample}_prots.pep"
     output:
-        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"
+        hmm   = temp(config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"),
+        hmmgz = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.gz"
     resources:
         mem_mb = 5000, # Some example consumption for single cores: 500M, 120M, 288M
         time   = 180  # 20231211 - 3 hours in minutes. 2 hours was too short with 3 threads. Now trying with 8 threads.
@@ -2116,13 +2143,38 @@ rule hmm_against_prots:
                     if thisgenefamily == "":
                         raise IOError("The gene family wasn't assigned for some reason. This should not happpen. One possible cause is that the protein fasta file had a blank header.")
                     # there are 19 fields. The first is the protein ID, the fourth is the gene family, and the rest are alignment scores
-                    o.write("{}\t-\t{}\t-\t0\t9999\t0\t0\t9999\t0\t1\t1\t1\t1\t1\t1\t1\t1\t1\n".format(
-                        thisid, thisgenefamily))
+                    print("{}\t-\t{}\t-\t0\t9999\t0\t0\t9999\t0\t1\t1\t1\t1\t1\t1\t1\t1\t1".format(
+                        thisid, thisgenefamily), file = o)
         else:
+            # remove the file from the output.hmm, just get that directory path
+            outdirec_path = os.path.dirname(output.hmm)
+            # safely, recursively make the outdirec_path for output.hmm
+            os.makedirs(outdirec_path, exist_ok = True)
+            # first check that the hmmsearch program is an executable in the current environment. If not, raise an error.
+            if shutil.which("hmmsearch") is None:
+                raise IOError("The hmmsearch program is not in the current environment. Please install it or configure your environment and try again. For slurm clusters, you might try 'module load hmmer' or 'conda install -c bioconda hmmer'.")
             # Example HMM command
             hmm_command = f"hmmsearch --incE 1E-5 --tblout {output.hmm} --cpu {threads} --noali --notextw {input.hmm} {input.proteins} > /dev/null"
-            # Run the HMM command using subprocess
-            subprocess.run(hmm_command, shell=True)
+            # Run the HMM command using subprocess. Check the return code. If it is not 0, raise an error.
+            # check = True returns a CalledProcessError if the return code is not 0
+            subprocess.run(hmm_command, shell = True, check = True)
+        # We have output the hmmsearch file. We need to check it to make sure that all of the entries have the same number of fields
+        # Every field must look like this
+        #   EAA03888.3           -          Simakov2022BCnS_genefamily_4903 -            3.4e-25   87.8   0.0   4.3e-25   87.5   0.0   1.0   1   0   0   1   1   1   1 -
+        # There are 19 fields
+        with open(output.hmm, "r") as f:
+            counter = 0
+            prev = ""
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    fields = line.split()
+                    if len(fields) != 19:
+                        raise IOError("The hmmsearch file has an incorrect number of fields. This should not happen. This means that this job failed for sample {}. Please check the hmmsearch file and try again.".format(wildcards.sample))
+        # Now that we are sure that the file has the correct number of fields, we can gzip it. Ok to use subprocess.
+        subprocess.run(f"gzip < {output.hmm} > {output.hmmgz}", shell = True, check = True)
+        # done!
+
 
 def filthmm_get_mem_mb(wildcards, attempt):
     """
@@ -2148,9 +2200,9 @@ rule filter_each_hmm_result:
     gets the top five hits for each hmm and converts them to blastp outfmt 6 format
     """
     input:
-        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch",
+        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.gz"
     output:
-        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp"
+        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp.gz"
     threads: 1
     retries: 7
     resources:
@@ -2158,8 +2210,8 @@ rule filter_each_hmm_result:
         time   = 60   # one hour
     run:
         top_hits = 5
-        outhandle = open(output.hmm, "w")
-        with open(input.hmm, "r") as f:
+        outhandle = gzip.open(output.hmm, "wt")
+        with gzip.open(input.hmm, "rt") as f:
             counter = 0
             prev = ""
             for line in f:
@@ -2185,9 +2237,9 @@ rule filter_each_hmm_result:
                         if counter >= top_hits:
                             pass # don't do anything
                         else:
-                            print("\t".join([str(x) for x in entry]), file = outhandle)
+                            outhandle.write( "\t".join([str(x) for x in entry]) + "\n" )
                     else:
-                        print("\t".join([str(x) for x in entry]), file = outhandle)
+                        outhandle.write(     "\t".join([str(x) for x in entry]) + "\n" )
                         counter = 0
                     prev = qseqid
         outhandle.close()
@@ -2211,7 +2263,7 @@ rule hmm_search_to_rbh:
     converts a hmmsearch output to a reciprocal best hit file
     """
     input:
-        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp",
+        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp.gz",
         sample_chrom  = lambda wildcards: config["species"][wildcards.sample]["chrom"],
         coloredby_rbh = lambda wildcards: config["prot_to_color_rbh"][wildcards.coloredby]
     output:
@@ -2340,7 +2392,7 @@ rule plot_synteny_coloredby:
         rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.D.FET.rbh",
         colordir = lambda wildcards: config["prot_to_color"][wildcards.coloredby],
         chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize",
-        hmm_results = lambda wildcards: [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(
+        hmm_results = lambda wildcards: [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp.gz".format(
             wildcards.coloredby, x) for x in wildcards.analysis.split("_")]
     output:
         rbh = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_xy_reciprocal_best_hits.coloredby_{coloredby}.plotted.rbh",

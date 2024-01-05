@@ -2,9 +2,10 @@
 These are functions that are shared by odp, odp_trio, and other scripts
 """
 # this is all needed to load our custom fasta parser
+import gzip
 import os
 import sys
-snakefile_path = os.path.dirname(os.path.abspath(__file__)) 
+snakefile_path = os.path.dirname(os.path.abspath(__file__))
 dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
 import fasta
@@ -310,9 +311,12 @@ def chrom_file_is_legal(chrompath):
     """
     # 1. check that the file exists
     check_file_exists(chrompath)
+    # 2. Open the file for whatever type it is
+    chromhandle = fasta.get_open_func(chrompath)
     # go through the file line by line and inspect each element
-    with open(chrompath, "r") as f:
-        for line in f:
+    for line in chromhandle:
+        line = line.strip()
+        if line:
             fields = line.strip().split("\t")
             # check if any of the fields have leading or trailing whitespace
             for field in fields:
@@ -335,6 +339,8 @@ def chrom_file_is_legal(chrompath):
             if not fields[4].isdigit():
                 print("Field 4 is not an int: " + str(fields))
                 return False
+    # close the handle
+    chromhandle.close()
     # if we get here, everything is good
     return True
 
@@ -671,18 +677,31 @@ def generate_coord_structs_from_chrom_to_loc(chrom_file):
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     """
-    takes a chrom file, only keeps proteins in input_fasta from chrom file,
-     saves those prots to output_fasta
+    Takes a chrom file, gzipped or not, only keeps proteins in input_fasta from chrom file,
+     saves those prots to output_fasta.
     """
     keep_these = set()
     printed_already = set()
-    with open(chrom_file, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                splitd = line.split()
-                keep_these.add(splitd[0])
-    outhandle = open(output_fasta, "w")
+    chromhandle = fasta.get_open_func(chrom_file)
+    for line in chromhandle:
+        line = line.strip()
+        if line:
+            splitd = line.split()
+            keep_these.add(splitd[0])
+    chromhandle.close()
+    # If the output_fasta file name has a .gz, then we need to write a gzip file.
+    # Otherwise, just write to a regular file.
+    output_gz = False
+    for thisending in [".gz", ".gzip"]:
+        if output_fasta.endswith(thisending):
+            output_gz = True
+    outhandle = None
+    if output_gz:
+        outhandle = gzip.open(output_fasta, "wt")
+    else:
+        outhandle = open(output_fasta, "w")
+
+    # now that we have handled the output, filter the fasta file
     for record in fasta.parse(input_fasta):
         if record.id in keep_these and record.id not in printed_already:
             # The record object has the properties
@@ -691,7 +710,10 @@ def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
             #  - Record.desc
             # get rid of the description to avoid parsing errors later
             record.desc=""
-            print(record, file = outhandle)
+            if output_gz:
+                outhandle.write(record.format(wrap=80))
+            else:
+                print(record.format(wrap=80), file = outhandle, end="")
             printed_already.add(record.id)
     outhandle.close()
 

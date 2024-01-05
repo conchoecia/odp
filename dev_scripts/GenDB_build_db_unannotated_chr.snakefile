@@ -419,7 +419,8 @@ rule generate_assembled_config_entry:
         minscaflen = 100000
         if "|" in [genus, species, taxid, wildcards.assemAnn]:
             raise ValueError("You cannot have a | character in the genus, species, taxid, or assembly accession.")
-        spstring = "{}{}|{}|{}".format(genus, species, taxid, wildcards.assemAnn)
+        # We currently cannot have "_" characters in the species name because of problems it causes downstream with snakemake.
+        spstring = "{}{}-{}-{}".format(genus, species, taxid, wildcards.assemAnn.replace("_", ""))
         h = "  "
         s = ""
         s += h + "{}:\n".format(spstring)

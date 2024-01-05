@@ -35,7 +35,7 @@ class Record:
         """Creates a Record.
 
         Example:
-            >>> record = Record(id='NP_055309.2', 
+            >>> record = Record(id='NP_055309.2',
             ...                 seq='MRELEAKAT',
             ...                 desc='TNRC6A')
             >>> print(record)
