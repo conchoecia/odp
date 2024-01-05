@@ -38,7 +38,7 @@ def general_legal_run():
     1. This program is not being run in a subdirectory of the odp install.
        We do not allow this, as some of the outfiles may overwrite program files.
     """
-    snakefile_path = os.path.dirname(os.path.abspath(__file__)) 
+    snakefile_path = os.path.dirname(os.path.abspath(__file__))
     odp_path = os.path.abspath(os.path.join(snakefile_path, ".."))
     cwd      = os.getcwd()
 
@@ -202,6 +202,9 @@ def reciprocal_best_hits_jackhmmer(
       species even if the e-values for the "best hit" are equivalent. This fixes
       one of the problems with blastp results. The results are still reciprocal
       best, though.
+
+    Update 20230103: This function is not used anymore. It was used for jackhammer.
+      Jackhammer did not work well for this program, so ignoring it.
     """
     jackhmmercol = ["target_name", "accession",  "query_name",
                     "accession",
@@ -211,15 +214,14 @@ def reciprocal_best_hits_jackhmmer(
                     "ov", "env", "dom", "rep", "inc",
                     "description_of_target"]
     f_raw = pd.read_csv(x_to_y_blastp_results,
-                        sep = "\s+", comment = "#",
+                        sep = "\\s+", comment = "#",
                         usecols=range(len(jackhmmercol)))
     f_raw.columns = jackhmmercol
     fdf = f_raw.sort_values(["query_name", "score", "evalue" ], ascending=[True, False, True]).drop_duplicates(subset="query_name")
-    #fdf = f_raw.sort_values(["query_name", "score", "evalue" ], ascending=[True, False, True]).groupby("query_name").head(2)
 
 
     r_raw = pd.read_csv(y_to_x_blastp_results,
-                        sep="\s+", comment = "#",
+                        sep="\\s+", comment = "#",
                         usecols=range(len(jackhmmercol)))
     r_raw.columns = jackhmmercol
     rdf = r_raw.sort_values(["query_name", "score", "evalue"], ascending=[True, False, True]).drop_duplicates(subset="query_name")
@@ -284,7 +286,7 @@ def check_file_exists(filepath) -> bool:
 
 def chrom_file_is_legal(chrompath):
     """
-    Checks if a chrom file is legal.
+    Checks if a chrom file is legal. Can be gzipped or not.
     Columns (and types) are:
      - protein_id (string)
      - scaffold (string)

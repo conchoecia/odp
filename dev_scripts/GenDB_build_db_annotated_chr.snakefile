@@ -96,7 +96,7 @@ rule gzip_fasta_file:
     group: "dlgz"
     resources:
         mem_mb = 1000, # 1 GB of RAM
-        time   = 50   # Usually takes less than 10 minutes. Just do 50 for exceptional cases. Exceptional cases usually take 150 minutes.
+        time   = lambda wildcards: GenDB.gzip_get_time(config["assemAnn_to_scaflen"][wildcards.assemAnn])
     params:
         outdir   = config["tool"] + "/output/source_data/annotated_genomes/{assemAnn}/",
     shell:
@@ -311,7 +311,7 @@ rule generate_assembled_config_entry:
         s += h + h + "proteins:           {}\n".format(os.path.abspath(input.protein))
         s += h + h + "chrom:              {}\n".format(os.path.abspath(input.chrom))
         s += h + h + "genome:             {}\n".format(os.path.abspath(input.genome))
-        s += h + h + "minscafsize:         {}\n".format(str(int(minscaflen)))
+        s += h + h + "minscafsize:        {}\n".format(str(int(minscaflen)))
 
         # write the string to the output
         with open(output.yaml, "w") as f:

@@ -38,6 +38,19 @@ def create_directories_recursive_notouch(path):
         if not os.path.exists(current_path):
             os.mkdir(current_path)
 
+def gzip_get_time(basepairs) -> int:
+    """
+    This function returns how many minutes of compute time a gzip job on a fasta file will take.
+    This was inferred from testing around 2400 genomes of lengths between 100 Mbp to 40 Gbp.
+    For every Gbp of bases, it takes about 7 minutes of gzip time. We add an additional 2 minutes of overhead.
+
+    The equation in the form y=mx+b is:
+       time = 7.0 * (basepairs/1e9) + 2.0
+
+    Returns an int, because SLURM only takes ints for runtime.
+    """
+    return int(7.0 * (basepairs/1e9) + 2.0)
+
 def opening_logic_GenDB_build_db(config, chr_scale = None, annotated = None):
     """
     This is common logic for all of the GenDB_build_db_*.snakefile scripts.
@@ -86,7 +99,14 @@ def opening_logic_GenDB_build_db(config, chr_scale = None, annotated = None):
         #if chosen_file is None:
         #    raise IOError("You provided a directory for us to find the lists of genomes {}, but")
         # Use the chosen file, and add the entries to the config file so we can download them or not
-        config["assemAnn"] = determine_genome_accessions(chosen_file)
+        df = pd.read_csv(chosen_file, sep="\t", index_col=False)
+        print(df)
+        # strip leading and trailing whitespace from the column names because pandas can screw up sometimes
+        df.columns = df.columns.str.strip()
+
+        config["assemAnn"]            = df["Assembly Accession"].tolist()
+        # make a dict where assemAnn is the key and the value is the "Assembly Stats Total Ungapped Length" column
+        config["assemAnn_to_scaflen"] = dict(zip(df["Assembly Accession"].tolist(), df["Assembly Stats Total Ungapped Length"].tolist()))
 
         # TODO This line should probably get its own function later
         ## get the list of GCAs to ignore in case we need to remove any
@@ -623,18 +643,3 @@ def return_latest_accession_tsvs(directory_path):
                    "unannotated_nonchr": os.path.join(directory_path, most_recent_unannotated_nonchr_file)
                    }
     return return_dict
-
-def determine_genome_accessions(tsv_filepath):
-    """
-    Reads in the TSV file that has the information about the genomes,
-    and returns a data structure (TBD) of which sequences to download.
-
-    This generic function can be used to get information both about the unannotated and annotated genomes.
-
-    Just returns the "Assembly Accession" column of the TSV file as a list.
-    This assembly accession number is all that is needed to download the genome and the annotation.
-    """
-    df = pd.read_csv(tsv_filepath, sep="\t")
-    # strip leading and trailing whitespace from the column names because pandas can screw up sometimes 
-    df.columns = df.columns.str.strip()
-    return df["Assembly Accession"].tolist()

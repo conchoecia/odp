@@ -171,7 +171,7 @@ rule gzip_fasta_file:
     group: "dlgz"
     resources:
         mem_mb = 1000, # 1 GB of RAM
-        time   = 50   # Usually takes less than 10 minutes. Just do 50 for exceptional cases. Exceptional cases usually take 150 minutes.
+        time   = lambda wildcards: GenDB.gzip_get_time(config["assemAnn_to_scaflen"][wildcards.assemAnn])
     shell:
         """
         echo "Gzipping the fasta file."
@@ -365,7 +365,6 @@ rule gzChrom:
         # second gzip the pep file. This will be bigger.
         gzip < {input.pep} > {output.pep}
         """
-
 
 rule generate_assembled_config_entry:
     """
