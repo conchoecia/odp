@@ -1,6 +1,7 @@
 """
 These are functions that are shared by odp, odp_trio, and other scripts
 """
+
 # this is all needed to load our custom fasta parser
 import gzip
 import os
@@ -344,7 +345,6 @@ def chrom_file_is_legal(chrompath):
     # if we get here, everything is good
     return True
 
-
 def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
     """
     This function checks that the input files are legal.
@@ -520,10 +520,10 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
         outmessage += "*   file, or if something is missing from the genome .fasta file.\n"
         outmessage += "*   Then, fix your files and re-run this pipeline.\n"  
         outmessage += "*********************************************************************\n"
-    
+
     # everything passed
     return True
-    
+
 def check_legality(config):
     """
     This function checks for legal config entries.

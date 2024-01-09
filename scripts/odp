@@ -253,6 +253,18 @@ rule all:
     input:
         file_targets
 
+def legality_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed could change.
+    """
+    attemptdict = {1: 4000,
+                   2: 8000,
+                   3: 16000,
+                   4: 64000,
+                   5: 256000,
+                   6: 512000}
+    return attemptdict[attempt]
+
 rule check_input_legality:
     """
     The very first thing that we must do is to check the input files.
@@ -261,6 +273,11 @@ rule check_input_legality:
       - The genome .fasta file
       - The .chrom file
       - The protein .fasta file
+
+    Notes:
+    202140106 - This job appears to request too much RAM, causing OOM errors even
+        when the input files are small. I'm not sure why this is happening.
+        As a result, I am now adding a resources to limit the number of simultaneous jobs.
     """
     input:
         fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
@@ -270,10 +287,13 @@ rule check_input_legality:
         input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     params:
         duplicate_handling = config["duplicate_proteins"]
+    benchmark: "benchmarks/check_input_legality/{sample}.check_input_legality.benchmark.txt"
     resources:
-        mem_mb = 2000,  # 20231207 - saw this peaking around 700MB on a 800Mbp genome
-        time   = 10   # 10 minutes
+        io_slots = 1,
+        mem_mb = legality_get_mem_mb, # 20240105 - Got this from here: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#dynamic-resources
+        runtime   = 60   # 10 minutes
     threads: 1
+    retries: 6
     run:
         # We always check to see if the chrom file is legal, regardless of whether we're ignoring duplicate prots.
         if not odpf.chrom_file_is_legal(input.chrom):
@@ -317,9 +337,11 @@ rule filter_prots:
     output:
         pep = config["tool"] + "/db/{sample}_prots.pep.gz"
     retries: 6
+    benchmark: "benchmarks/filter_prots/{sample}.filter_prots.benchmark.txt"
     resources:
+        io_slots = 1,
         mem_mb = filtprot_get_mem_mb, # should be small
-        time   = 10  # ten minutes
+        runtime   = 10  # ten minutes
     threads: 1
     run:
         odpf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
@@ -340,9 +362,11 @@ rule make_diamond_and_blast_db:
     params:
         outdir = config["tool"] + "/db/dmnd",
         title  = "{sample}_prots.pep.gz"
+    benchmark: "benchmarks/make_diamond_and_blast_db/{sample}.make_diamond_and_blast_db.benchmark.txt"
     resources:
+        io_slots = 1,
         mem_mb = 1000, # should be small
-        time   = 10  # ten minutes
+        runtime   = 10  # ten minutes
     threads: 1 # No reason to have more than one thread
     shell:
         """
@@ -365,9 +389,10 @@ rule diamond_blast:
         dmnd2 = ancient(config["tool"] + "/db/dmnd/{sample2}_prots.dmnd"),
     output:
         blastp = config["tool"] + "/step0-blastp_results/{sample1}_against_{sample2}.blastp"
+    benchmark: "benchmarks/diamond_blast/{sample1}_{sample2}_diamond_blast.benchmark.txt"
     resources:
         mem_mb = 2000, # 20231206 - I don't actually know how long this will take.
-        time   = 20    # 20231206 - I don't actually know how long this will take. Currently 20 minutes in seconds.
+        runtime   = 20    # 20231206 - I don't actually know how long this will take. Currently 20 minutes in seconds.
     threads: 8
     params:
         search_method = config["diamond_or_blastp"]
@@ -392,9 +417,10 @@ rule reciprocal_best_hits:
     output:
         blastp1to2 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample1}_and_{sample2}_recip.temp.blastp",
         blastp2to1 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample2}_and_{sample1}_recip.temp.blastp"
+    benchmark: "benchmarks/reciprocal_best_hits/{sample1}_{sample2}.reciprocal_best_hits.benchmark.txt"
     resources:
         mem_mb = 1000, # Should be small
-        time   = 20  # 20 minutes in seconds
+        runtime   = 20  # 20 minutes in seconds
     threads: 1
     run:
         odpf.reciprocal_best_hits_blastp_or_diamond_blastp(
@@ -439,9 +465,10 @@ rule n_ways_reciprocal_best:
         acceptable_prots = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_acceptable_prots.txt",
         blast_network    = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_edges.txt",
         rbh              = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh"
+    benchmark: "benchmarks/n_ways_reciprocal_best_hits/{analysis}.n_ways_reciprocal_best_hits.benchmark.txt"
     resources:
         mem_mb = 1000, # should be small
-        time   = 20  # 20 minutes in seconds
+        runtime   = 20  # 20 minutes in seconds
     threads: 1
     run:
         # prot to group
@@ -1803,24 +1830,45 @@ rule get_chromsize_of_one_species:
 
     We filter out the scaffolds that are too small here.
 
-    We require that the sample pass the input file checks first
+    We require that the sample pass the input file checks first.
+    Notes:
+      - 20240106 - We use this implementation instead of the fasta package because it consumes
+        less RAM.
     """
     input:
         fasta = lambda wildcards: config["species"][wildcards.sp]["genome"],
         input_pass = config["tool"] + "/db/input_check/{sp}_pass.txt"
     output:
         chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
+    benchmark: "benchmarks/get_chromsize_of_one_species/{sp}.get_chromsize_of_one_species.benchmark.txt"
     resources:
+        io_slots = 1,
         mem_mb = chromsize_get_mem_mb, # Use 2GB of RAM in case there are large chromosomes
-        time   = 20   # ten minutes in seconds
-    retries: 8
+        runtime   = 20   # ten minutes in seconds
+    retries: 7
     threads: 1
     run:
-        with open(output.chromsize, "w") as o:
-            for record in fasta.parse(input.fasta):
-                recordlen = len(record.seq)
-                if recordlen >= config["species"][wildcards.sp]["minscafsize"]:
-                    o.write("{}\t{}\t{}\n".format(wildcards.sp, record.id, len(record.seq)))
+        outhandle = open(output.chromsize, "w")
+        scaffold_lengths = {}
+        # determine whether we open with gzip or not
+        handle = fasta.get_open_func(input.fasta)
+        for line in handle:
+            line = line.strip()
+
+            if line.startswith('>'):
+                # Header line indicating a new scaffold
+                current_scaffold = line[1:].split(" ")[0]
+                scaffold_lengths[current_scaffold] = 0
+            else:
+                # Sequence line, update scaffold length
+                if current_scaffold is not None:
+                    scaffold_lengths[current_scaffold] += len(line)
+        handle.close()
+
+        for thisscaf in scaffold_lengths:
+            print("{}\t{}\t{}".format(wildcards.sp,
+                                      thisscaf, scaffold_lengths[thisscaf]), file = outhandle)
+        outhandle.close()
 
 def chromsize_to_s2c2s(chromsize_path):
     """
@@ -1853,9 +1901,10 @@ rule get_chromsize_of_analysis_pair:
         pass2  = lambda wildcards: config["tool"] + "/db/input_check/{}_pass.txt".format(wildcards.analysis.split("_")[1])
     output:
         chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize"
+    benchmark: "benchmarks/get_chromsize_of_analysis_pair/{analysis}.get_chromsize_of_analysis_pair.benchmark.txt"
     resources:
         mem_mb = 500,  # 20231206 I don't actually know how much RAM this uses. But it probably is not much.
-        time   = 5   # Five minutes. 20231206 I don't actually know how much time this uses.
+        runtime   = 5   # Five minutes. 20231206 I don't actually know how much time this uses.
     threads: 1
     shell:
         """
@@ -1877,8 +1926,9 @@ rule analysis_D_and_FET:
         xsample = lambda wildcards: config["analysispairs"][wildcards.analysis][0],
         ysample = lambda wildcards: config["analysispairs"][wildcards.analysis][1]
     threads: 1
+    benchmark: "benchmarks/analysis_D_and_FET/{analysis}.analysis_D_and_FET.benchmark.txt"
     resources:
-        time   = 30, # 20231206 I don't know how long this will actually take. 30 minutes.
+        runtime   = 30, # 20231206 I don't know how long this will actually take. 30 minutes.
         mem_mb = 5000  # 20231205 This usually uses 2.5Gb of RAM.
     run:
         # read in the rbh file
@@ -1913,9 +1963,10 @@ rule filtered_D_FET_rbh:
         rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.D.FET.rbh"
     output:
         filt = config["tool"] + "/step1-rbh-filtered/{analysis}_reciprocal_best_hits.D.FET.filt.rbh"
+    benchmark: "benchmarks/filtered_D_FET_rbh/{analysis}.filtered_D_FET_rbh.benchmark.txt"
     resources:
         mem_mb = 1000, # 20231205 usually takes 0.2 to 0.3GB of RAM.
-        time   = 45  # 45 minutes. 20231206 This is probably too long.
+        runtime   = 45  # 45 minutes. 20231206 This is probably too long.
     threads: 1
     run:
         # read in the rbh file
@@ -1960,9 +2011,10 @@ rule species_HMM_D_and_FET:
     params:
         xsample = lambda wildcards: wildcards.hmm,
         ysample = lambda wildcards: wildcards.sp
+    benchmark: "benchmarks/species_HMM_D_and_FET/{hmm}_{sp}_.species_HMM_D_and_FET.benchmark.txt"
     resources:
         mem_mb = 5000, # usually takes ???GB of RAM
-        time   = 30  # 30 minutes
+        runtime   = 30  # 30 minutes
     threads: 1
     run:
         # read in the rbh file
@@ -2001,9 +2053,10 @@ rule plot_synteny_nocolor:
         xy  = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_xy_synteny.pdf",
         yx  = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_yx_synteny.pdf"
     threads: 1
+    benchmark: "benchmarks/plot_synteny_nocolor/{analysis}.plot_synteny_nocolor.benchmark.txt"
     resources:
         mem_mb = 5000, # usually takes ??Gb of RAM
-        time   = 30  # 30 minutes
+        runtime   = 30  # 30 minutes
     params:
         analysis = lambda wildcards: wildcards.analysis,
         orthology_method = config["diamond_or_blastp"]
@@ -2039,6 +2092,16 @@ rule plot_synteny_nocolor:
                      params.orthology_method,
                      sort_y_by_x = sort_y_by_x)
 
+def tmp_unzip_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 2000,
+                   2: 4000,
+                   3: 8000,
+                   4: 16000}
+    return attemptdict[attempt]
+
 rule temp_unzip_protein:
     """
     Temporarily unzip the protein file for usage in the hmmsearch.
@@ -2049,15 +2112,28 @@ rule temp_unzip_protein:
     output:
         protein = temp(config["tool"] + "/db/{sample}_prots.pep")
     threads: 1
+    benchmark: "benchmarks/temp_unzip_protein/{sample}.temp_unzip_protein.benchmark.txt"
+    retries: 4
     resources:
-        mem_mb = 1000, # Some example consumption for single cores: 500M, 120M, 288M
-        time   = 5
+        io_slots = 1,
+        mem_mb = tmp_unzip_get_mem_mb, # Some example consumption for single cores: 500M, 120M, 288M
+        runtime   = 5
     shell:
         """
         zcat {input.proteins} > {output.protein}
         """
 
-rule hmm_against_prots:
+def hmm_against_prots_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for filtering prots could change.
+    """
+    attemptdict = {1: 5000,
+                   2: 16000,
+                   3: 64000,
+                   4: 256000}
+    return attemptdict[attempt]
+
+rule hmm_1_against_prots:
     """
     This runs hmmsearch of an LG_db against one species.
     It will output all of the results into the format used by HMM search.
@@ -2089,14 +2165,15 @@ rule hmm_against_prots:
             config["prot_to_color"][wildcards.coloredby]))
                                       if x.endswith(".hmm")][0]),
         rbh = lambda wildcards: config["prot_to_color_rbh"][wildcards.coloredby],
-        proteins = config["tool"] + "/db/{sample}_prots.pep"
+        proteins = config["tool"] + "/db/{sample}_prots.pep" #yes, this is supposed to be unzipped
     output:
-        hmm   = temp(config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"),
-        hmmgz = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.gz"
+        hmm   = temp(config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch")
+    benchmark: "benchmarks/hmm_1_against_prots/{coloredby}_against_{sample}.hmm_1_against_prots.benchmark.txt"
     resources:
-        mem_mb = 5000, # Some example consumption for single cores: 500M, 120M, 288M
-        time   = 180  # 20231211 - 3 hours in minutes. 2 hours was too short with 3 threads. Now trying with 8 threads.
+        mem_mb = hmm_against_prots_get_mem_mb, # Some example consumption for single cores: 500M, 120M, 288M
+        runtime   = 480  # 20231211 - 3 hours in minutes. 2 hours was too short with 3 threads. Now trying with 8 threads.
     threads: 8 # 20231211 - 3 threads was very slow and used only around 500MB of RAM at peak. Trying 8 threads.
+    retries: 4
     run:
         # GET THE PROTEIN IDS IN THE RBH FILE
         # first we load the .rbh file to process all of the possible protein IDs
@@ -2171,10 +2248,38 @@ rule hmm_against_prots:
                     fields = line.split()
                     if len(fields) != 19:
                         raise IOError("The hmmsearch file has an incorrect number of fields. This should not happen. This means that this job failed for sample {}. Please check the hmmsearch file and try again.".format(wildcards.sample))
-        # Now that we are sure that the file has the correct number of fields, we can gzip it. Ok to use subprocess.
-        subprocess.run(f"gzip < {output.hmm} > {output.hmmgz}", shell = True, check = True)
-        # done!
 
+def gzhmm_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 1000,
+                   2: 2000,
+                   3: 4000,
+                   4: 8000,
+                   5: 16000,
+                   6: 320000,
+                   7: 640000}
+    return attemptdict[attempt]
+
+rule hmm_2_gzip_hmm_results:
+    """
+    gzip the hmm search results. This left too many possibilities for failure previously.
+    """
+    input:
+        hmm   = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"
+    output:
+        hmmgz = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.gz"
+    threads: 1
+    retries: 7
+    benchmark: "benchmarks/hmm_2_gzip_hmm_results/{coloredby}_against_{sample}.hmm_2_gzip_hmm_results.benchmark.txt"
+    resources:
+        mem_mb    = gzhmm_get_mem_mb, # should be relatively small
+        runtime   = 30    # 30 minutes
+    shell:
+        """
+        gzip < {input.hmm} > {output.hmmgz}
+        """
 
 def filthmm_get_mem_mb(wildcards, attempt):
     """
@@ -2189,7 +2294,7 @@ def filthmm_get_mem_mb(wildcards, attempt):
                    7: 640000}
     return attemptdict[attempt]
 
-rule filter_each_hmm_result:
+rule hmm_3_filter_hmm_result:
     """
     The header fields are:
     # target name        accession  query name                         accession    E-value  score  bias   E-value  score  bias   exp reg clu  ov env dom rep inc description of target
@@ -2205,9 +2310,10 @@ rule filter_each_hmm_result:
         hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp.gz"
     threads: 1
     retries: 7
+    benchmark: "benchmarks/hmm_3_filter_hmm_result/{coloredby}_against_{sample}.hmm_3_filter_hmm_result.benchmark.txt"
     resources:
         mem_mb = filthmm_get_mem_mb, # usually uses 0.2-0.3 GB of RAM
-        time   = 60   # one hour
+        runtime   = 60   # one hour
     run:
         top_hits = 5
         outhandle = gzip.open(output.hmm, "wt")
@@ -2258,7 +2364,7 @@ def hmmsearch_get_mem_mb(wildcards, attempt):
                    8: 256000}
     return attemptdict[attempt]
 
-rule hmm_search_to_rbh:
+rule hmm_4_hmm_to_rbh:
     """
     converts a hmmsearch output to a reciprocal best hit file
     """
@@ -2269,9 +2375,10 @@ rule hmm_search_to_rbh:
     output:
         rbh = config["tool"] + "/step1-rbh/{coloredby}_{sample}_reciprocal_best_hits.hmm.rbh"
     retries: 8
+    benchmark: "benchmarks/hmm_4_hmm_to_rbh/{coloredby}_{sample}.hmm_4_hmm_to_rbh.benchmark.txt"
     resources:
         mem_mb = hmmsearch_get_mem_mb, # should be relatively small
-        time   = 30    # 30 minutes
+        runtime   = 30    # 30 minutes
     threads: 1
     run:
         ## final columns must be
@@ -2398,9 +2505,10 @@ rule plot_synteny_coloredby:
         rbh = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_xy_reciprocal_best_hits.coloredby_{coloredby}.plotted.rbh",
         xy  = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_xy_synteny_coloredby_{coloredby}.pdf",
         yx  = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_yx_synteny_coloredby_{coloredby}.pdf",
+    benchmark: "benchmarks/plot_synteny_coloredby/{coloredby}_analysis_{analysis}.plot_synteny_coloredby.benchmark.txt"
     resources:
         mem_mb = 5000, # usually takes 2.5Gb of RAM
-        time   = 30  # 30 minutes
+        runtime   = 30  # 30 minutes
     threads: 1
     params:
         analysis = lambda wildcards: wildcards.analysis,
@@ -2468,9 +2576,10 @@ rule plot_synteny_of_ALGs_plus_species:
         rbh = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_reciprocal_best_hits.plotted.rbh",
         xy  = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_synteny.pdf",
         yx  = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_yx_synteny.pdf"
+    benchmark: "benchmarks/plot_synteny_of_ALGs_plus_species/{hmm}_{sp}.plot_synteny_of_ALGs_plus_species.benchmark.txt"
     resources:
         mem_mb = 5000, # usually takes ??GB of RAM
-        time   = 30  # 30 minutes in seconds
+        runtime   = 30  # 30 minutes in seconds
     threads: 1
     params:
         orthology_method = config["diamond_or_blastp"],
@@ -2596,9 +2705,10 @@ rule ALG_decay_plot:
     output:
         plot = config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.pdf",
         data = config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.tsv"
+    benchmark: "benchmarks/ALG_decay_plot/{hmm}_{sp}.ALG_decay_plot.benchmark.txt"
     resources:
         mem_mb = 1000, # 20231206 This almost certainly will not take up 1GB of RAM. Just using this value temporarily.
-        time   = 10  # 20231206 Don't know what value. Just using 10 minutes. 10 minutes in seconds
+        runtime   = 10  # 20231206 Don't know what value. Just using 10 minutes. 10 minutes in seconds
     threads: 1
     run:
         # read in the rbh dataframe
