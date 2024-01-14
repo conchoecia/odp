@@ -855,12 +855,33 @@ def main():
     args = parse_args()
 
     # get the rbh files in the directory
-    rbh_files = [os.path.join(args.directory, f)
+    rbh_files = list(sorted([os.path.join(args.directory, f)
                  for f in os.listdir(args.directory)
-                 if f.endswith('.rbh')]
+                 if f.endswith('.rbh')], reverse = True))
+
+    print("The rbh file set length before filtering is {}".format(len(rbh_files)))
+    # just pick the first rbh file to get the one species with each taxid. All of our files will have the NCBI taxid in the file name.
+    seen_taxids = set()
+    keep_these = []
+    # save the list of selected genomes to a file:
+    outhandle  = open("selected_genomes.txt", 'w')
+    for thisfile in rbh_files:
+        # get just the filename from the whole path
+        thisfilename = os.path.basename(thisfile)
+        # get the taxid. When we split on '-', it will be the 1st element, zero-based indexing.
+        taxid = int(thisfilename.split('-')[1])
+        if taxid not in seen_taxids:
+            keep_these.append(thisfile)
+            print("{}".format(thisfilename), file=outhandle)
+        seen_taxids.add(taxid)
+    outhandle.close()
+
+    rbh_files = keep_these
+    print("The rbh file set length after filtering is {}".format(len(rbh_files)))
 
     # first we need to read through all of the rbh files to get all of the possible ALGs to plot
-    ALGdf = parse_rbh_file(args.ALG_rbh, args.ALGname)
+    #ALGdf = parse_rbh_file(args.ALG_rbh, args.ALGname)
+    ALGdf = parse_rbh_file(args.ALG_rbh)
 
     ## *************************************************************
     ##  MAKING THE PLOTS ABOUT THE NUMBER OF FUSIONS
@@ -996,8 +1017,8 @@ def main():
     # Now that we have looked at every scaffold in every species, add a few missing fields
     for thissp in sp_df:
         # Just get the integer at the end of this string by removing all the alpha characters
-        # Sometimes there is a preceding '.' or '-' that we need to remove. Just keep digits.
-        thistaxid = int(re.sub(r"[A-Za-z]", "", thissp).replace(".","").replace("-",""))
+        # Note 202401 - The place we put the taxid has changed since last time. It used to be at the end of the line.
+        thistaxid = int(thissp.split("-")[1])
         # Raise an error if there is something in the string that is not 0-9
         if not re.match(r"^[0-9]*$", str(thistaxid)):
             raise ValueError("There is a non-numeric character in the taxid string")
@@ -1049,7 +1070,7 @@ def main():
     #     ┛┗┗┛┗┛  ┻┛┻┗┛┃ ┗┛┛┗┗┛┻┗┛┛┗  ┛┗┛┗┻┛  ┻ ┗┛┗┛┻┗┛┛┗
     # *********************************************************************************************************************
 
-    # Try to come up with per-species number of changes
+    # Determine per-species number of changes
     # When I mark "changes on a node", I mean that there was a change on the branch leading up to this node.
     #  This logic applies to the species-level, but also to internal nodes.
     #  For each node, there is a possibility to lose ALGs, or to gain fusions.

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # the file path is the first positional arg. use sys.
 import os
+from typing import Any
+import numpy as np
 import pandas as pd
 import random
 import sys
@@ -14,7 +16,7 @@ import matplotlib.pyplot as plt
 # use networkx to make graphs for the lineage-specific fusion/losses
 import networkx as nx
 
-def parse_gain_loss_string(GL_string, samplename):
+def parse_gain_loss_string(GL_string, samplename) -> pd.DataFrame:
     """
     This function parses a single gain/loss string.
     This is one example gain/loss string from the cnidarian Xenia:
@@ -58,13 +60,14 @@ def parse_gain_loss_string(GL_string, samplename):
                  "colocalizations": colocs, # this is a list
                  "losses": losses,          # this is a list
                  "samplename": samplename,  # this is a string
-                 "sample_taxid": int(GL_string.split("-")[-1])} # this is an int
+                 "sample_taxid": int(GL_string.split("-")[-1])
+                 } # this is an int
         entries.append(entry)
     # convert the list of dicts to a dataframe
     df = pd.DataFrame(entries)
     return df
 
-def parse_gain_loss_from_perspchrom_df(perspchromdf):
+def parse_gain_loss_from_perspchrom_df(perspchromdf) -> pd.DataFrame:
     """
     This handles parsing the gain/loss strings from the perspchrom dataframe.
     It handles the whole dataframe, and in the end outputs a dataframe that notes
@@ -93,11 +96,32 @@ def parse_gain_loss_from_perspchrom_df(perspchromdf):
     changedf = pd.concat(df_list)
     return changedf
 
-def stats_on_changedf(changedf):
+def stats_on_changedf(sampledf, changedf) -> pd.DataFrame:
     """
-    TODO
+    This function performs some basic stats on the collated list of changes from all the samples, called changedf,
+      and returns a dataframe that contains information about where different changes occurred:
+
+    Inputs:
+      - sampledf: A dataframe that contains the ALG presence and colocalization information,
+                  as well as the taxidstring for each sample. We need this to parse the fraction
+                  of samples within a clade that provided evidence for a specific change.
+      - changedf: A dataframe that contains the changes that happened on each branch. This is the output
+                  of the function parse_gain_loss_from_perspchrom_df.
+    Outputs:
+      - A pandas
     """
-    print(changedf)
+    # we want a column in the dataframe that contains the taxidstring parsed out to a list of ints
+    sampledf["taxidstring"] = sampledf["taxidstring"].apply(lambda x: [int(taxid) for taxid in x.split(";")])
+    # For each change on each branch, we want to know how many samples with that NCBI taxid have that change recorded.
+    #  We count how many samples there are for each unique taxid in our dataframe, then use this later.
+    #  Just do a for loop because it is n complexity.
+    taxid_to_sample_count = {}
+    for i, row in sampledf.iterrows():
+        for this_taxid in row["taxidstring"]:
+            if this_taxid not in taxid_to_sample_count:
+                taxid_to_sample_count[this_taxid] = 0
+            taxid_to_sample_count[this_taxid] += 1
+
     # Right now colocalizations and losses are lists. We want to count the number of colocalizations and losses.
     # So we will make a new column called 'change' and another called 'change_type', then we will unwrap
     # the lists into the new columns. This will make it easier to do stats on the changes.
@@ -107,25 +131,24 @@ def stats_on_changedf(changedf):
         for colocalization in row["colocalizations"]:
             entry = {"source_taxid": row["source_taxid"],
                      "target_taxid": row["target_taxid"],
-                     "change": colocalization,
-                     "change_type": "colocalization",
-                     "samplename": row["samplename"],
+                     "change":       colocalization,
+                     "change_type":  "colocalization",
+                     "samplename":   row["samplename"],
                      "sample_taxid": row["sample_taxid"]}
             entries.append(entry)
         # losses
         for loss in row["losses"]:
             entry = {"source_taxid": row["source_taxid"],
                      "target_taxid": row["target_taxid"],
-                     "change": loss,
-                     "change_type": "loss",
-                     "samplename": row["samplename"],
+                     "change":       loss,
+                     "change_type":  "loss",
+                     "samplename":   row["samplename"],
                      "sample_taxid": row["sample_taxid"]}
             entries.append(entry)
     # convert the list of dicts to a dataframe
     changedf = pd.DataFrame(entries)
-    print(changedf)
 
-    # Because this is a big N-sat problem to figure out the exact branch on which the change happened,
+    # Because this is a big structured N-sat problem to figure out the exact branch on which the change happened,
     #  we will now look at whether the change happened right after the source_taxid or right before the
     #  target_taxid.
     # To do this we will groupby on source_taxid, then count the number of changes. We will then groupby on
@@ -134,11 +157,6 @@ def stats_on_changedf(changedf):
     # For each case, we want to independently count the losses or colocalizations.
     # Just keep the changes column in the groupby after count, then change colocalization and loss to their own columns.
     # get right of target_taxid, samplename, sample_taxid
-    #groupby_source = changedf.groupby(["source_taxid", "change_type"]).count()
-    #groupby_source = groupby_source.drop(["target_taxid", "samplename", "sample_taxid"], axis=1)
-    ## turn the groupby columns into a df
-    #groupby_source = groupby_source.reset_index()
-    #print(groupby_source)
     groupby_target = changedf.groupby(["target_taxid", "change"])
     # sort by, then print, the most common changes
     groupby_target = groupby_target.count().sort_values(by="change_type", ascending=False)
@@ -151,7 +169,10 @@ def stats_on_changedf(changedf):
     # In the change column, the same object can occur multiple times. Make a frac_total that counts how large this finding is as a fraction of the total for that change.
     # get the total number of each change type, as a dict
     change_to_total_counts = groupby_target.groupby("change")["counts"].sum().to_dict()
-    groupby_target["frac_total"] = groupby_target.apply(lambda row: row["counts"]/change_to_total_counts[row["change"]], axis=1)
+    # make a column num_samples_in_taxid by maping the target_taxid to the total number of samples with that taxid with the dict taxid_to_sample_count
+    groupby_target["number_of_samples_in_taxid"] = groupby_target["target_taxid"].map(taxid_to_sample_count)
+    groupby_target["change_frac_total"] = groupby_target.apply(lambda row: row["counts"]/change_to_total_counts[row["change"]], axis=1)
+    groupby_target["frac_samples_w_this_taxid_w_this_change"] = groupby_target.apply(lambda row: row["counts"]/taxid_to_sample_count[row["target_taxid"]], axis=1)
     # use ete3 to get the names of the taxids
     ncbi = NCBITaxa()
     # get the names of the target taxids
@@ -275,7 +296,7 @@ def colocalize_these_nodes(G, node_iterable):
         G.add_edges_from(node_pairs)
     return G
 
-def stats_df_to_loss_fusion_plots(perspchromdf, statsdf, rbhfile):
+def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf, randomize_ALGs = False):
     """
     Use the perspchromdf, the statsdf, and an RBH file to make loss/fusion plots.
     The question is whether larger or smaller ALGs tend to fuse or be lost more often.
@@ -292,14 +313,33 @@ def stats_df_to_loss_fusion_plots(perspchromdf, statsdf, rbhfile):
 
     To show what is the most prevalent pattern, we will use Pearson correlation of the matrix,
         compared to obs/exp.
+
+    Input:
+      - perspchromdf:   A dataframe that contains the ALG presence and colocalization. This is just the
+                          input to the whole script.
+      - rbhfile:        The rbh file that contains all of the info about the ALGs that will be studied
+                          for this analysis.
+      - randomize_ALGs: A boolean that determines whether the sizes of the ALGs will be randomized or not.
+                          Running many randomizations will allow us to get a null distribution of the
+                          fusion stats on small vs large ALGs.
+    Output:
+      - dispersion_df:  A dataframe that contains the information about the ALG losses.
+      - coloc_df:       A dataframe that contains the information about the ALG colocalizations.
     """
-    ALG_info = parse_rbh_file(rbhfile)
+    ALG_info = ALGdf.copy()
+    if randomize_ALGs:
+        # randomize the ALG sizes
+        ALG_info["Size"] = ALG_info["Size"].sample(frac=1).reset_index(drop=True)
     # Make a starting graph where each "ALGname" in ALG_info is a node,
     #  each node has a size attribute (integer), and a color attribute (string)
     G = nx.Graph()
     # add the nodes
     for i, row in ALG_info.iterrows():
         G.add_node(row["ALGname"], size=int(row["Size"]), color=row["Color"])
+
+    # Every time we run this program we will randomize the row order. Doing this will sample the different
+    #  predicted events depending on the order in which we add fusions or losses to the graph.
+    perspchromdf = perspchromdf.sample(frac=1)
 
     already_counted        = {}
     dispersion_entries     = []
@@ -378,118 +418,361 @@ def stats_df_to_loss_fusion_plots(perspchromdf, statsdf, rbhfile):
     # change the colocalization entries to a df
     coloc_df = pd.DataFrame(colocalization_entries)
 
+    return dispersion_df, coloc_df
+
     # save the dispersion_unique_df
 
+    print("this is the dispersion df")
     print(dispersion_df)
+    print("this is the colocalization df")
     print(coloc_df)
+    sys.exit()
 
-    # first do the colocalizations:
-    x = list(coloc_df["coloc0_CC_size"]) + list(coloc_df["coloc1_CC_size"])
-    y = list(coloc_df["coloc1_CC_size"]) + list(coloc_df["coloc0_CC_size"])
-    # make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
-    # get the ALG sizes from the rbhdf
-    # Create the scatterplot. These dots will be blue.
-    #  make the dots 0.1 transparency
-    plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
-    plt.xlabel('ALG Size')
-    plt.ylabel('ALG Size')
-    plt.title('Component fusion sizes')
-    # Display the plot
-    plt.show()
-    plt.close()
+    # THIS SECTION CONTAINS CODE FOR PLOTTING THAT NEEDS TO BE PARTITIONED INTO FUNCTIONS
+    ## first do the colocalizations:
+    #x = list(coloc_df["coloc0_CC_size"]) + list(coloc_df["coloc1_CC_size"])
+    #y = list(coloc_df["coloc1_CC_size"]) + list(coloc_df["coloc0_CC_size"])
+    ## make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
+    ## get the ALG sizes from the rbhdf
+    ## Create the scatterplot. These dots will be blue.
+    ##  make the dots 0.1 transparency
+    #plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
+    #plt.xlabel('ALG Size')
+    #plt.ylabel('ALG Size')
+    #plt.title('Component fusion sizes')
+    ## Display the plot
+    #plt.show()
+    #plt.close()
 
-    # Plot as the percent of the size of the longest
-    x = list(coloc_df["coloc0_CC_percent_of_largest"]) + list(coloc_df["coloc1_CC_percent_of_largest"])
-    y = list(coloc_df["coloc1_CC_percent_of_largest"]) + list(coloc_df["coloc0_CC_percent_of_largest"])
-    # make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
-    # get the ALG sizes from the rbhdf
-    # Create the scatterplot. These dots will be blue.
-    #  make the dots 0.1 transparency
-    plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
-    #  make the dots 0.1 transparency
-    plt.xlabel('CC Size as a fraction')
-    plt.ylabel('CC Size as a fraction')
-    plt.title('CC_size as fraction of largest in genome')
-    # Display the plot
-    plt.show()
-    plt.close()
+    ## Plot as the percent of the size of the longest
+    #x = list(coloc_df["coloc0_CC_percent_of_largest"]) + list(coloc_df["coloc1_CC_percent_of_largest"])
+    #y = list(coloc_df["coloc1_CC_percent_of_largest"]) + list(coloc_df["coloc0_CC_percent_of_largest"])
+    ## make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
+    ## get the ALG sizes from the rbhdf
+    ## Create the scatterplot. These dots will be blue.
+    ##  make the dots 0.1 transparency
+    #plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
+    ##  make the dots 0.1 transparency
+    #plt.xlabel('CC Size as a fraction')
+    #plt.ylabel('CC Size as a fraction')
+    #plt.title('CC_size as fraction of largest in genome')
+    ## Display the plot
+    #plt.show()
+    #plt.close()
 
-    # Plot as the percent of the size of the longest
-    x = list(coloc_df["coloc0_CC_percent_of_total"]) + list(coloc_df["coloc1_CC_percent_of_total"])
-    y = list(coloc_df["coloc1_CC_percent_of_total"]) + list(coloc_df["coloc0_CC_percent_of_total"])
-    # make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
-    # get the ALG sizes from the rbhdf
-    # Create the scatterplot. These dots will be blue.
-    #  make the dots 0.1 transparency
-    plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
-    plt.xlabel('CC Size as a fraction')
-    plt.ylabel('CC Size as a fraction')
-    plt.title('CC_size as fraction of the total genome size')
-    # Display the plot
-    plt.show()
-    plt.close()
+    ## Plot as the percent of the size of the longest
+    #x = list(coloc_df["coloc0_CC_percent_of_total"]) + list(coloc_df["coloc1_CC_percent_of_total"])
+    #y = list(coloc_df["coloc1_CC_percent_of_total"]) + list(coloc_df["coloc0_CC_percent_of_total"])
+    ## make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
+    ## get the ALG sizes from the rbhdf
+    ## Create the scatterplot. These dots will be blue.
+    ##  make the dots 0.1 transparency
+    #plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
+    #plt.xlabel('CC Size as a fraction')
+    #plt.ylabel('CC Size as a fraction')
+    #plt.title('CC_size as fraction of the total genome size')
+    ## Display the plot
+    #plt.show()
+    #plt.close()
 
-    # Plot as the percent of the size of the longest
-    x = list(coloc_df["coloc0_size"]) + list(coloc_df["coloc1_size"])
-    y = list(coloc_df["coloc1_size"]) + list(coloc_df["coloc0_size"])
-    # make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
-    # get the ALG sizes from the rbhdf
-    # Create the scatterplot. These dots will be blue.
-    #  make the dots 0.1 transparency
-    plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
-    plt.xlabel('CC Size, absolute')
-    plt.ylabel('CC Size, absolute')
-    plt.title('CC_size absolute')
-    # Display the plot
-    plt.show()
-    plt.close()
+    ## Plot as the percent of the size of the longest
+    #x = list(coloc_df["coloc0_size"]) + list(coloc_df["coloc1_size"])
+    #y = list(coloc_df["coloc1_size"]) + list(coloc_df["coloc0_size"])
+    ## make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
+    ## get the ALG sizes from the rbhdf
+    ## Create the scatterplot. These dots will be blue.
+    ##  make the dots 0.1 transparency
+    #plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
+    #plt.xlabel('CC Size, absolute')
+    #plt.ylabel('CC Size, absolute')
+    #plt.title('CC_size absolute')
+    ## Display the plot
+    #plt.show()
+    #plt.close()
 
-    # Plot as the percent of the size of the longest
-    x = list(coloc_df["coloc0_percent_of_total"]) + list(coloc_df["coloc1_percent_of_total"])
-    y = list(coloc_df["coloc1_percent_of_total"]) + list(coloc_df["coloc0_percent_of_total"])
-    # make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
-    # get the ALG sizes from the rbhdf
-    # Create the scatterplot. These dots will be blue.
-    #  make the dots 0.1 transparency
-    plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
-    plt.xlabel('CC Size, absolute')
-    plt.ylabel('CC Size, absolute')
-    plt.title('CC_size colocalizations as percent of total')
-    # Display the plot
-    plt.show()
-    plt.close()
+    ## Plot as the percent of the size of the longest
+    #x = list(coloc_df["coloc0_percent_of_total"]) + list(coloc_df["coloc1_percent_of_total"])
+    #y = list(coloc_df["coloc1_percent_of_total"]) + list(coloc_df["coloc0_percent_of_total"])
+    ## make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
+    ## get the ALG sizes from the rbhdf
+    ## Create the scatterplot. These dots will be blue.
+    ##  make the dots 0.1 transparency
+    #plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
+    #plt.xlabel('CC Size, absolute')
+    #plt.ylabel('CC Size, absolute')
+    #plt.title('CC_size colocalizations as percent of total')
+    ## Display the plot
+    #plt.show()
+    #plt.close()
 
-    # Plot as the percent of the size of the longest
-    x = list(coloc_df["coloc0_percent_of_largest"]) + list(coloc_df["coloc1_percent_of_largest"])
-    y = list(coloc_df["coloc1_percent_of_largest"]) + list(coloc_df["coloc0_percent_of_largest"])
-    # make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
-    # get the ALG sizes from the rbhdf
-    # Create the scatterplot. These dots will be blue.
-    #  make the dots 0.1 transparency
-    plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
-    plt.xlabel('CC Size, absolute')
-    plt.ylabel('CC Size, absolute')
-    plt.title('CC_size colocalizations as percent of largest')
-    # Display the plot
-    plt.show()
-    plt.close()
+    ## Plot as the percent of the size of the longest
+    #x = list(coloc_df["coloc0_percent_of_largest"]) + list(coloc_df["coloc1_percent_of_largest"])
+    #y = list(coloc_df["coloc1_percent_of_largest"]) + list(coloc_df["coloc0_percent_of_largest"])
+    ## make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
+    ## get the ALG sizes from the rbhdf
+    ## Create the scatterplot. These dots will be blue.
+    ##  make the dots 0.1 transparency
+    #plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
+    #plt.xlabel('CC Size, absolute')
+    #plt.ylabel('CC Size, absolute')
+    #plt.title('CC_size colocalizations as percent of largest')
+    ## Display the plot
+    #plt.show()
+    #plt.close()
 
-def main():
-    # Specify the file path of the TSV file. Use sys.argv[1]
-    file_path = sys.argv[1]
+class coloc_array():
+    """
+    In this class we have a object array that contains the colocalization information.
+    We will keep track of both the observed matricies and the expected matricies.
+    The observed and expected matrices will have the same dimensions to later test the
+      observed versus expected.
+
+    Input:
+      - abs_bin_size:  The size of the bins for the absolute size of the ALGs. For ref,
+                        the size of the BCnS ALGs go from 12-207. Default value = 25
+                        For the default bin size of 25, there will be a bin [0, 25), [25, 50), etc.
+      - frac_bin_size: The size of the bins for the fraction of the largest ALG size.
+                        For example, if the largest ALG is 200, and the ALG is 150, then
+                        the fraction is 0.75. Default value = 0.05
+                        The default of 0.05 means that there will be a bin:
+                            - [0, 0.05), [0.05, 0.1) . . . [0.95, 1.0]
+    """
+    # initialize
+    def __init__(self, abs_bin_size=25, frac_bin_size=0.05):
+        # assert that the abs_bin_size is an integer
+        if not isinstance(abs_bin_size, int):
+            raise Exception("abs_bin_size must be an integer")
+        # assert that the frac_bin_size is a float
+        if not isinstance(frac_bin_size, float):
+            raise Exception("frac_bin_size must be a float")
+        # set the bin sizes
+        self.abs_bin_size  = abs_bin_size
+        self.frac_bin_size = frac_bin_size
+
+        # The number of times we ran the forward loss/fusion analysis.
+        self.num_observed_observations = 0
+        # The number of times we ran the randomized ALG loss/fusion analysis.
+        self.num_expected_observations = 0
+        # initialize the observed and expected matrices. Just an empty dict for now
+        self.observed_matrix  = {}
+        self.expected_matrix  = {}
+
+        # initialize the observed and expected matrices. Use a dict to store the observed and expected matrix
+        ffrange = list(np.arange(0, 1+self.frac_bin_size, self.frac_bin_size))
+        self.observed_matrix_frac  = {}
+        self.expected_matrix_frac  = {}
+        for i in range(len(ffrange)):
+            for j in range(i, len(ffrange)):
+                self.observed_matrix_frac[(ffrange[i], ffrange[j])] = 0
+                self.expected_matrix_frac[(ffrange[i], ffrange[j])] = 0
+
+        # Make structures to record the traces of the bins over time to check for convergence
+        # For now store as a list of dicts. Convert to a dataframe on print
+        self.ove_trace_size = []
+        self.ove_trace_frac = []
+
+    def _size_to_bin(self, size):
+        """
+        uses the bin size information to figure our in which bin this size belongs.
+        We are using left exclusive right inclusive for the bin sizes
+        (0, 25], (25, 50], etc.
+        """
+        return int(size/self.abs_bin_size) * self.abs_bin_size
+
+    def _frac_to_bin(self, size):
+        """
+        uses the bin size information to figure our in which bin this size belongs.
+        We are using left exclusive right inclusive for the bin sizes
+        (0, 0.05], (0.05, 0.1], etc.
+        """
+        return int(size/self.frac_bin_size) * self.frac_bin_size
+
+    def add_matrix(self, coloc_array, ooe):
+        """
+        This function takes in a coloc_df and adds it to the observed and expected matrices.
+        """
+        dicts    = {"frac": {}, "abs": {}}
+        opp_dict = {"frac": {}, "abs": {}}
+        if ooe == "observed":
+            self.num_observed_observations += 1
+            dicts    = {"frac": self.observed_matrix_frac, "abs": self.observed_matrix}
+        elif ooe == "expected":
+            self.num_expected_observations += 1
+            dicts = {"frac": self.expected_matrix_frac, "abs": self.expected_matrix}
+        else:
+            print("ooe was {}".format(ooe))
+            raise Exception("ooe must be either observed or expected")
+        # iterate through the rows
+        for i, row in coloc_array.iterrows():
+            # get the size of the ALGs
+            bin0 = self._size_to_bin(row["coloc0_size"])
+            bin1 = self._size_to_bin(row["coloc1_size"])
+            size_key = tuple(sorted([bin0,bin1]))
+            for thisdict in [self.observed_matrix, self.expected_matrix]:
+                if size_key not in thisdict:
+                    thisdict[size_key] = 0
+
+            dicts["abs"][size_key] += 1
+
+            # get the fraction of the largest ALG
+            frac0 = self._frac_to_bin(row["coloc0_percent_of_largest"])
+            frac1 = self._frac_to_bin(row["coloc1_percent_of_largest"])
+            frac_key = tuple(sorted([frac0, frac1]))
+            dicts["frac"][frac_key] += 1
+
+        # Don't generate traces for individual runs. Just do it for the whole thing
+        #  at the end when we combine all the MC runs.
+        #trace_granularity = 1
+        ## now we go through the matrix and add the traces
+        #if self.num_expected_observations%trace_granularity == 0:
+        #    for thisbin in dicts["abs"]:
+        #        self.ove_trace_size.append({"bin": thisbin,
+        #                                    "ove": 0 if self.expected_matrix[thisbin] == 0 else self.observed_matrix[thisbin]/self.expected_matrix[thisbin],
+        #                                    "obs_round": self.num_observed_observations,
+        #                                    "exp_round": self.num_expected_observations})
+        #    for thisbin in dicts["frac"]:
+        #        self.ove_trace_size.append({"bin": thisbin,
+        #                                    "ove": 0 if self.expected_matrix_frac[thisbin] == 0 else self.observed_matrix_frac[thisbin]/self.expected_matrix_frac[thisbin],
+        #                                    "obs_round": self.num_observed_observations,
+        #                                    "exp_round": self.num_expected_observations})
+
+    def save_obs_expected_file(self, filename):
+        """
+        Saves the observed and expected matrices, abs and frac, to a single file.
+        Later this can be read in and added to the datastrtuctures in this object.
+        """
+        # Saving to pwd doesn't break anything. Just check the dirname if it is nested inside pwd or elsewhere.
+        if not os.path.dirname(filename) == "":
+            # check that the directory in which filename is exists
+            if not os.path.exists(os.path.dirname(filename)):
+                raise Exception("Directory does not exist: {}".format(os.path.dirname(filename)))
+        # check that the file does not already exist. We won't overwrite.
+        if os.path.exists(filename):
+            raise Exception("File already exists: {}".format(filename))
+        # convert the traces to a dataframe
+        entries = []
+        for key in self.observed_matrix:
+            entries.append({"bin":       key,
+                            "ob_ex":     "observed",
+                            "size_frac": "size",
+                            "counts":    self.observed_matrix[key],
+                            "obs_count": self.num_observed_observations})
+        for key in self.expected_matrix:
+            entries.append({"bin":       key,
+                            "ob_ex":     "expected",
+                            "size_frac": "size",
+                            "counts":    self.expected_matrix[key],
+                            "obs_count": self.num_expected_observations})
+        for key in self.observed_matrix_frac:
+            entries.append({"bin":       key,
+                            "ob_ex":     "observed",
+                            "size_frac": "frac",
+                            "counts":    self.observed_matrix_frac[key],
+                            "obs_count": self.num_observed_observations})
+        for key in self.expected_matrix_frac:
+            entries.append({"bin":       key,
+                            "ob_ex":     "expected",
+                            "size_frac": "frac",
+                            "counts":    self.expected_matrix_frac[key],
+                            "obs_count": self.num_expected_observations})
+        # make a df of the entries
+        df = pd.DataFrame(entries)
+        print(df)
+        # save it to a file, with headers, no indices
+        df.to_csv(filename, sep="\t", index=False)
+
+    def ret_obs_expected(self):
+        """
+        Perform the math on the whole matrices and return
+        """
+        ove_size = {}
+        ove_frac = {}
+
+        for thisbin in self.observed_matrix:
+            ove_size[thisbin] = 0 if self.expected_matrix[thisbin] == 0 else self.observed_matrix[thisbin]/self.expected_matrix[thisbin]
+        for thisbin in self.observed_matrix_frac:
+            ove_frac[thisbin] = 0 if self.expected_matrix_frac[thisbin] == 0 else self.observed_matrix_frac[thisbin]/self.expected_matrix_frac[thisbin]
+
+        return ove_size, ove_frac
+
+def run_n_simulations_save_results(sampledfpath, algdfpath, filename, num_sims=10, abs_bin_size=25, frac_bin_size=0.05):
+    """
+    This function runs one Monte Carlo simulation unit, and should be used for parallelization.
+    This function runs an even number of simulations of the loss/fusion analysis with real and randomized ALG sizes.
+    Then, it saves the results to a .tsv file.
+    These TSV files can be collated later with a coloc_array object to compile a larger dataset.
+    """
+    sampledf = pd.read_csv(sampledfpath, sep="\t")
+    algdf = parse_rbh_file(algdfpath)
+
+    counter = 0
+    c = coloc_array(abs_bin_size=abs_bin_size, frac_bin_size=frac_bin_size)
+    while counter < num_sims:
+        dispersion_df, coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf, randomize_ALGs=False)
+        c.add_matrix(  coloc_df, "observed")
+        dispersion_df, coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf, randomize_ALGs=True)
+        c.add_matrix(  coloc_df, "expected")
+        counter +=1
+    # save the results to a file
+    c.save_obs_expected_file(filename)
+    # safe return value
+    return 0
+
+def generate_stats_df(sample_df_filepath, outfilename) -> int:
+    """
+    Reads in the sample df, gets fusion stats along the tree, and saves the results as a tsv file.
+    """
     # Check that the file exists
-    if not os.path.exists(file_path):
-        raise Exception("File does not exist: {}".format(file_path))
+    if not os.path.exists(sample_df_filepath):
+        raise Exception("File does not exist: {}".format(sample_df_filepath))
 
     # Read the TSV file into a pandas dataframe
-    df = pd.read_csv(file_path, sep="\t")
+    sampledf = pd.read_csv(sample_df_filepath, sep="\t")
 
-    changedf = parse_gain_loss_from_perspchrom_df(df)
-    statsdf = stats_on_changedf(changedf)
+    changedf = parse_gain_loss_from_perspchrom_df(sampledf)
+    statsdf  = stats_on_changedf(sampledf, changedf)
+
+    # check that the directory in which the outfilename exists
+    # Saving to pwd doesn't break anything. Just check the dirname if it is nested inside pwd or elsewhere.
+    if not os.path.dirname(outfilename) == "":
+        # check that the directory in which filename is exists
+        if not os.path.exists(os.path.dirname(outfilename)):
+            raise Exception("Directory does not exist: {}".format(os.path.dirname(outfilename)))
+
+    # overwriting is ok. Don't bother to check if the file exists
     # save the stats df to a tsv file with headers
-    statsdf.to_csv("statsdf.tsv", sep="\t", index=False)
+    statsdf.to_csv(outfilename, sep="\t", index=False)
+    return 0
 
-    stats_df_to_loss_fusion_plots(df, statsdf, sys.argv[2])
+def main():
+    # Specify the file path of the TSV file. Use sys.argv[1]. The file will be called something like per_species_ALG_presence_fusions.tsv
+    generate_stats_df(sys.argv[1], "statsdf.tsv")
+
+    # get the ALGdf
+    algdf = parse_rbh_file(sys.argv[2])
+
+    ## find all the
+    #ove_size, ove_frac = c.ret_obs_expected()
+    #print(ove_size)
+    ## make a heatmap using the ove_size.
+    ## the keys are (x,y) tuples. The values are the ove. Use a red-white-blue color scale. Red means over 1, blue means under 1
+    ## get the x and y values
+    #x = [thisbin[0] for thisbin in ove_size]
+    #y = [thisbin[1] for thisbin in ove_size]
+    ## get the ove values
+    #ove = [ove_size[thisbin] for thisbin in ove_size]
+    ## make the heatmap
+    #plt.scatter(x,y, c=ove, cmap="RdBu_r")
+    #plt.xlabel('ALG Size')
+    #plt.ylabel('ALG Size')
+    #plt.title('Component fusion sizes')
+    ## Display the plot
+    #plt.show()
+
+
+    #print()
+    ## convert the ove_trace_frac to a df and print
+    #print(c.ove_trace_frac)
 
 if __name__ == "__main__":
     main()

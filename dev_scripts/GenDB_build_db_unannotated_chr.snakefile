@@ -415,12 +415,22 @@ rule generate_assembled_config_entry:
             species = row["Organism Name"].values[0].split(" ")[1]
         except:
             species = "None"
+        # cleanup the species name
+        species = species.replace("sp.", "sp")
+        assemAnn = wildcards.assemAnn
+
+        # now we strip unwanted characters from the genus, species name, and assembly accession
+        strip_these_chars = [" ", "_", "-"]
+        for char in strip_these_chars:
+            genus = genus.replace(char, "")
+            species = species.replace(char, "")
+            assemAnn = assemAnn.replace(char, "")
 
         minscaflen = 100000
         if "|" in [genus, species, taxid, wildcards.assemAnn]:
             raise ValueError("You cannot have a | character in the genus, species, taxid, or assembly accession.")
         # We currently cannot have "_" characters in the species name because of problems it causes downstream with snakemake.
-        spstring = "{}{}-{}-{}".format(genus, species, taxid, wildcards.assemAnn.replace("_", ""))
+        spstring = "{}{}-{}-{}".format(genus, species, taxid, assemAnn)
         h = "  "
         s = ""
         s += h + "{}:\n".format(spstring)
