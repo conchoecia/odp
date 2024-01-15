@@ -887,6 +887,8 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, outfilename):
             vmin = min(values)
             vmax = max(values)
             absmax = max([abs(vmin), abs(vmax)])
+            absmax = 6
+            # we hard-code the colors so that anything above these values don't weight more
             center = 0  # Center value for the colormap
             norm = TwoSlopeNorm(vcenter=center, vmin=absmax*-1, vmax=absmax)
 
