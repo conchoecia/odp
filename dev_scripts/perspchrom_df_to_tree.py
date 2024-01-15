@@ -728,8 +728,8 @@ def run_n_simulations_save_results(sampledfpath, algdfpath, filename,
     while counter < num_sims:
         if verbose:
             print("   - Running simulation {}".format(counter + 1), end="\r")
-        # get a random number based on the time
-        random_integer = random.randint(-2147483648, 2147483647)
+        # get a random number. must be between 0 and 2^32 - 1
+        random_integer = random.randint(0,4294967295)
         dispersion_df, coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf,
                                     obs_seed = random_integer, randomize_ALGs=False)
         c.add_matrix(  coloc_df, "observed")
