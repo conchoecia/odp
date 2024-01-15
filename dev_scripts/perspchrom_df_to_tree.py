@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # the file path is the first positional arg. use sys.
+import ast
 import os
 from typing import Any
 import numpy as np
@@ -12,6 +13,17 @@ from ete3 import NCBITaxa
 # this is a function that parses the RBH file into a dataframe
 from plot_ALG_fusions import parse_rbh_file
 import matplotlib.pyplot as plt
+# import patches
+import matplotlib.patches as mpatches
+# use twoslope norm to make a diverging color map
+from matplotlib.colors import TwoSlopeNorm
+
+# Filter out the DeprecationWarning related to the py23 module
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="fontTools.misc.py23")
+# import pdfpages
+from matplotlib.backends.backend_pdf import PdfPages
+
 
 # use networkx to make graphs for the lineage-specific fusion/losses
 import networkx as nx
@@ -695,7 +707,9 @@ class coloc_array():
 
         return ove_size, ove_frac
 
-def run_n_simulations_save_results(sampledfpath, algdfpath, filename, num_sims=10, abs_bin_size=25, frac_bin_size=0.05):
+def run_n_simulations_save_results(sampledfpath, algdfpath, filename,
+                                   num_sims=10, abs_bin_size=25, frac_bin_size=0.05,
+                                   verbose = False):
     """
     This function runs one Monte Carlo simulation unit, and should be used for parallelization.
     This function runs an even number of simulations of the loss/fusion analysis with real and randomized ALG sizes.
@@ -708,11 +722,14 @@ def run_n_simulations_save_results(sampledfpath, algdfpath, filename, num_sims=1
     counter = 0
     c = coloc_array(abs_bin_size=abs_bin_size, frac_bin_size=frac_bin_size)
     while counter < num_sims:
+        if verbose:
+            print("   - Running simulation {}".format(counter + 1), end="\r")
         dispersion_df, coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf, randomize_ALGs=False)
         c.add_matrix(  coloc_df, "observed")
         dispersion_df, coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf, randomize_ALGs=True)
         c.add_matrix(  coloc_df, "expected")
         counter +=1
+    print("   - Running simulation {}".format(counter + 1))
     # save the results to a file
     c.save_obs_expected_file(filename)
     # safe return value
@@ -744,12 +761,168 @@ def generate_stats_df(sample_df_filepath, outfilename) -> int:
     statsdf.to_csv(outfilename, sep="\t", index=False)
     return 0
 
+def read_simulations_and_make_heatmaps(simulation_filepaths, outfilename):
+    """
+    This function reads in a file list of simulation files, sums up all the data,
+     and makes a heatmap of the results. We are able to do this as it is a Monte Carlo
+     simulation, so the results are independent.
+    """
+    all_dfs = []
+    for thisfile in simulation_filepaths:
+        # make sure the file exists
+        if not os.path.exists(thisfile):
+            raise Exception("File does not exist: {}".format(thisfile))
+        # read in the file as a pandas df
+        all_dfs.append(pd.read_csv(thisfile, sep="\t"))
+    # concatenate the dfs
+    df = pd.concat(all_dfs)
+    # delete all the dfs after concat
+    del all_dfs
+
+    # open a pdf to save plots independently to it
+    with PdfPages(outfilename) as pdf:
+        # For size, first just get the rows that are size_frac.
+        # After we get the df_size_obs and df_size_exp, we need to sum up all
+        #  the rows that have the same value for bin. We can ignore obs_count
+        #  because it simply tells us how many times the simulation was run in
+        #  this instance.
+        for size_frac in ["size", "frac"]:
+            # get the rows that are size_frac
+            df_size = df[df["size_frac"] == size_frac]
+            df_size = df_size.sort_values(by=["bin"])
+            # get the observed and expected dfs
+            df_size_obs = df_size[df_size["ob_ex"] == "observed"]
+            df_size_exp = df_size[df_size["ob_ex"] == "expected"]
+            # sum up the counts for each bin. Add a pseudo-count of 1 to avoid divide by zero errors.
+            df_size_obs = df_size_obs.groupby("bin")["counts"].sum().to_dict()
+            df_size_exp = df_size_exp.groupby("bin")["counts"].sum().to_dict()
+            df_size_obs = {thisbin: df_size_obs[thisbin] + 1 for thisbin in df_size_obs}
+            df_size_exp = {thisbin: df_size_exp[thisbin] + 1 for thisbin in df_size_exp}
+
+            # Get the obs/exp matrix. Use log2(obs/exp). We don't need to worry about divide
+            #  by zero errors because we added a pseudo-count of 1 to each bin.
+            ove_size = {}
+            for thisbin in df_size_obs:
+                ove_size[thisbin] = np.log2(df_size_obs[thisbin]/df_size_exp[thisbin])
+
+            # infer the step size from the bin sizes in the "bin" column. Get it from the step size
+            step_size = sorted(set([ast.literal_eval(x)[0] for x in df_size["bin"].unique()]))[1] - sorted(set([ast.literal_eval(x)[0] for x in df_size["bin"].unique()]))[0]
+            # make a heatmap using the ove_size.
+            # We want a custom heatmap where anything above 1 is red, and anything below 1 is blue. White is 1.
+            #   The colormap should fade to white only exactly at 1. Anything above that quickly goes to red. Anything below that quickly goes to blue.
+            #   The keys are the (x,y) for the heatmap and the values are the ove.
+            # Use matplotlib patches to make the heatmap
+            # get the x and y values
+            x      = [ast.literal_eval(thisbin)[0] for thisbin in ove_size]
+            y      = [ast.literal_eval(thisbin)[1] for thisbin in ove_size]
+            values = [ove_size[thisbin] for thisbin in ove_size]
+            colormap = plt.cm.RdBu_r
+            # get the min and max values
+            vmin = min(values)
+            vmax = max(values)
+            absmax = max([abs(vmin), abs(vmax)])
+            center = 0  # Center value for the colormap
+            norm = TwoSlopeNorm(vcenter=center, vmin=absmax*-1, vmax=absmax)
+
+            # Make a plot with two subplots. One for the heatmap, and one for the colorbar.
+            # The heatmap will be on the left and will be a square.
+            # The colorbar will be on the right and will be thin vertical rectangle.
+            # The heatmap will be 90% of the width of the figure.
+            # The colorbar will be 10% of the width of the figure.
+            # The colorbar will be centered vertically in the figure.
+            # The heatmap will be centered vertically in the figure.
+            # The heatmap will be centered horizontally in the left 90% of the figure.
+            # The colorbar will be centered horizontally in the right 10% of the figure.
+            # The heatmap will have a title that says "observed/expected"
+            # The colorbar will have a title that says "log2(observed/expected)"
+
+            # Make the figure
+            fig = plt.figure(figsize=(6, 6))
+            # Make the heatmap axes. The left 90% of the figure.
+            ax = fig.add_axes([0.1, 0.1, 0.75, 0.75])
+            # Make the colorbar axes. The right 10% of the figure.
+            ax2 = fig.add_axes([0.9, 0.1, 0.075, 0.9])
+
+            # use matplotlib patches to make squares for the heatmap.
+            for i in range(len(x)):
+                # get the color of the square. The colormap should center around 0
+                color = colormap(norm(values[i]))
+                # print the color as rgb. The value to 2 decimal places.
+                #print(x[i], y[i], "{:.2f}".format(values[i]), rgb_float_to_hex(color))
+                # make the square. The x and y are the bottom left corner of the square. The width and height are the step size.
+                rect = mpatches.Rectangle((x[i],y[i]), step_size, step_size,
+                                          linewidth=0, edgecolor='none',
+                                          facecolor=color)
+                ax.add_patch(rect)
+            # set the x and y limits
+            ax.set_xlim(min(x), max(x)+step_size)
+            ax.set_ylim(min(y), max(y)+step_size)
+            # set the x and y ticks
+            ax.set_xticks(np.arange(min(x), max(x)+step_size, step_size))
+            ax.set_yticks(np.arange(min(y), max(y)+step_size, step_size))
+            # set the x and y tick labels.
+            # If the values are floats, only keep to 2 decimal places. For both x and y.
+            # For x, rotate the labels 90 degrees.
+            if isinstance(min(x), float):
+                ax.set_xticklabels(["{:.2f}".format(xtick) for xtick in np.arange(min(x), max(x)+step_size, step_size)], rotation=90)
+                ax.set_yticklabels(["{:.2f}".format(ytick) for ytick in np.arange(min(y), max(y)+step_size, step_size)])
+            else:
+                ax.set_xticklabels(np.arange(min(x), max(x)+step_size, step_size), rotation=90)
+                ax.set_yticklabels(np.arange(min(y), max(y)+step_size, step_size))
+            # set the x and y labels
+            ax.set_xlabel("Smaller ALG size")
+            ax.set_ylabel("Larger ALG size")
+            # set the title
+            ax.set_title("ALG fusion size, {}".format(size_frac))
+            # 500 units from absmin and absmax, make the colorbar
+            thisrange = np.linspace(absmax * -1, absmax, 500)
+            stepsize = thisrange[1] - thisrange[0]
+            for i in thisrange:
+                ax2.add_patch(mpatches.Rectangle((0, i), 1, stepsize, color=colormap(norm(i))))
+            # set the limits of ax2
+            ax2.set_ylim(absmax * -1, absmax)
+            # set the title of ax2
+            ax2.set_title("log2(observed/expected)")
+            # turn off the x axis and turn on the y-axis. Just plot integers on y -axis
+            ax2.set_xticks([])
+            # get the smallest integer
+            smallest_int = int(absmax * -1)
+            # get the largest integer
+            largest_int = int(absmax)
+            # y labes on the right side
+            ax2.yaxis.tick_right()
+            # only plot integers on the y-axis
+            ax2.set_yticks(     np.arange(smallest_int, largest_int+1, 1))
+            # set the y tick labels
+            ax2.set_yticklabels(np.arange(smallest_int, largest_int+1, 1))
+            # set the y label
+            ax2.set_ylabel("log2(observed/expected)")
+            # set the x label
+            ax2.set_xlabel("Colorbar")
+            # save the figure to a pdf.
+            pdf.savefig(bbox_inches="tight")
+            plt.close()
+
 def main():
     # Specify the file path of the TSV file. Use sys.argv[1]. The file will be called something like per_species_ALG_presence_fusions.tsv
     generate_stats_df(sys.argv[1], "statsdf.tsv")
 
-    # get the ALGdf
-    algdf = parse_rbh_file(sys.argv[2])
+    num_simulations = 1000
+    sims_per_run    = 20
+    for i in range(int(num_simulations/sims_per_run)):
+        print("running simulation {}/{}".format(i+1, int(num_simulations/sims_per_run)))
+        outname = "sim_results_{}_{}.tsv".format(i, sims_per_run)
+        run_n_simulations_save_results(sys.argv[1],
+                                       sys.argv[2],
+                                       outname,
+                                       num_sims=20,
+                                       abs_bin_size=25,
+                                       frac_bin_size=0.05,
+                                       verbose = True)
+
+    #simulation_filepaths = ["sim_results_20.tsv"]
+    #read_simulations_and_make_heatmaps(simulation_filepaths, "simulations.pdf")
+
 
     ## find all the
     #ove_size, ove_frac = c.ret_obs_expected()
@@ -773,6 +946,12 @@ def main():
     #print()
     ## convert the ove_trace_frac to a df and print
     #print(c.ove_trace_frac)
+
+def rgb_float_to_hex(list_of_rgb_floats):
+    """
+    Converts a list of rgb floats to a hex string.
+    """
+    return '#%02x%02x%02x' % (int(list_of_rgb_floats[0]*255), int(list_of_rgb_floats[1]*255), int(list_of_rgb_floats[2]*255))
 
 if __name__ == "__main__":
     main()
