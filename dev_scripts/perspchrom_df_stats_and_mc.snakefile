@@ -1,7 +1,4 @@
 #!/usr/bin/env python
-
-import perspchrom_df_to_tree as cdf
-
 """
 Program  : perspchrom_df_stats_and_mc.snakefile
 Language : snakemake
@@ -18,25 +15,38 @@ This snakefile controls the Monte Carlo analysis of testing the observed/expecte
  with SLURM clusters.
 """
 
+#import os
+#import sys
+#snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+#dependencies_path = snakefile_path
+#sys.path.insert(1, dependencies_path)
+import perspchrom_df_to_tree as pdtt
+
+configfile: "config.yaml"
+config["sims_per_file"] = 10
+
 rule all:
     input:
         expand("simresults/dfsim_run_{simnum}.tsv",
-                simnum = range(int(config["numsims"]/100)))
+                simnum = range(int(config["numsims"]/config["sims_per_file"])))
 
-rule simulations:
+rule sim:
     input:
         sampledf = config["sampledf"],
         rbhdf    = config["rbhdf"]
     output:
         simresultstsv = "simresults/dfsim_run_{simnum}.tsv"
+    params:
+        sims_per_file = config["sims_per_file"]
     threads: 1
     resources:
-        runtime = 20   # around 100 simulations takes 20 minutes
+        runtime = 10,   # around 100 simulations takes 20 minutes
         mem_mb  = 1000
     run:
-        cdf.run_n_simulations_save_results(input.sampledf,
+        pdtt.run_n_simulations_save_results(input.sampledf,
                                            input.rbhdf,
                                            output.simresultstsv,
-                                           num_sims=100,
+                                           num_sims=params.sims_per_file,
                                            abs_bin_size=25,
-                                           frac_bin_size=0.05)
+                                           frac_bin_size=0.05,
+                                           verbose = True)
