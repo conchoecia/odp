@@ -8,6 +8,7 @@ import pandas as pd
 import random
 import sys
 from ete3 import NCBITaxa
+import glob
 
 # import the parse_rbh_file from the plot_ALG_fusions.py script
 # this is a function that parses the RBH file into a dataframe
@@ -308,7 +309,10 @@ def colocalize_these_nodes(G, node_iterable):
         G.add_edges_from(node_pairs)
     return G
 
-def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf, randomize_ALGs = False):
+def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
+                                obs_seed = 0,
+                                randomize_ALGs = False
+                                ):
     """
     Use the perspchromdf, the statsdf, and an RBH file to make loss/fusion plots.
     The question is whether larger or smaller ALGs tend to fuse or be lost more often.
@@ -351,7 +355,7 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf, randomize_ALGs = False):
 
     # Every time we run this program we will randomize the row order. Doing this will sample the different
     #  predicted events depending on the order in which we add fusions or losses to the graph.
-    perspchromdf = perspchromdf.sample(frac=1)
+    perspchromdf = perspchromdf.sample(frac=1, random_state=obs_seed)
 
     already_counted        = {}
     dispersion_entries     = []
@@ -724,9 +728,13 @@ def run_n_simulations_save_results(sampledfpath, algdfpath, filename,
     while counter < num_sims:
         if verbose:
             print("   - Running simulation {}".format(counter + 1), end="\r")
-        dispersion_df, coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf, randomize_ALGs=False)
+        # get a random number based on the time
+        random_integer = random.randint(-2147483648, 2147483647)
+        dispersion_df, coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf,
+                                    obs_seed = random_integer, randomize_ALGs=False)
         c.add_matrix(  coloc_df, "observed")
-        dispersion_df, coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf, randomize_ALGs=True)
+        dispersion_df, coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf,
+                                    obs_seed = random_integer, randomize_ALGs=True)
         c.add_matrix(  coloc_df, "expected")
         counter +=1
     print("   - Running simulation {}".format(counter + 1))
@@ -761,6 +769,77 @@ def generate_stats_df(sample_df_filepath, outfilename) -> int:
     statsdf.to_csv(outfilename, sep="\t", index=False)
     return 0
 
+def generate_trace_panel(ax, simulation_filepaths, frac_or_size):
+    """
+    This generates the traces for the observed/expected matrices.
+    We will use this to check for convergence.
+    Instead of plotting some normalized values, we will just plot the raw values.
+    """
+    # make sure that frac or size is either frac or size
+    if not frac_or_size in ["frac", "size"]:
+        raise Exception("frac_or_size must be either frac or size")
+    lines = {}
+    merged_df = None
+    num_sims = 0
+    # this will be updated each time we go through
+    for thisfile in simulation_filepaths:
+        # if the df is None, then read in the file
+        tempdf = pd.read_csv(thisfile, sep="\t")
+        # filter on size_frac column
+        tempdf = tempdf[tempdf["size_frac"] == frac_or_size]
+        num_sims += int(tempdf["obs_count"].max())
+        # if the df is None, then the df is the tempdf
+        if merged_df is None:
+            merged_df = tempdf
+        else:
+            # We must add the values of tempdf to df.
+            # We will join on bin, ob_ex, and size_frac
+            # The counts and obs_count columns will be added together.
+            # Sometimes it may be that the bin, ob_ex, and size_frac are not in df.
+            # In this case we need to add the new row to df.
+            merged_df = pd.merge(merged_df, tempdf, on=['bin', 'ob_ex', 'size_frac'], how='outer',
+                                 suffixes=('_old', '_new'))
+            # Update the counts and obs_count columns
+            merged_df['counts'] = merged_df['counts_old'] + merged_df['counts_new']
+            # Drop the temporary columns
+            merged_df = merged_df.drop(columns=['counts_old', 'counts_new', 'obs_count_old', 'obs_count_new'])
+            merged_df["obs_count"] = num_sims
+        # now that we have updated the database, we generate an ove dict and add those values to a
+        ove_size = df_to_obs_exp_dict(merged_df)
+        # now we go through the matrix and add the traces for this value
+        for thisbin in ove_size:
+            if thisbin not in lines:
+                lines[thisbin] = {"num_sim": [], "value": []}
+            lines[thisbin]["value"].append(   ove_size[thisbin])
+            lines[thisbin]["num_sim"].append( num_sims         )
+    # now we plot each of the lines
+    for thisbin in lines:
+        ax.plot(lines[thisbin]["num_sim"], lines[thisbin]["value"], color="black", alpha=0.1, lw=0.5)
+    # change the xaxis to go from 0 to the num_sims
+    ax.set_xlim(0, num_sims)
+    # set the title
+    return ax
+
+def df_to_obs_exp_dict(df):
+    """
+    takes in a df and returns the observed and expected dicts.
+    """
+    # get the observed and expected dfs
+    df_size_obs = df[df["ob_ex"] == "observed"]
+    df_size_exp = df[df["ob_ex"] == "expected"]
+    # sum up the counts for each bin. Add a pseudo-count of 1 to avoid divide by zero errors.
+    df_size_obs = df_size_obs.groupby("bin")["counts"].sum().to_dict()
+    df_size_exp = df_size_exp.groupby("bin")["counts"].sum().to_dict()
+    df_size_obs = {thisbin: df_size_obs[thisbin] + 1 for thisbin in df_size_obs}
+    df_size_exp = {thisbin: df_size_exp[thisbin] + 1 for thisbin in df_size_exp}
+
+    # Get the obs/exp matrix. Use log2(obs/exp). We don't need to worry about divide
+    #  by zero errors because we added a pseudo-count of 1 to each bin.
+    ove_size = {}
+    for thisbin in df_size_obs:
+        ove_size[thisbin] = np.log2(df_size_obs[thisbin]/df_size_exp[thisbin])
+    return ove_size
+
 def read_simulations_and_make_heatmaps(simulation_filepaths, outfilename):
     """
     This function reads in a file list of simulation files, sums up all the data,
@@ -789,21 +868,8 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, outfilename):
         for size_frac in ["size", "frac"]:
             # get the rows that are size_frac
             df_size = df[df["size_frac"] == size_frac]
-            df_size = df_size.sort_values(by=["bin"])
-            # get the observed and expected dfs
-            df_size_obs = df_size[df_size["ob_ex"] == "observed"]
-            df_size_exp = df_size[df_size["ob_ex"] == "expected"]
-            # sum up the counts for each bin. Add a pseudo-count of 1 to avoid divide by zero errors.
-            df_size_obs = df_size_obs.groupby("bin")["counts"].sum().to_dict()
-            df_size_exp = df_size_exp.groupby("bin")["counts"].sum().to_dict()
-            df_size_obs = {thisbin: df_size_obs[thisbin] + 1 for thisbin in df_size_obs}
-            df_size_exp = {thisbin: df_size_exp[thisbin] + 1 for thisbin in df_size_exp}
-
-            # Get the obs/exp matrix. Use log2(obs/exp). We don't need to worry about divide
-            #  by zero errors because we added a pseudo-count of 1 to each bin.
-            ove_size = {}
-            for thisbin in df_size_obs:
-                ove_size[thisbin] = np.log2(df_size_obs[thisbin]/df_size_exp[thisbin])
+            # this makes a dict of the observed and expected values
+            ove_size = df_to_obs_exp_dict(df_size)
 
             # infer the step size from the bin sizes in the "bin" column. Get it from the step size
             step_size = sorted(set([ast.literal_eval(x)[0] for x in df_size["bin"].unique()]))[1] - sorted(set([ast.literal_eval(x)[0] for x in df_size["bin"].unique()]))[0]
@@ -837,11 +903,13 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, outfilename):
             # The colorbar will have a title that says "log2(observed/expected)"
 
             # Make the figure
-            fig = plt.figure(figsize=(6, 6))
+            fig = plt.figure(figsize=(12, 6))
             # Make the heatmap axes. The left 90% of the figure.
-            ax = fig.add_axes([0.1, 0.1, 0.75, 0.75])
+            ax = fig.add_axes([0.1, 0.1, 0.375, 0.75])
             # Make the colorbar axes. The right 10% of the figure.
-            ax2 = fig.add_axes([0.9, 0.1, 0.075, 0.9])
+            ax2 = fig.add_axes([0.5, 0.1, 0.025, 0.75])
+            # Set up the trace in this panel
+            ax3 = fig.add_axes([0.6, 0.1, 0.375, 0.75])
 
             # use matplotlib patches to make squares for the heatmap.
             for i in range(len(x)):
@@ -899,30 +967,34 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, outfilename):
             ax2.set_ylabel("log2(observed/expected)")
             # set the x label
             ax2.set_xlabel("Colorbar")
+            # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+            ax3 = generate_trace_panel(ax3, simulation_filepaths, size_frac)
             # save the figure to a pdf.
-            pdf.savefig(bbox_inches="tight")
+            pdf.savefig()#bbox_inches="tight")
             plt.close()
 
 def main():
-    # Specify the file path of the TSV file. Use sys.argv[1]. The file will be called something like per_species_ALG_presence_fusions.tsv
-    generate_stats_df(sys.argv[1], "statsdf.tsv")
+    ## Specify the file path of the TSV file. Use sys.argv[1]. The file will be called something like per_species_ALG_presence_fusions.tsv
+    #generate_stats_df(sys.argv[1], "statsdf.tsv")
 
-    num_simulations = 1000
-    sims_per_run    = 20
-    for i in range(int(num_simulations/sims_per_run)):
-        print("running simulation {}/{}".format(i+1, int(num_simulations/sims_per_run)))
-        outname = "sim_results_{}_{}.tsv".format(i, sims_per_run)
-        run_n_simulations_save_results(sys.argv[1],
-                                       sys.argv[2],
-                                       outname,
-                                       num_sims=20,
-                                       abs_bin_size=25,
-                                       frac_bin_size=0.05,
-                                       verbose = True)
+    #num_simulations = 1000
+    #sims_per_run    = 20
+    #for i in range(int(num_simulations/sims_per_run)):
+    #    print("running simulation {}/{}".format(i+1, int(num_simulations/sims_per_run)))
+    #    outname = "sim_results_{}_{}.tsv".format(i, sims_per_run)
+    #    run_n_simulations_save_results(sys.argv[1],
+    #                                   sys.argv[2],
+    #                                   outname,
+    #                                   num_sims=20,
+    #                                   abs_bin_size=25,
+    #                                   frac_bin_size=0.05,
+    #                                   verbose = True)
 
-    #simulation_filepaths = ["sim_results_20.tsv"]
-    #read_simulations_and_make_heatmaps(simulation_filepaths, "simulations.pdf")
-
+    # find all the files in this directory that start with sim_results_ or dfsim_run_
+    simulation_filepaths =  list(set(glob.glob("./simulations/sim_results_*.tsv")) | set(glob.glob("./simulations/dfsim_run_*.tsv")))
+    if len(simulation_filepaths) == 0:
+        raise Exception("No simulation files found in ./simulations/")
+    read_simulations_and_make_heatmaps(simulation_filepaths, "simulations.pdf")
 
     ## find all the
     #ove_size, ove_frac = c.ret_obs_expected()
