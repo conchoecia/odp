@@ -23,7 +23,7 @@ This snakefile controls the Monte Carlo analysis of testing the observed/expecte
 import perspchrom_df_to_tree as pdtt
 
 configfile: "config.yaml"
-config["sims_per_file"] = 10
+config["sims_per_file"] = 50
 
 rule all:
     input:
@@ -40,8 +40,8 @@ rule sim:
         sims_per_file = config["sims_per_file"]
     threads: 1
     resources:
-        runtime = 15,   # around 100 simulations takes 20 minutes
-        mem_mb  = 1000
+        runtime = 40,   # around 100 simulations takes 20 minutes
+        mem_mb  = 400
     run:
         pdtt.run_n_simulations_save_results(input.sampledf,
                                            input.rbhdf,
