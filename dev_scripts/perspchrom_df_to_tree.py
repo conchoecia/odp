@@ -52,10 +52,10 @@ def parse_gain_loss_string(GL_string, samplename) -> pd.DataFrame:
     Return:
       We will return a dataframe that contains the edges on which the changes happened (taxid, taxid),
          and the types of change on the branch. Literally, the columns of the return dataframe are:
-           - source_taxid
-           - target_taxid
-           - colocalizations
-           - losses
+           - source_taxid    - the older node in the phylogenetic tree.
+           - target_taxid    - the younger node in the phylogenetic tree. Together the source and target form a branch.
+           - colocalizations - ALGs that came together onto the same chromosome on this branch.
+           - losses          - ALGs that were lost/dispersed/became untraceable on this branch.
     """
     splitstring = GL_string.split("-")
     # Go every two elements in the list.
@@ -121,7 +121,7 @@ def stats_on_changedf(sampledf, changedf) -> pd.DataFrame:
       - changedf: A dataframe that contains the changes that happened on each branch. This is the output
                   of the function parse_gain_loss_from_perspchrom_df.
     Outputs:
-      - A pandas
+      - A pandas dataframe with stats on the changes that happened on each branch.
     """
     # we want a column in the dataframe that contains the taxidstring parsed out to a list of ints
     sampledf["taxidstring"] = sampledf["taxidstring"].apply(lambda x: [int(taxid) for taxid in x.split(";")])
@@ -311,8 +311,7 @@ def colocalize_these_nodes(G, node_iterable):
 
 def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
                                 obs_seed = 0,
-                                randomize_ALGs = False
-                                ):
+                                randomize_ALGs = False):
     """
     Use the perspchromdf, the statsdf, and an RBH file to make loss/fusion plots.
     The question is whether larger or smaller ALGs tend to fuse or be lost more often.
@@ -327,8 +326,8 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
         fashion will allow us to track the existing fusions to more accurately consider the
         changes at each evolutionary timepoint.
 
-    To show what is the most prevalent pattern, we will use Pearson correlation of the matrix,
-        compared to obs/exp.
+    To show what is the most prevalent pattern, we will use a Monte Carlo simulation to determine
+      the observed/expected ratio given all of the possible trees.
 
     Input:
       - perspchromdf:   A dataframe that contains the ALG presence and colocalization. This is just the
@@ -384,15 +383,17 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
                         thisentry = {"thisedge": thisedge,
                                      "thisloss": thisloss,
                                      "loss_size": thisG.nodes[thisloss]["size"],
-                                     "loss_percent_of_total": node_size_fraction_of_total_size(thisG, thisloss),
-                                     "loss_percent_of_largest": node_size_fraction_of_largest(thisG, thisloss),
-                                     "loss_CC_size": node_size_CC(thisG, thisloss),
-                                     "loss_CC_percent_of_total": node_size_CC_fraction_of_total_size(thisG, thisloss),
+                                     "loss_percent_of_total":      node_size_fraction_of_total_size(thisG, thisloss),
+                                     "loss_percent_of_largest":    node_size_fraction_of_largest(thisG, thisloss),
+                                     "loss_CC_size":               node_size_CC(thisG, thisloss),
+                                     "loss_CC_percent_of_total":   node_size_CC_fraction_of_total_size(thisG, thisloss),
                                      "loss_CC_percent_of_largest": node_size_CC_fraction_of_largest(thisG, thisloss)
                                      }
                         dispersion_entries.append(thisentry)
                         #print("removing node {}".format(thisloss), " nodes are: {}".format(thisG.nodes))
-                        thisG = delete_node_resize(thisG, thisloss)
+                    # This must be outside the if statement, because we want to remove the node even if it has already been counted.
+                    # This is the only way in which we can accurately model the loss of ALGs.
+                    thisG = delete_node_resize(thisG, thisloss)
             # now we check if there is a colocalization here
             if row_change["colocalizations"] != []:
                 # iterate through each colocalization event
@@ -404,8 +405,10 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
                         #  It may already be in the graph if these two ALGs are already colocalized.
                         if nodes_in_same_CC(thisG, thiscoloc):
                             # We have already counted this fusion already indirectly.
-                            #  This is the transitive propery of colocalization.
+                            #  This is the transitive property of colocalization.
                             #  If A has fused with B (AxB), and B has fused with C (BxC), then A has fused with C (AxC).
+                            # We don't do anything now, because we only end up in this case if we have already counted this fusion.
+                            #  and added it to the colocalization_entries.
                             pass
                         else:
                             # This colocalization has not already been counted.
@@ -415,14 +418,14 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
                                          "thiscoloc": thiscoloc,
                                          "coloc0_size": thisG.nodes[thiscoloc[0]]["size"],
                                          "coloc1_size": thisG.nodes[thiscoloc[1]]["size"],
-                                         "coloc0_percent_of_total": node_size_fraction_of_total_size(thisG, thiscoloc[0]),
-                                         "coloc1_percent_of_total": node_size_fraction_of_total_size(thisG, thiscoloc[1]),
+                                         "coloc0_percent_of_total":   node_size_fraction_of_total_size(thisG, thiscoloc[0]),
+                                         "coloc1_percent_of_total":   node_size_fraction_of_total_size(thisG, thiscoloc[1]),
                                          "coloc0_percent_of_largest": node_size_fraction_of_largest(thisG, thiscoloc[0]),
                                          "coloc1_percent_of_largest": node_size_fraction_of_largest(thisG, thiscoloc[1]),
                                          "coloc0_CC_size": node_size_CC(thisG, thiscoloc[0]),
                                          "coloc1_CC_size": node_size_CC(thisG, thiscoloc[1]),
-                                         "coloc0_CC_percent_of_total": node_size_CC_fraction_of_total_size(thisG, thiscoloc[0]),
-                                         "coloc1_CC_percent_of_total": node_size_CC_fraction_of_total_size(thisG, thiscoloc[1]),
+                                         "coloc0_CC_percent_of_total":   node_size_CC_fraction_of_total_size(thisG, thiscoloc[0]),
+                                         "coloc1_CC_percent_of_total":   node_size_CC_fraction_of_total_size(thisG, thiscoloc[1]),
                                          "coloc0_CC_percent_of_largest": node_size_CC_fraction_of_largest(thisG, thiscoloc[0]),
                                          "coloc1_CC_percent_of_largest": node_size_CC_fraction_of_largest(thisG, thiscoloc[1])
                                         }
@@ -435,106 +438,6 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
     coloc_df = pd.DataFrame(colocalization_entries)
 
     return dispersion_df, coloc_df
-
-    # save the dispersion_unique_df
-
-    print("this is the dispersion df")
-    print(dispersion_df)
-    print("this is the colocalization df")
-    print(coloc_df)
-    sys.exit()
-
-    # THIS SECTION CONTAINS CODE FOR PLOTTING THAT NEEDS TO BE PARTITIONED INTO FUNCTIONS
-    ## first do the colocalizations:
-    #x = list(coloc_df["coloc0_CC_size"]) + list(coloc_df["coloc1_CC_size"])
-    #y = list(coloc_df["coloc1_CC_size"]) + list(coloc_df["coloc0_CC_size"])
-    ## make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
-    ## get the ALG sizes from the rbhdf
-    ## Create the scatterplot. These dots will be blue.
-    ##  make the dots 0.1 transparency
-    #plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
-    #plt.xlabel('ALG Size')
-    #plt.ylabel('ALG Size')
-    #plt.title('Component fusion sizes')
-    ## Display the plot
-    #plt.show()
-    #plt.close()
-
-    ## Plot as the percent of the size of the longest
-    #x = list(coloc_df["coloc0_CC_percent_of_largest"]) + list(coloc_df["coloc1_CC_percent_of_largest"])
-    #y = list(coloc_df["coloc1_CC_percent_of_largest"]) + list(coloc_df["coloc0_CC_percent_of_largest"])
-    ## make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
-    ## get the ALG sizes from the rbhdf
-    ## Create the scatterplot. These dots will be blue.
-    ##  make the dots 0.1 transparency
-    #plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
-    ##  make the dots 0.1 transparency
-    #plt.xlabel('CC Size as a fraction')
-    #plt.ylabel('CC Size as a fraction')
-    #plt.title('CC_size as fraction of largest in genome')
-    ## Display the plot
-    #plt.show()
-    #plt.close()
-
-    ## Plot as the percent of the size of the longest
-    #x = list(coloc_df["coloc0_CC_percent_of_total"]) + list(coloc_df["coloc1_CC_percent_of_total"])
-    #y = list(coloc_df["coloc1_CC_percent_of_total"]) + list(coloc_df["coloc0_CC_percent_of_total"])
-    ## make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
-    ## get the ALG sizes from the rbhdf
-    ## Create the scatterplot. These dots will be blue.
-    ##  make the dots 0.1 transparency
-    #plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
-    #plt.xlabel('CC Size as a fraction')
-    #plt.ylabel('CC Size as a fraction')
-    #plt.title('CC_size as fraction of the total genome size')
-    ## Display the plot
-    #plt.show()
-    #plt.close()
-
-    ## Plot as the percent of the size of the longest
-    #x = list(coloc_df["coloc0_size"]) + list(coloc_df["coloc1_size"])
-    #y = list(coloc_df["coloc1_size"]) + list(coloc_df["coloc0_size"])
-    ## make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
-    ## get the ALG sizes from the rbhdf
-    ## Create the scatterplot. These dots will be blue.
-    ##  make the dots 0.1 transparency
-    #plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
-    #plt.xlabel('CC Size, absolute')
-    #plt.ylabel('CC Size, absolute')
-    #plt.title('CC_size absolute')
-    ## Display the plot
-    #plt.show()
-    #plt.close()
-
-    ## Plot as the percent of the size of the longest
-    #x = list(coloc_df["coloc0_percent_of_total"]) + list(coloc_df["coloc1_percent_of_total"])
-    #y = list(coloc_df["coloc1_percent_of_total"]) + list(coloc_df["coloc0_percent_of_total"])
-    ## make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
-    ## get the ALG sizes from the rbhdf
-    ## Create the scatterplot. These dots will be blue.
-    ##  make the dots 0.1 transparency
-    #plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
-    #plt.xlabel('CC Size, absolute')
-    #plt.ylabel('CC Size, absolute')
-    #plt.title('CC_size colocalizations as percent of total')
-    ## Display the plot
-    #plt.show()
-    #plt.close()
-
-    ## Plot as the percent of the size of the longest
-    #x = list(coloc_df["coloc0_percent_of_largest"]) + list(coloc_df["coloc1_percent_of_largest"])
-    #y = list(coloc_df["coloc1_percent_of_largest"]) + list(coloc_df["coloc0_percent_of_largest"])
-    ## make a scatterplot of the ALG size vs. the number of fusions. These dots will be blue
-    ## get the ALG sizes from the rbhdf
-    ## Create the scatterplot. These dots will be blue.
-    ##  make the dots 0.1 transparency
-    #plt.scatter(x,y, color="blue", alpha=0.1, lw=0)
-    #plt.xlabel('CC Size, absolute')
-    #plt.ylabel('CC Size, absolute')
-    #plt.title('CC_size colocalizations as percent of largest')
-    ## Display the plot
-    #plt.show()
-    #plt.close()
 
 class coloc_array():
     """
@@ -635,22 +538,6 @@ class coloc_array():
             frac1 = self._frac_to_bin(row["coloc1_percent_of_largest"])
             frac_key = tuple(sorted([frac0, frac1]))
             dicts["frac"][frac_key] += 1
-
-        # Don't generate traces for individual runs. Just do it for the whole thing
-        #  at the end when we combine all the MC runs.
-        #trace_granularity = 1
-        ## now we go through the matrix and add the traces
-        #if self.num_expected_observations%trace_granularity == 0:
-        #    for thisbin in dicts["abs"]:
-        #        self.ove_trace_size.append({"bin": thisbin,
-        #                                    "ove": 0 if self.expected_matrix[thisbin] == 0 else self.observed_matrix[thisbin]/self.expected_matrix[thisbin],
-        #                                    "obs_round": self.num_observed_observations,
-        #                                    "exp_round": self.num_expected_observations})
-        #    for thisbin in dicts["frac"]:
-        #        self.ove_trace_size.append({"bin": thisbin,
-        #                                    "ove": 0 if self.expected_matrix_frac[thisbin] == 0 else self.observed_matrix_frac[thisbin]/self.expected_matrix_frac[thisbin],
-        #                                    "obs_round": self.num_observed_observations,
-        #                                    "exp_round": self.num_expected_observations})
 
     def save_obs_expected_file(self, filename):
         """
@@ -779,7 +666,9 @@ def generate_trace_panel(ax, simulation_filepaths, frac_or_size):
     if not frac_or_size in ["frac", "size"]:
         raise Exception("frac_or_size must be either frac or size")
     lines = {}
-    merged_df = None
+    # using dictionaries to keep track of these values, because pandas was failing sometimes
+    dicts = {"observed": {},
+             "expected": {}}
     num_sims = 0
     # this will be updated each time we go through
     for thisfile in simulation_filepaths:
@@ -788,32 +677,38 @@ def generate_trace_panel(ax, simulation_filepaths, frac_or_size):
         # filter on size_frac column
         tempdf = tempdf[tempdf["size_frac"] == frac_or_size]
         num_sims += int(tempdf["obs_count"].max())
-        # if the df is None, then the df is the tempdf
-        if merged_df is None:
-            merged_df = tempdf
-        else:
-            # We must add the values of tempdf to df.
-            # We will join on bin, ob_ex, and size_frac
-            # The counts and obs_count columns will be added together.
-            # Sometimes it may be that the bin, ob_ex, and size_frac are not in df.
-            # In this case we need to add the new row to df.
-            merged_df = pd.merge(merged_df, tempdf, on=['bin', 'ob_ex', 'size_frac'], how='outer',
-                                 suffixes=('_old', '_new'))
-            # Update the counts and obs_count columns
-            merged_df['counts'] = merged_df['counts_old'] + merged_df['counts_new']
-            # Drop the temporary columns
-            merged_df = merged_df.drop(columns=['counts_old', 'counts_new', 'obs_count_old', 'obs_count_new'])
-            merged_df["obs_count"] = num_sims
-        # now that we have updated the database, we generate an ove dict and add those values to a
-        ove_size = df_to_obs_exp_dict(merged_df)
+        # go through the rows and add values. Yes, using a for loop :)
+        for i, row in tempdf.iterrows():
+            # add the value to the dict
+            if row["bin"] not in dicts[row["ob_ex"]]:
+                dicts[row["ob_ex"]][   row["bin"]  ] = 0
+            dicts[row["ob_ex"]][       row["bin"]  ] += row["counts"]
+
+       # now that we have updated the database (this dicts object), we generate an ove dict and add those values to a
+        ove_size = df_to_obs_exp_dict(dicts)
         # now we go through the matrix and add the traces for this value
         for thisbin in ove_size:
+            #if thisbin == '(100, 250)':
+            #    print("Num sims: {}, thisbin: {}, ove_size: {} merged_df row: {}".format(num_sims, thisbin, ove_size[thisbin], merged_df[merged_df["bin"] == thisbin]))
             if thisbin not in lines:
                 lines[thisbin] = {"num_sim": [], "value": []}
-            lines[thisbin]["value"].append(   ove_size[thisbin])
             lines[thisbin]["num_sim"].append( num_sims         )
+            lines[thisbin]["value"].append(   ove_size[thisbin])
+
     # now we plot each of the lines
     for thisbin in lines:
+        index_to_print = 2400
+        # get the index of num_sim that equals 2400
+        # TODO there is a bug with samples (100,250), (175, 275), and (150, 275)
+        #      For the bug, their bvalues go to zero in the obs/expected value after a certain number of simulations
+        #      that changes every time I run the program. I need to figure out why this is happening.
+        if index_to_print in lines[thisbin]["num_sim"]:
+            # if the last 10 values are 0, then we can print the bin number
+            if all([x == 0 for x in lines[thisbin]["value"][-10:]]):
+                # get the index of the value that is closest to 2400
+                thisix = lines[thisbin]["num_sim"].index(index_to_print)
+                # plot the bin number above the line for their value around 2500
+                ax.text(index_to_print, lines[thisbin]["value"][thisix], thisbin, fontsize=5)
         ax.plot(lines[thisbin]["num_sim"], lines[thisbin]["value"], color="black", alpha=0.1, lw=0.5)
     # change the xaxis to go from 0 to the num_sims
     ax.set_xlim(0, num_sims)
@@ -822,22 +717,45 @@ def generate_trace_panel(ax, simulation_filepaths, frac_or_size):
 
 def df_to_obs_exp_dict(df):
     """
-    takes in a df and returns the observed and expected dicts.
-    """
-    # get the observed and expected dfs
-    df_size_obs = df[df["ob_ex"] == "observed"]
-    df_size_exp = df[df["ob_ex"] == "expected"]
-    # sum up the counts for each bin. Add a pseudo-count of 1 to avoid divide by zero errors.
-    df_size_obs = df_size_obs.groupby("bin")["counts"].sum().to_dict()
-    df_size_exp = df_size_exp.groupby("bin")["counts"].sum().to_dict()
-    df_size_obs = {thisbin: df_size_obs[thisbin] + 1 for thisbin in df_size_obs}
-    df_size_exp = {thisbin: df_size_exp[thisbin] + 1 for thisbin in df_size_exp}
+    Takes in a df and returns the observed and expected dicts.
+      - the df can be a pandas dataframe or a special dictionary structure.
+      - the dictionary structure looks like this:
 
-    # Get the obs/exp matrix. Use log2(obs/exp). We don't need to worry about divide
-    #  by zero errors because we added a pseudo-count of 1 to each bin.
+    dicts = {"observed": {bin: count, bin2: count},
+             "expected": {bin: count, bin2: count} }
+    """
+    # This is the dict that we will return
     ove_size = {}
-    for thisbin in df_size_obs:
-        ove_size[thisbin] = np.log2(df_size_obs[thisbin]/df_size_exp[thisbin])
+
+    # If the type is a pandas df.
+    # This is deprecated since we are likely not using pandas dfs anymore for this function.
+    if isinstance(df, pd.DataFrame):
+        # get the observed and expected dfs
+        df_size_obs = df[df["ob_ex"] == "observed"]
+        df_size_exp = df[df["ob_ex"] == "expected"]
+        # sum up the counts for each bin. Add a pseudo-count of 1 to avoid divide by zero errors.
+        df_size_obs = df_size_obs.groupby("bin")["counts"].sum().to_dict()
+        df_size_exp = df_size_exp.groupby("bin")["counts"].sum().to_dict()
+        df_size_obs = {thisbin: df_size_obs[thisbin] + 1 for thisbin in df_size_obs}
+        df_size_exp = {thisbin: df_size_exp[thisbin] + 1 for thisbin in df_size_exp}
+
+        # Get the obs/exp matrix. Use log2(obs/exp). We don't need to worry about divide
+        #  by zero errors because we added a pseudo-count of 1 to each bin.
+        for thisbin in df_size_obs:
+            ove_size[thisbin] = np.log2(df_size_obs[thisbin]/df_size_exp[thisbin])
+    elif isinstance(df, dict) and ("observed" in df) and ("expected" in df):
+        # allbins is a set of all of the bins in the observed and expected dicts
+        allbins = set(list(df["observed"].keys()) + list(df["expected"].keys()))
+        for thisbin in allbins:
+            # add pseudocounts to avoid any divide by zero errors or log errors
+            obsval = 1 if thisbin not in df["observed"] else df["observed"][thisbin] + 1
+            expval = 1 if thisbin not in df["expected"] else df["expected"][thisbin] + 1
+            obsexp = np.log2(obsval/expval)
+            if obsexp < -10:
+                obsexp = -10
+            if obsexp > 10:
+                obsexp = 10
+            ove_size[thisbin] = obsexp
     return ove_size
 
 def read_simulations_and_make_heatmaps(simulation_filepaths, outfilename):
