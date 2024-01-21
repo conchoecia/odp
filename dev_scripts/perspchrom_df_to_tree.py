@@ -517,10 +517,8 @@ class coloc_array():
                                  self.observed_matrix_frac_CC, self.expected_matrix_frac_CC]:
                     thisdict[(ffrange[i], ffrange[j])] = 0
 
-        # Make structures to record the traces of the bins over time to check for convergence
-        # For now store as a list of dicts. Convert to a dataframe on print
-        self.ove_trace_size = []
-        self.ove_trace_frac = []
+        self.plotmatrix_concatdf = None  # This is the concatenation of the observed and expected matrices from many simulations
+        self.plotmatrix_sumdf    = None  # This is the sum of the observed and expected matrices
 
     def _size_to_bin(self, size):
         """
@@ -538,12 +536,55 @@ class coloc_array():
         """
         return int(size/self.frac_bin_size) * self.frac_bin_size
 
+    def plotmatrix_listoffiles_to_plotmatrix(self, simulation_filepaths):
+        """
+        This function takes in a list of files that contain the observed and expected matrices.
+        It summarizes all of the dataframes into the summed matrix and the plotdf.
+
+        Updates self.plotmatrix_concatdf and self.plotmatrix_sumdf
+        """
+        all_dfs = []
+        for thisfile in simulation_filepaths:
+            # make sure the file exists
+            if not os.path.exists(thisfile):
+                raise Exception("File does not exist: {}".format(thisfile))
+            # read in the file as a pandas df
+            all_dfs.append(pd.read_csv(thisfile, sep="\t"))
+
+        # CONCATENATED DF FOR THE TRACES
+        # Concatenate the dfs. This will have all the entries from all the dfs.
+        #  Many rows may be duplicated. This is only if two simulation files had the same
+        #  number of counts.
+        self.plotmatrix_concatdf = pd.concat(all_dfs).reset_index(drop = True)
+
+        # check that the len of df is not zero. If it is zero, we have not successully read in any of the files
+        if len(self.plotmatrix_concatdf) == 0:
+            raise Exception("No data was read in. Check that the simulation filepaths are correct.")
+
+        # SUMDF FOR FINAL PLOTTING. Sum up both the obs_count and the counts
+        sumdf  = self.plotmatrix_concatdf.groupby(["bin", "ob_ex", "size_frac", "abs_CC"])["counts"].sum().reset_index()
+        sumdf2 = self.plotmatrix_concatdf.groupby(["bin", "ob_ex", "size_frac", "abs_CC"])["obs_count"].sum().reset_index()
+        # merge these so that the sumdf has both the counts and the obs_count
+        self.plotmatrix_sumdf = pd.merge(sumdf, sumdf2, on=["bin", "ob_ex", "size_frac", "abs_CC"])
+        self.plotmatrix_sumdf["count_per_sim"] = self.plotmatrix_sumdf["counts"]/self.plotmatrix_sumdf["obs_count"]
+
+        # make sure that size_frac.unique: ['size' 'frac']
+        if not sorted(list(self.plotmatrix_sumdf["size_frac"].unique())) == sorted(list(['size', 'frac'])):
+            raise Exception("self.plotmatrix_sumdf['size_frac'].unique() must be ['size' 'frac']")
+        # make sure that abs_CC.unique: ['CC' 'abs']
+        if not sorted(list(self.plotmatrix_sumdf["abs_CC"].unique())) == sorted(list(['CC', 'abs'])):
+            raise Exception("self.plotmatrix_sumdf['abs_CC'].unique() must be ['CC' 'abs']")
+
+        # return a safe value
+        return 0
+
     def add_matrix(self, coloc_array, ooe):
         """
         This function takes in a coloc_df and adds it to the observed and expected matrices.
+        This is useful for adding the data from a single sample to the matrices for simulations.
         """
-        dicts     = {"frac": {}, "abs": {}}
-        opp_dicts = {"frac": {}, "abs": {}}
+        dicts     = {}
+        opp_dicts = {}
         if ooe == "observed":
             self.num_observed_observations += 1
             dicts     = {"frac_abs": self.observed_matrix_frac_abs,
@@ -564,7 +605,6 @@ class coloc_array():
                          "frac_CC":  self.observed_matrix_frac_CC,
                          "size_abs": self.observed_matrix_size_abs,
                          "size_CC":  self.observed_matrix_size_CC}
-
         else:
             print("ooe was {}".format(ooe))
             raise Exception("ooe must be either observed or expected")
@@ -623,9 +663,9 @@ class coloc_array():
         for dictkey in iteration_dict:
             for bin in iteration_dict[dictkey]:
                 # use the name observed if the string observed is in the variable name of thisdict
-                obex     = "observed" if "observed" in iteration_dict[dictkey] else "expected"
-                sizefrac = "size"     if "size"     in iteration_dict[dictkey] else "frac"
-                abscc    = "abs"      if "abs"      in iteration_dict[dictkey] else "CC"
+                obex     = "observed" if "observed" in dictkey else "expected"
+                sizefrac = "size"     if "size"     in dictkey else "frac"
+                abscc    = "abs"      if "abs"      in dictkey else "CC"
                 entries.append({"bin": bin,
                                 "ob_ex": obex,
                                 "size_frac": sizefrac,
@@ -634,7 +674,6 @@ class coloc_array():
                                 "obs_count": self.num_observed_observations})
         # make a df of the entries
         df = pd.DataFrame(entries)
-        print(df)
         # save it to a file, with headers, no indices
         df.to_csv(filename, sep="\t", index=False)
 
@@ -756,7 +795,7 @@ def gen_square_ax_and_colorbar(
                    inches/fh]                            # height
     return plot_params, cbar_params
 
-def generate_mean_counts_panel(ax, cax, sumdf, size_frac):
+def generate_mean_counts_panel(ax, cax, sumdf, size_frac, abs_CC):
     """
     Takes in the sumdf and makes a heatmap of the mean counts per cell.
 
@@ -765,9 +804,19 @@ def generate_mean_counts_panel(ax, cax, sumdf, size_frac):
       - cax is the axis on which the colorbar will be plotted.
       - sumdf is the dataframe that contains all of the simulations added.
       - size_frac is either "frac" or "size", depending on what we want to plot.
+      - abs_CC is either "abs" or "CC", depending on what we want to plot.
     """
+    # we must assert that size_frac is either "frac" or "size"
+    if size_frac not in ["frac", "size"]:
+        raise Exception("size_frac must be either frac or size")
+    # we must assert that abs_CC is either "abs" or "CC"
+    if abs_CC not in ["abs", "CC"]:
+        raise Exception("abs_CC must be either abs or CC")
+
     # get the rows that are size_frac
     df_size = sumdf[sumdf["size_frac"] == size_frac]
+    # get the rows that match the abs_CC state
+    df_size = df_size[df_size["abs_CC"] == abs_CC]
     # get the rows that are observed
     df_size = df_size[df_size["ob_ex"] == "observed"]
     ## print the rows that contain any nans
@@ -821,12 +870,21 @@ def generate_mean_counts_panel(ax, cax, sumdf, size_frac):
     else:
         ax.set_xticklabels(np.arange(min(x), max(x)+step_size, step_size), rotation=90)
         ax.set_yticklabels(np.arange(min(y), max(y)+step_size, step_size))
-    # set the x and y labels
-    ax.set_xlabel("Smaller ALG size")
-    ax.set_ylabel("Larger ALG size")
-    # set the title
-    ax.set_title("Mean count of fusion events for each possible fusion/loss topology, {}".format(size_frac))
 
+    if abs_CC == "abs":
+        # set the x and y labels
+        ax.set_xlabel("Smaller ALG size when fused. Not CC size.")
+        ax.set_ylabel("Larger ALG size when fused. Not CC size")
+        # set the title
+        ax.set_title("Mean count of fusion events for different sizes of ALGs, not CC, {}".format(size_frac))
+    elif abs_CC == "CC":
+        # set the x and y labels
+        ax.set_xlabel("Smaller CC size when fused. Not ALG size.")
+        ax.set_ylabel("Larger CC size when fused. Not ALG size")
+        # set the title
+        ax.set_title("Mean count of fusion events for different sizes of CCs, not ALGs, {}".format(size_frac))
+
+    # COLORBAR SECTION
     # 500 units from absmin and absmax, make the colorbar
     thisrange = np.linspace(0, int(max(values)) + 1, 500)
     stepsize = thisrange[1] - thisrange[0]
@@ -854,7 +912,7 @@ def generate_mean_counts_panel(ax, cax, sumdf, size_frac):
 
     return ax, cax
 
-def generate_obs_exp_panel(ax, cax, sumdf, size_frac, absmax = 6):
+def generate_obs_exp_panel(ax, cax, sumdf, size_frac, abs_CC, absmax = 6):
     """
     This generates the observed/expexted panel and puts it in an existing axis.
     This uses a dataframe that has been summed up from many files
@@ -862,9 +920,20 @@ def generate_obs_exp_panel(ax, cax, sumdf, size_frac, absmax = 6):
     Inputs:
       - ax:    The axis in which to put the heatmap.
       - sumdf: A dataframe that has been summed up from many files.
+      - size_frac: Either "frac" or "size". This determines which heatmap to plot.
+      - abs_CC: Either "abs" or "CC". This determines which heatmap to plot.
     """
+    # we must assert that size_frac is either "frac" or "size"
+    if size_frac not in ["frac", "size"]:
+        raise Exception("size_frac must be either frac or size")
+    # we must assert that abs_CC is either "abs" or "CC"
+    if abs_CC not in ["abs", "CC"]:
+        raise Exception("abs_CC must be either abs or CC")
+
     # get the rows that are size_frac
     df_size = sumdf[sumdf["size_frac"] == size_frac]
+    # get the rows that match the abs_CC state
+    df_size = df_size[df_size["abs_CC"] == abs_CC]
     # this makes a dict of the observed and expected values
     ove_size = df_to_obs_exp_dict(df_size)
 
@@ -944,7 +1013,8 @@ def generate_obs_exp_panel(ax, cax, sumdf, size_frac, absmax = 6):
     cax.set_xlabel("Colorbar")
     return ax, cax
 
-def generate_trace_panel(ax, simulation_filepaths, frac_or_size):
+
+def generate_trace_panel(ax, simulation_filepaths, frac_or_size, abs_CC):
     """
     This generates the traces for the observed/expected matrices.
     We will use this to check for convergence.
@@ -953,6 +1023,10 @@ def generate_trace_panel(ax, simulation_filepaths, frac_or_size):
     # make sure that frac or size is either frac or size
     if not frac_or_size in ["frac", "size"]:
         raise Exception("frac_or_size must be either frac or size")
+    # we must assert that abs_CC is either "abs" or "CC"
+    if abs_CC not in ["abs", "CC"]:
+        raise Exception("abs_CC must be either abs or CC")
+
     lines = {}
     # using dictionaries to keep track of these values, because pandas was failing sometimes
     dicts = {"observed": {},
@@ -964,6 +1038,9 @@ def generate_trace_panel(ax, simulation_filepaths, frac_or_size):
         tempdf = pd.read_csv(thisfile, sep="\t")
         # filter on size_frac column
         tempdf = tempdf[tempdf["size_frac"] == frac_or_size]
+        tempdf = tempdf[tempdf["abs_CC"] == abs_CC]
+        # assert that we are only dealing with a single type of size_frac and abs_CC
+        assert_single_size_abs_condition(tempdf)
         num_sims += int(tempdf["obs_count"].max())
         # go through the rows and add values. Yes, using a for loop :)
         for i, row in tempdf.iterrows():
@@ -985,23 +1062,51 @@ def generate_trace_panel(ax, simulation_filepaths, frac_or_size):
 
     # now we plot each of the lines
     for thisbin in lines:
-        index_to_print = 2400
-        # get the index of num_sim that equals 2400
-        # TODO there is a bug with samples (100,250), (175, 275), and (150, 275)
-        #      For the bug, their bvalues go to zero in the obs/expected value after a certain number of simulations
-        #      that changes every time I run the program. I need to figure out why this is happening.
-        if index_to_print in lines[thisbin]["num_sim"]:
-            # if the last 10 values are 0, then we can print the bin number
-            if all([x == 0 for x in lines[thisbin]["value"][-10:]]):
-                # get the index of the value that is closest to 2400
-                thisix = lines[thisbin]["num_sim"].index(index_to_print)
-                # plot the bin number above the line for their value around 2500
-                ax.text(index_to_print, lines[thisbin]["value"][thisix], thisbin, fontsize=5)
+        #index_to_print = 2400
+        ## get the index of num_sim that equals 2400
+        ## TODO there is a bug with samples (100,250), (175, 275), and (150, 275)
+        ##      For the bug, their bvalues go to zero in the obs/expected value after a certain number of simulations
+        ##      that changes every time I run the program. I need to figure out why this is happening.
+        #if index_to_print in lines[thisbin]["num_sim"]:
+        #    # if the last 10 values are 0, then we can print the bin number
+        #    if all([x == 0 for x in lines[thisbin]["value"][-10:]]):
+        #        # get the index of the value that is closest to 2400
+        #        thisix = lines[thisbin]["num_sim"].index(index_to_print)
+        #        # plot the bin number above the line for their value around 2500
+        #        ax.text(index_to_print, lines[thisbin]["value"][thisix], thisbin, fontsize=5)
         ax.plot(lines[thisbin]["num_sim"], lines[thisbin]["value"], color="black", alpha=0.1, lw=0.5)
     # change the xaxis to go from 0 to the num_sims
     ax.set_xlim(0, num_sims)
     # set the title
     return ax
+
+def assert_single_size_abs_condition(df):
+    """
+    We have to do a lot of checks to make sure that the df is in the correct format.
+     The checks make sure that we will not accidentally count more than one field at a time.
+
+    Returns True if the df is in the correct format.
+    Returns False if the df is not in the correct format, however an error will come up first
+    """
+    # We have to do a lot of checks to make sure that the df is in the correct format.
+    #  The checks make sure that we will not accidentally count more than one field at a time.
+    # We must assert that the ob_ex column is either observed or expected.
+    target = list(sorted(["observed", "expected"]))
+    if not list(sorted(df["ob_ex"].unique())) == target:
+        raise Exception("df['ob_ex'].unique() must be {}".format(target))
+
+    # we must only find one value for size_frac. It must be either frac or size.
+    if not len(df["size_frac"].unique()) == 1:
+        raise Exception("df['size_frac'].unique() must be of length 1. Should be either frac or size")
+    if not df["size_frac"].unique()[0] in ["frac", "size"]:
+        raise Exception("df['size_frac'].unique() must be either frac or size")
+
+    # we must only find one value for abs_CC. It must be either abs or CC.
+    if not len(df["abs_CC"].unique()) == 1:
+        raise Exception("df['abs_CC'].unique() must be of length 1. Should be either abs or CC")
+    if not df["abs_CC"].unique()[0] in ["abs", "CC"]:
+        raise Exception("df['abs_CC'].unique() must be either abs or CC")
+    return True
 
 def df_to_obs_exp_dict(df):
     """
@@ -1018,6 +1123,9 @@ def df_to_obs_exp_dict(df):
     # If the type is a pandas df.
     # This is deprecated since we are likely not using pandas dfs anymore for this function.
     if isinstance(df, pd.DataFrame):
+        # we must check that the df is in the correct format. Only single fields for size_frac, and abs_CC
+        assert_single_size_abs_condition(df)
+        # We are done with the checks. Now we can get the observed and expected dicts.
         # get the observed and expected dfs
         df_size_obs = df[df["ob_ex"] == "observed"]
         df_size_exp = df[df["ob_ex"] == "expected"]
@@ -1052,75 +1160,83 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, outfilename, absmax
      and makes a heatmap of the results. We are able to do this as it is a Monte Carlo
      simulation, so the results are independent.
     """
-    all_dfs = []
-    for thisfile in simulation_filepaths:
-        # make sure the file exists
-        if not os.path.exists(thisfile):
-            raise Exception("File does not exist: {}".format(thisfile))
-        # read in the file as a pandas df
-        all_dfs.append(pd.read_csv(thisfile, sep="\t"))
+    c = coloc_array()
+    c.plotmatrix_listoffiles_to_plotmatrix(simulation_filepaths)
 
-    # CONCATENATED DF FOR THE TRACES
-    # Concatenate the dfs. This will have all the entries from all the dfs.
-    #  Many rows may be duplicated. This is only if two simulation files had the same
-    #  number of counts.
-    df = pd.concat(all_dfs)
+    # make one big plot with all of the data
+    # Make the figure
+    fw = 20
+    fh = 13
+    fig = plt.figure(figsize=(fw, fh))
 
-    # SUMDF FOR FINAL PLOTTING. Sum up both the obs_count and the counts
-    sumdf = df.groupby(["bin", "ob_ex", "size_frac"])["counts"].sum().reset_index()
-    sumdf2 = df.groupby(["bin", "ob_ex", "size_frac"])["obs_count"].sum().reset_index()
-    # merge these so that the sumdf has both the counts and the obs_count
-    sumdf = pd.merge(sumdf, sumdf2, on=["bin", "ob_ex", "size_frac"])
-    sumdf["count_per_sim"] = sumdf["counts"]/sumdf["obs_count"]
+    # CC section below
+    # make a plot of the mean counts
+    counts, cbar = gen_square_ax_and_colorbar(0.6, 0.6, fw, fh, 5)
+    ax0     = fig.add_axes(counts)
+    ax0cbat = fig.add_axes(cbar)
+    ax0, ax0cbat = generate_mean_counts_panel(ax0, ax0cbat, c.plotmatrix_sumdf, "size", "CC")
 
-    # delete all the dfs after concat
-    del all_dfs
+    # make the heatmap axes
+    counts, cbar = gen_square_ax_and_colorbar(7.5, 0.6, fw, fh, 5)
+    ax1     = fig.add_axes(counts)
+    ax1cbat = fig.add_axes(cbar)
+    ax1, ax1cbat = generate_obs_exp_panel(ax1, ax1cbat, c.plotmatrix_sumdf,    "size", "CC")
 
-    # open a pdf to save plots independently to it
-    with PdfPages(outfilename) as pdf:
-        # For size, first just get the rows that are size_frac.
-        # After we get the df_size_obs and df_size_exp, we need to sum up all
-        #  the rows that have the same value for bin. We can ignore obs_count
-        #  because it simply tells us how many times the simulation was run in
-        #  this instance.
-        for size_frac in ["size", "frac"]:
-            # Make a plot with two subplots. One for the heatmap, and one for the colorbar.
-            # The heatmap will be on the left and will be a square.
-            # The colorbar will be on the right and will be thin vertical rectangle.
-            # The heatmap will be 90% of the width of the figure.
-            # The colorbar will be 10% of the width of the figure.
-            # The colorbar will be centered vertically in the figure.
-            # The heatmap will be centered vertically in the figure.
-            # The heatmap will be centered horizontally in the left 90% of the figure.
-            # The colorbar will be centered horizontally in the right 10% of the figure.
-            # The heatmap will have a title that says "observed/expected"
-            # The colorbar will have a title that says "log2(observed/expected)"
+    # generate the square for the trace.
+    ax2 = fig.add_axes(gen_square_ax(14.5, 0.6, fw, fh, 5))
+    # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+    ax2 = generate_trace_panel(ax2, simulation_filepaths, "size", "CC")
 
-            # Make the figure
-            fw = 20
-            fh = 6
-            fig = plt.figure(figsize=(fw, fh))
+    # save the plot as a pdf
+    fig.savefig(outfilename, bbox_inches="tight")
 
-            # make a plot of the mean counts
-            counts, cbar = gen_square_ax_and_colorbar(0.6, 0.6, fw, fh, 5)
-            ax0     = fig.add_axes(counts)
-            ax0cbat = fig.add_axes(cbar)
-            ax0, ax0cbat = generate_mean_counts_panel(ax0, ax0cbat, sumdf, size_frac)
 
-            # make the heatmap axes
-            counts, cbar = gen_square_ax_and_colorbar(7.5, 0.6, fw, fh, 5)
-            ax1     = fig.add_axes(counts)
-            ax1cbat = fig.add_axes(cbar)
-            ax1, ax1cbat = generate_obs_exp_panel(ax1, ax1cbat, sumdf, size_frac)
 
-            # generate the square for the trace.
-            ax2 = fig.add_axes(gen_square_ax(14.5, 0.6, fw, fh, 5))
-            # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
-            ax2 = generate_trace_panel(ax2, simulation_filepaths, size_frac)
+    ## open a pdf to save plots independently to it
+    #with PdfPages(outfilename) as pdf:
+    #    # For size, first just get the rows that are size_frac.
+    #    # After we get the df_size_obs and df_size_exp, we need to sum up all
+    #    #  the rows that have the same value for bin. We can ignore obs_count
+    #    #  because it simply tells us how many times the simulation was run in
+    #    #  this instance.
+    #    for size_frac in ["size", "frac"]:
+    #        # Make a plot with two subplots. One for the heatmap, and one for the colorbar.
+    #        # The heatmap will be on the left and will be a square.
+    #        # The colorbar will be on the right and will be thin vertical rectangle.
+    #        # The heatmap will be 90% of the width of the figure.
+    #        # The colorbar will be 10% of the width of the figure.
+    #        # The colorbar will be centered vertically in the figure.
+    #        # The heatmap will be centered vertically in the figure.
+    #        # The heatmap will be centered horizontally in the left 90% of the figure.
+    #        # The colorbar will be centered horizontally in the right 10% of the figure.
+    #        # The heatmap will have a title that says "observed/expected"
+    #        # The colorbar will have a title that says "log2(observed/expected)"
 
-            # save the figure to a pdf.
-            pdf.savefig()#bbox_inches="tight")
-            plt.close()
+    #        # Make the figure
+    #        fw = 20
+    #        fh = 6
+    #        fig = plt.figure(figsize=(fw, fh))
+
+    #        # make a plot of the mean counts
+    #        counts, cbar = gen_square_ax_and_colorbar(0.6, 0.6, fw, fh, 5)
+    #        ax0     = fig.add_axes(counts)
+    #        ax0cbat = fig.add_axes(cbar)
+    #        ax0, ax0cbat = generate_mean_counts_panel(ax0, ax0cbat, c.plotmatrix_sumdf, size_frac, "CC")
+
+    #        # make the heatmap axes
+    #        counts, cbar = gen_square_ax_and_colorbar(7.5, 0.6, fw, fh, 5)
+    #        ax1     = fig.add_axes(counts)
+    #        ax1cbat = fig.add_axes(cbar)
+    #        ax1, ax1cbat = generate_obs_exp_panel(ax1, ax1cbat, c.plotmatrix_sumdf, size_frac)
+
+    #        # generate the square for the trace.
+    #        ax2 = fig.add_axes(gen_square_ax(14.5, 0.6, fw, fh, 5))
+    #        # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+    #        ax2 = generate_trace_panel(ax2, simulation_filepaths, size_frac)
+
+    #        # save the figure to a pdf.
+    #        pdf.savefig()#bbox_inches="tight")
+    #        plt.close()
 
 def unit_test_coloc_array_identical():
     """
@@ -1179,13 +1295,14 @@ def main():
     ## Specify the file path of the TSV file. Use sys.argv[1]. The file will be called something like per_species_ALG_presence_fusions.tsv
     #generate_stats_df(sys.argv[1], "statsdf.tsv")
 
-    run_n_simulations_save_results(sys.argv[1]       ,
-                                   sys.argv[2]       ,
-                                   "testfile.tsv"    ,
-                                   num_sims=2       ,
-                                   abs_bin_size=25   ,
-                                   frac_bin_size=0.05,
-                                   verbose = True   )
+    #run_n_simulations_save_results(sys.argv[1]       ,
+    #                               sys.argv[2]       ,
+    #                               "simulations/sim_results_1.tsv"    ,
+    #                               num_sims=10        ,
+    #                               abs_bin_size=25   ,
+    #                               frac_bin_size=0.05,
+    #                               verbose = True   )
+    #sys.exit()
 
     #sampledf = pd.read_csv(sys.argv[1], sep="\t")
     #algdf = parse_rbh_file(sys.argv[2])
@@ -1199,15 +1316,15 @@ def main():
     #print(coloc_df)
     #sys.exit()
 
-    #num_simulations = 1000
-    #sims_per_run    = 20
+    #num_simulations = 20
+    #sims_per_run    = 2
     #for i in range(int(num_simulations/sims_per_run)):
     #    print("running simulation {}/{}".format(i+1, int(num_simulations/sims_per_run)))
     #    outname = "sim_results_{}_{}.tsv".format(i, sims_per_run)
     #    run_n_simulations_save_results(sys.argv[1],
     #                                   sys.argv[2],
     #                                   outname,
-    #                                   num_sims=20,
+    #                                   num_sims=sims_per_run,
     #                                   abs_bin_size=25,
     #                                   frac_bin_size=0.05,
     #                                   verbose = True)
