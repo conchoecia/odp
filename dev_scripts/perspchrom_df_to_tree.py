@@ -871,19 +871,6 @@ def generate_mean_counts_panel(ax, cax, sumdf, size_frac, abs_CC):
         ax.set_xticklabels(np.arange(min(x), max(x)+step_size, step_size), rotation=90)
         ax.set_yticklabels(np.arange(min(y), max(y)+step_size, step_size))
 
-    if abs_CC == "abs":
-        # set the x and y labels
-        ax.set_xlabel("Smaller ALG size when fused. Not CC size.")
-        ax.set_ylabel("Larger ALG size when fused. Not CC size")
-        # set the title
-        ax.set_title("Mean count of fusion events for different sizes of ALGs, not CC, {}".format(size_frac))
-    elif abs_CC == "CC":
-        # set the x and y labels
-        ax.set_xlabel("Smaller CC size when fused. Not ALG size.")
-        ax.set_ylabel("Larger CC size when fused. Not ALG size")
-        # set the title
-        ax.set_title("Mean count of fusion events for different sizes of CCs, not ALGs, {}".format(size_frac))
-
     # COLORBAR SECTION
     # 500 units from absmin and absmax, make the colorbar
     thisrange = np.linspace(0, int(max(values)) + 1, 500)
@@ -905,11 +892,27 @@ def generate_mean_counts_panel(ax, cax, sumdf, size_frac, abs_CC):
     #cax.set_yticks(     np.arange(smallest_int, largest_int+1, 1))
     ## set the y tick labels
     #cax.set_yticklabels(np.arange(smallest_int, largest_int+1, 1))
-    # set the y label
-    cax.set_ylabel("Mean number of ALG fusions per topology")
     # set the x label
     cax.set_xlabel("Colorbar")
 
+    # now we make the specific labels depending on whether we're looking at the absolute size or the fraction of the largest size
+    if abs_CC == "abs":
+        # set the x and y labels
+        ax.set_xlabel("Smaller ALG size when fused. Not CC size.")
+        ax.set_ylabel("Larger ALG size when fused. Not CC size")
+        # set the title
+        ax.set_title("Mean count of fusion events for different sizes of ALGs, not CC, *{}*".format(size_frac.upper()))
+        # set the y label
+        cax.set_ylabel("Mean number of ALG fusions (not CCs) per topology")
+
+    elif abs_CC == "CC":
+        # set the x and y labels
+        ax.set_xlabel("Smaller CC size when fused. Not ALG size.")
+        ax.set_ylabel("Larger CC size when fused. Not ALG size")
+        # set the title
+        ax.set_title("Mean count of fusion events for different sizes of CCs, not ALGs, *{}*".format(size_frac.upper()))
+        # set the y label
+        cax.set_ylabel("Mean number of CC fusions (not ALGs) per topology")
     return ax, cax
 
 def generate_obs_exp_panel(ax, cax, sumdf, size_frac, abs_CC, absmax = 6):
@@ -979,11 +982,6 @@ def generate_obs_exp_panel(ax, cax, sumdf, size_frac, abs_CC, absmax = 6):
     else:
         ax.set_xticklabels(np.arange(min(x), max(x)+step_size, step_size), rotation=90)
         ax.set_yticklabels(np.arange(min(y), max(y)+step_size, step_size))
-    # set the x and y labels
-    ax.set_xlabel("Smaller ALG size")
-    ax.set_ylabel("Larger ALG size")
-    # set the title
-    ax.set_title("ALG fusion size, {}".format(size_frac))
 
     # 500 units from absmin and absmax, make the colorbar
     thisrange = np.linspace(absmax * -1, absmax, 500)
@@ -1011,8 +1009,23 @@ def generate_obs_exp_panel(ax, cax, sumdf, size_frac, abs_CC, absmax = 6):
     cax.set_ylabel("log2(observed/expected)")
     # set the x label
     cax.set_xlabel("Colorbar")
-    return ax, cax
 
+    # now we make the specific labels depending on whether we're looking at the absolute size or the fraction of the largest size
+    if abs_CC == "abs":
+        # set the x and y labels
+        ax.set_xlabel("Smaller ALG size when fused. Not CC size.")
+        ax.set_ylabel("Larger ALG size when fused. Not CC size")
+        # set the title
+        ax.set_title("Log2(obs/exp) value of fusion events for dif. sizes of ALGs, not CCs, *{}*".format(size_frac.upper()))
+
+    elif abs_CC == "CC":
+        # set the x and y labels
+        ax.set_xlabel("Smaller CC size when fused. Not ALG size.")
+        ax.set_ylabel("Larger CC size when fused. Not ALG size")
+        # set the title
+        ax.set_title("Log2(obs/exp) value of fusion events for dif. sizes of CCs, not ALGs, *{}*".format(size_frac.upper()))
+
+    return ax, cax
 
 def generate_trace_panel(ax, simulation_filepaths, frac_or_size, abs_CC):
     """
@@ -1168,75 +1181,63 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, outfilename, absmax
     fw = 20
     fh = 13
     fig = plt.figure(figsize=(fw, fh))
+    axes = []
 
-    # CC section below
-    # make a plot of the mean counts
-    counts, cbar = gen_square_ax_and_colorbar(0.6, 0.6, fw, fh, 5)
-    ax0     = fig.add_axes(counts)
-    ax0cbat = fig.add_axes(cbar)
-    ax0, ax0cbat = generate_mean_counts_panel(ax0, ax0cbat, c.plotmatrix_sumdf, "size", "CC")
+    #for aligning all the panels
+    left1 = 0.6
+    left2 = 7.5
+    left3 = 14
 
-    # make the heatmap axes
-    counts, cbar = gen_square_ax_and_colorbar(7.5, 0.6, fw, fh, 5)
-    ax1     = fig.add_axes(counts)
-    ax1cbat = fig.add_axes(cbar)
-    ax1, ax1cbat = generate_obs_exp_panel(ax1, ax1cbat, c.plotmatrix_sumdf,    "size", "CC")
+    # CC, size section below
+    bottom = 0.6
+    panelheight = 5
+    for thisabs in ["abs", "CC"]:
+        for thissize in ["frac", "size"]:
+            # make a plot of the mean counts
+            counts, cbar = gen_square_ax_and_colorbar(left1, bottom, fw, fh, panelheight)
+            axes.append(fig.add_axes(counts))
+            axes.append(fig.add_axes(cbar))
+            temp1, temp2 = generate_mean_counts_panel(
+                axes[-2], axes[-1], c.plotmatrix_sumdf, thissize, thisabs)
+            axes[-2] = temp1
+            axes[-1] = temp2
 
-    # generate the square for the trace.
-    ax2 = fig.add_axes(gen_square_ax(14.5, 0.6, fw, fh, 5))
-    # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
-    ax2 = generate_trace_panel(ax2, simulation_filepaths, "size", "CC")
+            # make the heatmap axes
+            counts, cbar = gen_square_ax_and_colorbar(left2, bottom, fw, fh, panelheight)
+            axes.append(fig.add_axes(counts))
+            axes.append(fig.add_axes(cbar))
+            temp1, temp2 = generate_obs_exp_panel(
+                axes[-2], axes[-1], c.plotmatrix_sumdf, thissize, thisabs)
+
+            # generate the square for the trace.
+            axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
+            # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+            axes[-1] = generate_trace_panel(axes[-1], simulation_filepaths, thissize, thisabs)
+
+            # update the bottom
+            bottom = bottom + panelheight + 1.1
+
+    ## make a plot of the mean counts
+    #counts, cbar = gen_square_ax_and_colorbar(left1, bottom, fw, fh, panelheight)
+    #CC_size_mean_ax = fig.add_axes(counts)
+    #CC_size_mean_cb = fig.add_axes(cbar)
+    #CC_size_mean_ax, CC_size_mean_cb = generate_mean_counts_panel(
+    #    CC_size_mean_ax, CC_size_mean_cb, c.plotmatrix_sumdf, "size", "CC")
+
+    ## make the heatmap axes
+    #counts, cbar = gen_square_ax_and_colorbar(left2, bottom, fw, fh, panelheight)
+    #CC_size_obex_ax = fig.add_axes(counts)
+    #CC_size_obex_cb = fig.add_axes(cbar)
+    #CC_size_obex_ax, CC_size_obex_cb = generate_obs_exp_panel(
+    #    CC_size_obex_ax, CC_size_obex_cb, c.plotmatrix_sumdf, "size", "CC")
+
+    ## generate the square for the trace.
+    #CC_size_trace_ax = fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight))
+    ## add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+    #CC_size_trace_ax = generate_trace_panel(CC_size_trace_ax, simulation_filepaths, "size", "CC")
 
     # save the plot as a pdf
     fig.savefig(outfilename, bbox_inches="tight")
-
-
-
-    ## open a pdf to save plots independently to it
-    #with PdfPages(outfilename) as pdf:
-    #    # For size, first just get the rows that are size_frac.
-    #    # After we get the df_size_obs and df_size_exp, we need to sum up all
-    #    #  the rows that have the same value for bin. We can ignore obs_count
-    #    #  because it simply tells us how many times the simulation was run in
-    #    #  this instance.
-    #    for size_frac in ["size", "frac"]:
-    #        # Make a plot with two subplots. One for the heatmap, and one for the colorbar.
-    #        # The heatmap will be on the left and will be a square.
-    #        # The colorbar will be on the right and will be thin vertical rectangle.
-    #        # The heatmap will be 90% of the width of the figure.
-    #        # The colorbar will be 10% of the width of the figure.
-    #        # The colorbar will be centered vertically in the figure.
-    #        # The heatmap will be centered vertically in the figure.
-    #        # The heatmap will be centered horizontally in the left 90% of the figure.
-    #        # The colorbar will be centered horizontally in the right 10% of the figure.
-    #        # The heatmap will have a title that says "observed/expected"
-    #        # The colorbar will have a title that says "log2(observed/expected)"
-
-    #        # Make the figure
-    #        fw = 20
-    #        fh = 6
-    #        fig = plt.figure(figsize=(fw, fh))
-
-    #        # make a plot of the mean counts
-    #        counts, cbar = gen_square_ax_and_colorbar(0.6, 0.6, fw, fh, 5)
-    #        ax0     = fig.add_axes(counts)
-    #        ax0cbat = fig.add_axes(cbar)
-    #        ax0, ax0cbat = generate_mean_counts_panel(ax0, ax0cbat, c.plotmatrix_sumdf, size_frac, "CC")
-
-    #        # make the heatmap axes
-    #        counts, cbar = gen_square_ax_and_colorbar(7.5, 0.6, fw, fh, 5)
-    #        ax1     = fig.add_axes(counts)
-    #        ax1cbat = fig.add_axes(cbar)
-    #        ax1, ax1cbat = generate_obs_exp_panel(ax1, ax1cbat, c.plotmatrix_sumdf, size_frac)
-
-    #        # generate the square for the trace.
-    #        ax2 = fig.add_axes(gen_square_ax(14.5, 0.6, fw, fh, 5))
-    #        # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
-    #        ax2 = generate_trace_panel(ax2, simulation_filepaths, size_frac)
-
-    #        # save the figure to a pdf.
-    #        pdf.savefig()#bbox_inches="tight")
-    #        plt.close()
 
 def unit_test_coloc_array_identical():
     """
