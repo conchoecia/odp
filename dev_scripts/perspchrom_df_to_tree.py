@@ -321,7 +321,8 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
                                 randomize_ALGs = False):
     """
     Use the perspchromdf, the statsdf, and an RBH file to make loss/fusion plots.
-    The question is whether larger or smaller ALGs tend to fuse or be lost more often.
+    The question is whether larger or smaller ALGs, or specific ALG combos,tend to
+        fuse or be lost more often.
 
     The way that we do this is by going through each species, and analyzing the changes in
         ALGs on each lineage. If a change has been observed already on a lineage, then that
@@ -363,9 +364,17 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
         - coloc1_CC_percent_of_largest: The size of the second connected component as a fraction of the largest ALG currently in the graph.
     """
     ALG_info = ALGdf.copy()
+    ALG_random_lookup = {}
     if randomize_ALGs:
         # randomize the ALG sizes
         ALG_info["Size"] = ALG_info["Size"].sample(frac=1).reset_index(drop=True)
+        # add a random mapping column for the ALG names
+        ALG_info["random"] = ALG_info["ALGname"].sample(frac=1).reset_index(drop=True)
+        # This is only used in the random case
+        ALG_random_lookup = ALG_info.set_index("ALGname")["random"].to_dict()
+
+    ALG_info = ALG_info.sort_values(by="ALGname").reset_index(drop=True)
+
     # Make a starting graph where each "ALGname" in ALG_info is a node,
     #  each node has a size attribute (integer), and a color attribute (string)
     G = nx.Graph()
@@ -380,6 +389,7 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
     already_counted        = {}
     dispersion_entries     = []
     colocalization_entries = []
+    ALG_coloc_entries      = []
     for i, row in perspchromdf.iterrows():
         # For this species, make a copy of the starting ALG graph. We will manipulate this graph. to track the changes.
         thisG = G.copy()
@@ -388,7 +398,8 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
 
         for j, row_change in changedf.iterrows():
             thisedge = (row_change["source_taxid"], row_change["target_taxid"])
-            # first check if there has been either a fusion or a loss here. If so, add an entry to the already_counted dict.
+            # first check if there has been either a fusion or a loss here.
+            # If there is a fusion or loss, but we haven't seen something here before, accounted for them yet, add an entry to the already_counted dict.
             if row_change["colocalizations"] != [] or row_change["losses"] != []:
                 if thisedge not in already_counted:
                     already_counted[thisedge] = {"colocalizations": [], "losses": []}
@@ -419,7 +430,19 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
             if row_change["colocalizations"] != []:
                 # iterate through each colocalization event
                 for thiscoloc in row_change["colocalizations"]:
-                    # if the colocalization has not already been counted here, we count it.
+
+                    # SECTION FOR LOOKING AT ALG COLOCALIZATIONS
+                    # For the ALG_coloc_entries, we want to keep track of every single coloc, even if redundant through transitive property.
+                    #   In the case of randomize_ALGs, we will map the tuples to the random ALG names.
+                    if randomize_ALGs:
+                        ALG1 = ALG_random_lookup[thiscoloc[0]]
+                        ALG2 = ALG_random_lookup[thiscoloc[1]]
+                        ALG_coloc_entries.append({"thisedge": thisedge, "thiscolor": (ALG1, ALG2)})
+                    else:
+                        ALG_coloc_entries.append({"thisedge": thisedge, "thiscolor": thiscoloc})
+
+                    # SECTION FOR SIZE, we use the graph structure so we have special considerations.
+                    #   if the colocalization has not already been counted here, we count it.
                     if thiscoloc not in already_counted[thisedge]["colocalizations"]:
                         already_counted[thisedge]["colocalizations"].append(thiscoloc)
                         # SPECIAL CASE FOR COLOCALIZATIONS
@@ -461,8 +484,9 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
     dispersion_df  = pd.DataFrame(dispersion_entries)
     # change the colocalization entries to a df
     coloc_df = pd.DataFrame(colocalization_entries)
-
-    return dispersion_df, coloc_df
+    # ALG_coloc_entries is a list of dicts. We want to make this into a dataframe.
+    ALG_coloc_df = pd.DataFrame(ALG_coloc_entries)
+    return dispersion_df, coloc_df, ALG_coloc_df
 
 class coloc_array():
     """
@@ -505,7 +529,8 @@ class coloc_array():
         self.observed_matrix_size_CC  = {}
         self.expected_matrix_size_CC  = {}
 
-        # initialize the observed and expected matrices. Use a dict to store the observed and expected matrix
+        # Initialize the observed and expected matrices for the fractionals.
+        #  Use a dict to store the observed and expected matrix
         ffrange = list(np.arange(0, 1+self.frac_bin_size, self.frac_bin_size))
         self.observed_matrix_frac_abs  = {}
         self.expected_matrix_frac_abs  = {}
@@ -516,6 +541,15 @@ class coloc_array():
                 for thisdict in [self.observed_matrix_frac_abs, self.expected_matrix_frac_abs,
                                  self.observed_matrix_frac_CC, self.expected_matrix_frac_CC]:
                     thisdict[(ffrange[i], ffrange[j])] = 0
+
+        # Initialize the observed and expected matrices for the ALGs
+        self.observed_matrix_ALG  = {}
+        self.expected_matrix_ALG  = {}
+        # The number of times we ran the forward loss/fusion analysis for ALGs.
+        self.num_observed_observations_ALGs = 0
+        # The number of times we ran the randomized ALG loss/fusion analysis for ALGs.
+        self.num_expected_observations_ALGs = 0
+
 
         self.plotmatrix_concatdf = None  # This is the concatenation of the observed and expected matrices from many simulations
         self.plotmatrix_sumdf    = None  # This is the sum of the observed and expected matrices
@@ -562,12 +596,18 @@ class coloc_array():
             raise Exception("No data was read in. Check that the simulation filepaths are correct.")
 
         # SUMDF FOR FINAL PLOTTING. Sum up both the obs_count and the counts
-        sumdf  = self.plotmatrix_concatdf.groupby(["bin", "ob_ex", "size_frac", "abs_CC"])["counts"].sum().reset_index()
-        sumdf2 = self.plotmatrix_concatdf.groupby(["bin", "ob_ex", "size_frac", "abs_CC"])["obs_count"].sum().reset_index()
+        sumdf  = self.plotmatrix_concatdf.groupby(["ALG_num", "bin", "ob_ex", "size_frac", "abs_CC"])["counts"].sum().reset_index()
+        sumdf2 = self.plotmatrix_concatdf.groupby(["ALG_num", "bin", "ob_ex", "size_frac", "abs_CC"])["obs_count"].sum().reset_index()
         # merge these so that the sumdf has both the counts and the obs_count
-        self.plotmatrix_sumdf = pd.merge(sumdf, sumdf2, on=["bin", "ob_ex", "size_frac", "abs_CC"])
+        self.plotmatrix_sumdf = pd.merge(sumdf, sumdf2, on=["ALG_num", "bin", "ob_ex", "size_frac", "abs_CC"])
         self.plotmatrix_sumdf["count_per_sim"] = self.plotmatrix_sumdf["counts"]/self.plotmatrix_sumdf["obs_count"]
 
+        # make sure that ALG_num.unique: ['num', 'ALG']
+        if not sorted(list(self.plotmatrix_sumdf["ALG_num"].unique())) == sorted(list(['num', 'ALG'])):
+            raise Exception("self.plotmatrix_sumdf['ALG_num'].unique() must be ['num', 'ALG']")
+        # make sure that ob_ex.unique: ['observed' 'expected'
+        if not sorted(list(self.plotmatrix_sumdf["ob_ex"].unique())) == sorted(list(['observed', 'expected'])):
+            raise Exception("self.plotmatrix_sumdf['ob_ex'].unique() must be ['observed' 'expected']")
         # make sure that size_frac.unique: ['size' 'frac']
         if not sorted(list(self.plotmatrix_sumdf["size_frac"].unique())) == sorted(list(['size', 'frac'])):
             raise Exception("self.plotmatrix_sumdf['size_frac'].unique() must be ['size' 'frac']")
@@ -577,6 +617,34 @@ class coloc_array():
 
         # return a safe value
         return 0
+
+    def add_matrix_ALGs(self, ALG_coloc_df, ooe):
+        """
+        adds the ALG_coloc_df to the observed or expected matrix.
+        """
+        # assert that ooe is either observed or expected
+        if not ooe in ["observed", "expected"]:
+            raise Exception("ooe must be either 'observed' or 'expected'")
+
+        dict = self.observed_matrix_ALG if ooe == "observed" else self.expected_matrix_ALG
+        opp_dict =  self.expected_matrix_ALG if ooe == "observed" else self.observed_matrix_ALG
+
+        if ooe == "observed":
+            self.num_observed_observations_ALGs += 1
+        elif ooe == "expected":
+            self.num_expected_observations_ALGs += 1
+
+        # now we add the entries to the dict
+        for i, row in ALG_coloc_df.iterrows():
+            thisbin = tuple(sorted([row["thiscolor"][0], row["thiscolor"][1]]))
+            oppbin = tuple(sorted([row["thiscolor"][1], row["thiscolor"][0]]))
+            for thisdict in [dict, opp_dict]:
+                for bin in [thisbin, oppbin]:
+                    if bin not in thisdict:
+                        thisdict[bin] = 0
+            dict[thisbin] += 1
+            dict[oppbin]  += 1
+            # add the ALG0 info to the dict
 
     def add_matrix(self, coloc_array, ooe):
         """
@@ -660,18 +728,43 @@ class coloc_array():
                           "observed_frac_abs": self.observed_matrix_frac_abs, "expected_frac_abs": self.expected_matrix_frac_abs,
                           "observed_frac_CC":  self.observed_matrix_frac_CC,  "expected_frac_CC":  self.expected_matrix_frac_CC}
 
+        # enforce that the number of observed observations and the number of expected observations are the same
+        # This means that the values will not be over- or under-estimated.
+        if not self.num_observed_observations == self.num_expected_observations:
+            raise Exception("self.num_observed_observations must equal self.num_expected_observations")
+
         for dictkey in iteration_dict:
             for bin in iteration_dict[dictkey]:
                 # use the name observed if the string observed is in the variable name of thisdict
                 obex     = "observed" if "observed" in dictkey else "expected"
                 sizefrac = "size"     if "size"     in dictkey else "frac"
                 abscc    = "abs"      if "abs"      in dictkey else "CC"
-                entries.append({"bin": bin,
+                entries.append({"ALG_num": "num",
+                                "bin": bin,
                                 "ob_ex": obex,
                                 "size_frac": sizefrac,
                                 "abs_CC": abscc,
                                 "counts": iteration_dict[dictkey][bin],
                                 "obs_count": self.num_observed_observations})
+
+        # Enforce that the number of observed observations and the number of expected observations are the same
+        # This means that the values will not be over- or under-estimated.
+        if not self.num_observed_observations_ALGs == self.num_expected_observations_ALGs:
+            raise Exception("self.num_observed_observations_ALGs must equal self.num_expected_observations_ALGs")
+        # now we add the ALG entries
+        iteration_dict = {"observed_ALG": self.observed_matrix_ALG, "expected_ALG": self.expected_matrix_ALG}
+        for dictkey in iteration_dict:
+            for bin in iteration_dict[dictkey]:
+                # use the name observed if the string observed is in the variable name of thisdict
+                obex     = "observed" if "observed" in dictkey else "expected"
+                entries.append({"ALG_num": "ALG",
+                                "bin": bin,
+                                "ob_ex": obex,
+                                "size_frac": "size",
+                                "abs_CC": "abs",
+                                "counts": iteration_dict[dictkey][bin],
+                                "obs_count": self.num_observed_observations_ALGs})
+
         # make a df of the entries
         df = pd.DataFrame(entries)
         # save it to a file, with headers, no indices
@@ -711,12 +804,14 @@ def run_n_simulations_save_results(sampledfpath, algdfpath, filename,
             print("   - Running simulation {}".format(counter + 1), end="\r")
         # get a random number. must be between 0 and 2^32 - 1
         random_integer = random.randint(0,4294967295)
-        dispersion_df, coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf,
+        dispersion_df, coloc_df, ALG_coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf,
                                     obs_seed = random_integer, randomize_ALGs=False)
-        c.add_matrix(  coloc_df, "observed")
-        dispersion_df, coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf,
+        c.add_matrix(          coloc_df, "observed")
+        c.add_matrix_ALGs( ALG_coloc_df, "observed")
+        dispersion_df, coloc_df, ALG_coloc_df  = stats_df_to_loss_fusion_dfs(sampledf, algdf,
                                     obs_seed = random_integer, randomize_ALGs=True)
-        c.add_matrix(  coloc_df, "expected")
+        c.add_matrix(          coloc_df, "expected")
+        c.add_matrix_ALGs( ALG_coloc_df, "expected")
         counter +=1
     print("   - Running simulation {}".format(counter))
     # save the results to a file
@@ -795,6 +890,216 @@ def gen_square_ax_and_colorbar(
                    inches/fh]                            # height
     return plot_params, cbar_params
 
+def generate_ALG_obs_exp_counts_panel(ax, cax, sumdf, ALGdf):
+    """
+    Makes the observed/expected counts panel for the ALGs.
+    """
+    # make sure that the algdf is sorted by ALGsize
+    algdf = ALGdf.copy()
+    algdf = algdf.sort_values(by="Size").reset_index(drop=True)
+    algdf["index"] = algdf.index
+    ALG_to_index = dict(zip(algdf["ALGname"], algdf["index"]))
+    alglist = list(algdf["ALGname"])
+
+    # get the rows that are ALG
+    df_ALG = sumdf[sumdf["ALG_num"] == "ALG"].copy()
+    # get the first value of the bin to get the ALG name. This is easier than looking for a tuple
+    df_ALG["bin"]  = df_ALG["bin"].apply(ast.literal_eval)
+    df_ALG["ALG1"] = df_ALG["bin"].apply(lambda x: x[0])
+    df_ALG["ALG2"] = df_ALG["bin"].apply(lambda x: x[1])
+
+    # this makes a dict of the observed and expected values
+    ove_size = df_to_obs_exp_dict(df_ALG)
+
+    absmax = 6
+    colormap = plt.cm.RdBu_r
+    # we hard-code the colors so that anything above these values don't weight more
+    center = 0  # Center value for the colormap
+    norm = TwoSlopeNorm(vcenter=center, vmin=absmax*-1, vmax=absmax)
+
+    # use matplotlib patches to make squares for the heatmap.
+    seen_already = set()
+    for thiskey in ove_size:
+        ALG1, ALG2 = thiskey
+        ALG1_val = ALG_to_index[ALG1]
+        ALG2_val = ALG_to_index[ALG2]
+        sorted_bin_tuple = tuple(sorted([ALG1, ALG2]))
+        if sorted_bin_tuple in seen_already:
+            raise Exception("This bin has already been seen. This should not happen. The bin is: {}".format(sorted_bin_tuple))
+        seen_already.add(sorted_bin_tuple)
+        # plot now
+        x = -1
+        y = -1
+        # we want the smaller value first
+        if ALG1_val < ALG2_val:
+            x = ALG1_val
+            y = ALG2_val
+        elif ALG1_val > ALG2_val:
+            x = ALG2_val
+            y = ALG1_val
+        value = ove_size[thiskey]
+        color = colormap(norm(value))
+        rect = mpatches.Rectangle((x, y), 1, 1,
+                                  linewidth=0,
+                                  edgecolor='none',
+                                  facecolor=color)
+        ax.add_patch(rect)
+
+    # set the x and y limits
+    ax.set_xlim(0, len(alglist))
+    ax.set_ylim(0, len(alglist))
+    # set the x and y ticks
+    ax.set_xticks(np.arange(0.5, len(alglist) + 0.5, 1))
+    ax.set_yticks(np.arange(0.5, len(alglist) + 0.5, 1))
+    ax.set_xticklabels(alglist, rotation=90)
+    ax.set_yticklabels(alglist)
+
+    # COLORBAR
+    # 500 units from absmin and absmax, make the colorbar
+    thisrange = np.linspace(absmax * -1, absmax, 500)
+    stepsize = thisrange[1] - thisrange[0]
+    # we hard-code the colors so that anything above these values don't weight more
+    center = 0  # Center value for the colormap
+    norm = TwoSlopeNorm(vcenter=center, vmin=absmax*-1, vmax=absmax)
+    for i in thisrange:
+        cax.add_patch(mpatches.Rectangle((0, i), 1, stepsize, color=colormap(norm(i))))
+    # set the limits of ax2
+    cax.set_ylim(absmax * -1, absmax)
+    # turn off the x axis and turn on the y-axis. Just plot integers on y -axis
+    cax.set_xticks([])
+    # get the smallest integer
+    smallest_int = int(absmax * -1)
+    # get the largest integer
+    largest_int = int(absmax)
+    # y labes on the right side
+    cax.yaxis.tick_right()
+    # only plot integers on the y-axis
+    cax.set_yticks(     np.arange(smallest_int, largest_int+1, 1))
+    # set the y tick labels
+    cax.set_yticklabels(np.arange(smallest_int, largest_int+1, 1))
+    # set the y label
+    cax.set_ylabel("log2(observed/expected)")
+    # set the x label
+    cax.set_xlabel("Colorbar")
+
+    ## now we make the specific labels depending on whether we're looking at the absolute size or the fraction of the largest size
+    #if abs_CC == "abs":
+    #    # set the x and y labels
+    #    ax.set_xlabel("Smaller ALG size when fused. Not CC size.")
+    #    ax.set_ylabel("Larger ALG size when fused. Not CC size")
+    #    # set the title
+    #    ax.set_title("Log2(obs/exp) value of fusion events for dif. sizes of ALGs, not CCs, *{}*".format(size_frac.upper()))
+
+    #elif abs_CC == "CC":
+    #    # set the x and y labels
+    #    ax.set_xlabel("Smaller CC size when fused. Not ALG size.")
+    #    ax.set_ylabel("Larger CC size when fused. Not ALG size")
+    #    # set the title
+    #    ax.set_title("Log2(obs/exp) value of fusion events for dif. sizes of CCs, not ALGs, *{}*".format(size_frac.upper()))
+
+    return ax, cax
+
+def generate_ALG_mean_counts_panel(ax, cax, sumdf, ALGdf):
+    """
+    Makes a heatmap of the mean counts per cell for the ALGs.
+    """
+    # make sure that the algdf is sorted by ALGsize
+    algdf = ALGdf.copy()
+    algdf = algdf.sort_values(by="Size").reset_index(drop=True)
+    algdf["index"] = algdf.index
+    ALG_to_index = dict(zip(algdf["ALGname"], algdf["index"]))
+    ALG_to_size  = dict(zip(algdf["ALGname"], algdf["Size"]))
+    alglist = list(algdf["ALGname"])
+
+    # get the rows that are ALG
+    df_ALG = sumdf[sumdf["ALG_num"] == "ALG"].copy()
+    # get only the rows that are observed
+    df_ALG = df_ALG[df_ALG["ob_ex"] == "observed"]
+    # get the first value of the bin to get the ALG name. This is easier than looking for a tuple
+    df_ALG["bin"] = df_ALG["bin"].apply(ast.literal_eval)
+    df_ALG["ALG1"] =df_ALG["bin"].apply(lambda x: x[0])
+    df_ALG["ALG2"] =df_ALG["bin"].apply(lambda x: x[1])
+
+    # print all the rows with the value R in col ALG1 or ALG2
+    print(df_ALG[(df_ALG["ALG1"] == "R") | (df_ALG["ALG2"] == "R")])
+
+    # make sure that the length of the df is not zero
+    if len(df_ALG) == 0:
+        raise Exception("len(df_ALG) == 0. This means that, for some reason, the ALG colocalizations were not saved to the file.")
+
+    # We want a custom heatmap where we scale from white (0) to red (the max)
+    colormap = plt.cm.Reds
+    norm = Normalize(vmin=0, vmax=int(max(df_ALG["count_per_sim"])) + 1)
+
+    seen_already = set()
+    for i, row in df_ALG.iterrows():
+        sorted_bin_tuple = tuple(sorted(row["bin"]))
+        if sorted_bin_tuple in seen_already:
+            raise Exception("This bin has already been seen. This should not happen. The bin is: {}".format(sorted_bin_tuple))
+        seen_already.add(sorted_bin_tuple)
+        # plot now
+        x = -1
+        y = -1
+        # we want the smaller value first
+        if ALG_to_size[row["ALG1"]] < ALG_to_size[row["ALG2"]]:
+            x = ALG_to_index[row["ALG1"]]
+            y = ALG_to_index[row["ALG2"]]
+        elif ALG_to_size[row["ALG1"]] > ALG_to_size[row["ALG2"]]:
+            x = ALG_to_index[row["ALG2"]]
+            y = ALG_to_index[row["ALG1"]]
+        value = row["count_per_sim"]
+        color = colormap(norm(value))
+        rect = mpatches.Rectangle((x, y), 1, 1,
+                                  linewidth=0,
+                                  edgecolor='none',
+                                  facecolor=color)
+        ax.add_patch(rect)
+
+    # set the x and y limits
+    ax.set_xlim(0, len(alglist))
+    ax.set_ylim(0, len(alglist))
+    # set the x and y ticks
+    ax.set_xticks(np.arange(0.5, len(alglist)+0.5, 1))
+    ax.set_yticks(np.arange(0.5, len(alglist)+0.5, 1))
+    # set the x and y tick labels.
+    # For x, rotate the labels 90 degrees.
+    ax.set_xticklabels(algdf["ALGname"], rotation=90)
+    ax.set_yticklabels(algdf["ALGname"])
+
+    # COLORBAR SECTION
+    # 500 units from absmin and absmax, make the colorbar
+    thisrange = np.linspace(0, int(max(df_ALG["count_per_sim"])) + 1, 500)
+    stepsize = thisrange[1] - thisrange[0]
+    for i in thisrange:
+        cax.add_patch(mpatches.Rectangle((0, i), 1, stepsize, color=colormap(norm(i))))
+    # set the limits of ax2
+    cax.set_ylim(0, int(max(df_ALG["count_per_sim"])) + 1)
+    # set the title of ax2
+    # turn off the x axis and turn on the y-axis. Just plot integers on y -axis
+    cax.set_xticks([])
+    # get the smallest integer
+    smallest_int = 0
+    # get the largest integer
+    largest_int = int(max(df_ALG["count_per_sim"])) + 1
+    # y labes on the right side
+    cax.yaxis.tick_right()
+    ## only plot integers on the y-axis
+    #cax.set_yticks(     np.arange(smallest_int, largest_int+1, 1))
+    ## set the y tick labels
+    #cax.set_yticklabels(np.arange(smallest_int, largest_int+1, 1))
+    # set the x label
+    cax.set_xlabel("Colorbar")
+
+    # set the x and y labels
+    ax.set_xlabel("Smaller ALG participating in fusion")
+    ax.set_ylabel("Larger ALG participating in fusion")
+    # set the title
+    ax.set_title( "Mean count of fusion events for different ALG pairs")
+    # set the y label
+    cax.set_ylabel("Mean number of ALG fusions per topology")
+    return ax, cax
+
+
 def generate_mean_counts_panel(ax, cax, sumdf, size_frac, abs_CC):
     """
     Takes in the sumdf and makes a heatmap of the mean counts per cell.
@@ -819,6 +1124,9 @@ def generate_mean_counts_panel(ax, cax, sumdf, size_frac, abs_CC):
     df_size = df_size[df_size["abs_CC"] == abs_CC]
     # get the rows that are observed
     df_size = df_size[df_size["ob_ex"] == "observed"]
+    # remove the rows that are ALG_num ALG
+    df_size = df_size[df_size["ALG_num"] == "num"]
+
     ## print the rows that contain any nans
     #printdf = df_size[df_size.isna().any(axis=1)]
     #print(printdf)
@@ -856,8 +1164,8 @@ def generate_mean_counts_panel(ax, cax, sumdf, size_frac, abs_CC):
                                       facecolor=color)
             ax.add_patch(rect)
     # set the x and y limits
-    ax.set_xlim(min(x), max(x)+step_size)
-    ax.set_ylim(min(y), max(y)+step_size)
+    ax.set_xlim(0, max(max(x), max(y))+step_size)
+    ax.set_ylim(0, max(max(x), max(y))+step_size)
     # set the x and y ticks
     ax.set_xticks(np.arange(min(x), max(x)+step_size, step_size))
     ax.set_yticks(np.arange(min(y), max(y)+step_size, step_size))
@@ -937,6 +1245,8 @@ def generate_obs_exp_panel(ax, cax, sumdf, size_frac, abs_CC, absmax = 6):
     df_size = sumdf[sumdf["size_frac"] == size_frac]
     # get the rows that match the abs_CC state
     df_size = df_size[df_size["abs_CC"] == abs_CC]
+    # remove the rows in ALG_num that are ALG
+    df_size = df_size[df_size["ALG_num"] == "num"]
     # this makes a dict of the observed and expected values
     ove_size = df_to_obs_exp_dict(df_size)
 
@@ -968,8 +1278,8 @@ def generate_obs_exp_panel(ax, cax, sumdf, size_frac, abs_CC, absmax = 6):
                                   facecolor=color)
         ax.add_patch(rect)
     # set the x and y limits
-    ax.set_xlim(min(x), max(x)+step_size)
-    ax.set_ylim(min(y), max(y)+step_size)
+    ax.set_xlim(0, max(max(x), max(y))+step_size)
+    ax.set_ylim(0, max(max(x), max(y))+step_size)
     # set the x and y ticks
     ax.set_xticks(np.arange(min(x), max(x)+step_size, step_size))
     ax.set_yticks(np.arange(min(y), max(y)+step_size, step_size))
@@ -1027,12 +1337,15 @@ def generate_obs_exp_panel(ax, cax, sumdf, size_frac, abs_CC, absmax = 6):
 
     return ax, cax
 
-def generate_trace_panel(ax, simulation_filepaths, frac_or_size, abs_CC):
+def generate_trace_panel(ax, simulation_filepaths, ALG_num, frac_or_size, abs_CC):
     """
     This generates the traces for the observed/expected matrices.
     We will use this to check for convergence.
     Instead of plotting some normalized values, we will just plot the raw values.
     """
+    # make sure that ALG_num is either ALG or num
+    if not ALG_num in ["ALG", "num"]:
+        raise Exception("ALG_num must be either ALG or num")
     # make sure that frac or size is either frac or size
     if not frac_or_size in ["frac", "size"]:
         raise Exception("frac_or_size must be either frac or size")
@@ -1050,8 +1363,9 @@ def generate_trace_panel(ax, simulation_filepaths, frac_or_size, abs_CC):
         # if the df is None, then read in the file
         tempdf = pd.read_csv(thisfile, sep="\t")
         # filter on size_frac column
-        tempdf = tempdf[tempdf["size_frac"] == frac_or_size]
-        tempdf = tempdf[tempdf["abs_CC"] == abs_CC]
+        tempdf = tempdf[tempdf["ALG_num"]   == ALG_num      ] # get the rows that are or are not ALGs
+        tempdf = tempdf[tempdf["size_frac"] == frac_or_size ] # get the rows that match the method variable
+        tempdf = tempdf[tempdf["abs_CC"]    == abs_CC       ] # get the rows that match the abs_CC variable
         # assert that we are only dealing with a single type of size_frac and abs_CC
         assert_single_size_abs_condition(tempdf)
         num_sims += int(tempdf["obs_count"].max())
@@ -1105,12 +1419,13 @@ def assert_single_size_abs_condition(df):
     #  The checks make sure that we will not accidentally count more than one field at a time.
     # We must assert that the ob_ex column is either observed or expected.
     target = list(sorted(["observed", "expected"]))
-    if not list(sorted(df["ob_ex"].unique())) == target:
-        raise Exception("df['ob_ex'].unique() must be {}".format(target))
+    for entry in list(sorted(df["ob_ex"].unique())):
+        if not entry in target:
+            raise Exception("df['ob_ex'].unique() must have contents of either observed or expected. Found {}".format(df["ob_ex"].unique()))
 
     # we must only find one value for size_frac. It must be either frac or size.
     if not len(df["size_frac"].unique()) == 1:
-        raise Exception("df['size_frac'].unique() must be of length 1. Should be either frac or size")
+        raise Exception("df['size_frac'].unique() must be of length 1. Should be either frac or size. Found {}".format(df["size_frac"].unique()) )
     if not df["size_frac"].unique()[0] in ["frac", "size"]:
         raise Exception("df['size_frac'].unique() must be either frac or size")
 
@@ -1167,12 +1482,16 @@ def df_to_obs_exp_dict(df):
             ove_size[thisbin] = obsexp
     return ove_size
 
-def read_simulations_and_make_heatmaps(simulation_filepaths, outfilename, absmax = 6):
+def read_simulations_and_make_heatmaps(simulation_filepaths, algdfpath, outfilename, absmax = 6):
     """
     This function reads in a file list of simulation files, sums up all the data,
      and makes a heatmap of the results. We are able to do this as it is a Monte Carlo
      simulation, so the results are independent.
     """
+    # read in the algdf
+    algdf = parse_rbh_file(algdfpath)
+    algdf = algdf.sort_values(by=["Size"]).reset_index(drop=True)
+
     c = coloc_array()
     c.plotmatrix_listoffiles_to_plotmatrix(simulation_filepaths)
 
@@ -1212,29 +1531,34 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, outfilename, absmax
             # generate the square for the trace.
             axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
             # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
-            axes[-1] = generate_trace_panel(axes[-1], simulation_filepaths, thissize, thisabs)
+            axes[-1] = generate_trace_panel(axes[-1], simulation_filepaths, "num", thissize, thisabs)
 
             # update the bottom
             bottom = bottom + panelheight + 1.1
 
-    ## make a plot of the mean counts
-    #counts, cbar = gen_square_ax_and_colorbar(left1, bottom, fw, fh, panelheight)
-    #CC_size_mean_ax = fig.add_axes(counts)
-    #CC_size_mean_cb = fig.add_axes(cbar)
-    #CC_size_mean_ax, CC_size_mean_cb = generate_mean_counts_panel(
-    #    CC_size_mean_ax, CC_size_mean_cb, c.plotmatrix_sumdf, "size", "CC")
+    # make a plot of the mean ALG counts
+    counts, cbar = gen_square_ax_and_colorbar(left1, bottom, fw, fh, panelheight)
+    axes.append(fig.add_axes(counts))
+    axes.append(fig.add_axes(cbar))
+    temp1, temp2 = generate_ALG_mean_counts_panel(
+        axes[-2], axes[-1], c.plotmatrix_sumdf, algdf)
+    axes[-2] = temp1
+    axes[-1] = temp2
 
-    ## make the heatmap axes
-    #counts, cbar = gen_square_ax_and_colorbar(left2, bottom, fw, fh, panelheight)
-    #CC_size_obex_ax = fig.add_axes(counts)
-    #CC_size_obex_cb = fig.add_axes(cbar)
-    #CC_size_obex_ax, CC_size_obex_cb = generate_obs_exp_panel(
-    #    CC_size_obex_ax, CC_size_obex_cb, c.plotmatrix_sumdf, "size", "CC")
+    # make a plot of the mean ALG counts
+    counts, cbar = gen_square_ax_and_colorbar(left2, bottom, fw, fh, panelheight)
+    axes.append(fig.add_axes(counts))
+    axes.append(fig.add_axes(cbar))
+    temp1, temp2 = generate_ALG_obs_exp_counts_panel(
+        axes[-2], axes[-1], c.plotmatrix_sumdf, algdf)
+    axes[-2] = temp1
+    axes[-1] = temp2
 
-    ## generate the square for the trace.
-    #CC_size_trace_ax = fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight))
-    ## add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
-    #CC_size_trace_ax = generate_trace_panel(CC_size_trace_ax, simulation_filepaths, "size", "CC")
+    # generate the square for the trace.
+    axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
+    # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+    axes[-1] = generate_trace_panel(axes[-1], simulation_filepaths, "ALG", "size", "abs")
+
 
     # save the plot as a pdf
     fig.savefig(outfilename, bbox_inches="tight")
@@ -1254,11 +1578,11 @@ def unit_test_coloc_array_identical():
     sampledf = pd.read_csv(sys.argv[1], sep="\t")
     algdf = parse_rbh_file(sys.argv[2])
 
-    dispersion_df, coloc_df = stats_df_to_loss_fusion_dfs(sampledf, algdf,
+    dispersion_df, coloc_df, ALG_coloc_df = stats_df_to_loss_fusion_dfs(sampledf, algdf,
                                    obs_seed = 10,
                                    randomize_ALGs=False)
 
-    dispersion_df2, coloc_df2 = stats_df_to_loss_fusion_dfs(sampledf, algdf,
+    dispersion_df2, coloc_df2, ALG_coloc_df = stats_df_to_loss_fusion_dfs(sampledf, algdf,
                                    obs_seed = 500,
                                    randomize_ALGs=False)
 
@@ -1298,23 +1622,25 @@ def main():
 
     #run_n_simulations_save_results(sys.argv[1]       ,
     #                               sys.argv[2]       ,
-    #                               "simulations/sim_results_1.tsv"    ,
-    #                               num_sims=10        ,
+    #                               "testfile.tsv"    ,
+    #                               num_sims=10       ,
     #                               abs_bin_size=25   ,
     #                               frac_bin_size=0.05,
-    #                               verbose = True   )
-    #sys.exit()
+    #                               verbose = True    )
+    #read_simulations_and_make_heatmaps(["testfile.tsv"], sys.argv[2], "simulations.pdf")
 
     #sampledf = pd.read_csv(sys.argv[1], sep="\t")
     #algdf = parse_rbh_file(sys.argv[2])
-    #dispersion_df, coloc_df  = stats_df_to_loss_fusion_dfs(
-    #                            sampledf, algdf,
-    #                            obs_seed = 1,
-    #                            randomize_ALGs=False)
+    #dispersion_df, coloc_df, ALG_coloc_df  = stats_df_to_loss_fusion_dfs(
+    #                                            sampledf, algdf,
+    #                                            obs_seed = 1,
+    #                                            randomize_ALGs=False)
     #print("This is a dispersion df")
     #print(dispersion_df)
     #print("This is a coloc df")
     #print(coloc_df)
+    #print("This is an ALG coloc df")
+    #print(ALG_coloc_df)
     #sys.exit()
 
     #num_simulations = 20
@@ -1334,30 +1660,7 @@ def main():
     simulation_filepaths =  list(set(glob.glob("./simulations/sim_results_*.tsv")) | set(glob.glob("./simulations/dfsim_run_*.tsv")))
     if len(simulation_filepaths) == 0:
         raise Exception("No simulation files found in ./simulations/")
-    read_simulations_and_make_heatmaps(simulation_filepaths, "simulations.pdf")
-
-
-    ## find all the
-    #ove_size, ove_frac = c.ret_obs_expected()
-    #print(ove_size)
-    ## make a heatmap using the ove_size.
-    ## the keys are (x,y) tuples. The values are the ove. Use a red-white-blue color scale. Red means over 1, blue means under 1
-    ## get the x and y values
-    #x = [thisbin[0] for thisbin in ove_size]
-    #y = [thisbin[1] for thisbin in ove_size]
-    ## get the ove values
-    #ove = [ove_size[thisbin] for thisbin in ove_size]
-    ## make the heatmap
-    #plt.scatter(x,y, c=ove, cmap="RdBu_r")
-    #plt.xlabel('ALG Size')
-    #plt.ylabel('ALG Size')
-    #plt.title('Component fusion sizes')
-    ## Display the plot
-    #plt.show()
-
-    #print()
-    ## convert the ove_trace_frac to a df and print
-    #print(c.ove_trace_frac)
+    read_simulations_and_make_heatmaps(simulation_filepaths, sys.argv[2], "simulations.pdf")
 
 if __name__ == "__main__":
     main()
