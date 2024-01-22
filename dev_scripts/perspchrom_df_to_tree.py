@@ -430,21 +430,21 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
             if row_change["colocalizations"] != []:
                 # iterate through each colocalization event
                 for thiscoloc in row_change["colocalizations"]:
-
-                    # SECTION FOR LOOKING AT ALG COLOCALIZATIONS
-                    # For the ALG_coloc_entries, we want to keep track of every single coloc, even if redundant through transitive property.
-                    #   In the case of randomize_ALGs, we will map the tuples to the random ALG names.
-                    if randomize_ALGs:
-                        ALG1 = ALG_random_lookup[thiscoloc[0]]
-                        ALG2 = ALG_random_lookup[thiscoloc[1]]
-                        ALG_coloc_entries.append({"thisedge": thisedge, "thiscolor": (ALG1, ALG2)})
-                    else:
-                        ALG_coloc_entries.append({"thisedge": thisedge, "thiscolor": thiscoloc})
-
                     # SECTION FOR SIZE, we use the graph structure so we have special considerations.
                     #   if the colocalization has not already been counted here, we count it.
                     if thiscoloc not in already_counted[thisedge]["colocalizations"]:
                         already_counted[thisedge]["colocalizations"].append(thiscoloc)
+
+                        # SECTION FOR LOOKING AT ALG COLOCALIZATIONS
+                        # For the ALG_coloc_entries, we want to keep track of every single coloc, even if redundant through transitive property.
+                        #   In the case of randomize_ALGs, we will map the tuples to the random ALG names.
+                        if randomize_ALGs:
+                            ALG1 = ALG_random_lookup[thiscoloc[0]]
+                            ALG2 = ALG_random_lookup[thiscoloc[1]]
+                            ALG_coloc_entries.append({"thisedge": thisedge, "thiscolor": (ALG1, ALG2)})
+                        else:
+                            ALG_coloc_entries.append({"thisedge": thisedge, "thiscolor": thiscoloc})
+
                         # SPECIAL CASE FOR COLOCALIZATIONS
                         #  We must now determine if this fusion is already in the graph.
                         #  It may already be in the graph if these two ALGs are already colocalized.
@@ -1643,18 +1643,19 @@ def main():
     #print(ALG_coloc_df)
     #sys.exit()
 
-    #num_simulations = 20
-    #sims_per_run    = 2
-    #for i in range(int(num_simulations/sims_per_run)):
-    #    print("running simulation {}/{}".format(i+1, int(num_simulations/sims_per_run)))
-    #    outname = "sim_results_{}_{}.tsv".format(i, sims_per_run)
-    #    run_n_simulations_save_results(sys.argv[1],
-    #                                   sys.argv[2],
-    #                                   outname,
-    #                                   num_sims=sims_per_run,
-    #                                   abs_bin_size=25,
-    #                                   frac_bin_size=0.05,
-    #                                   verbose = True)
+    num_simulations = 20
+    sims_per_run    = 2
+    for i in range(int(num_simulations/sims_per_run)):
+        outname = "simulations/sim_results_{}_{}.tsv".format(i, sims_per_run)
+        if not os.path.exists(outname):
+            print("running simulation {}/{}".format(i+1, int(num_simulations/sims_per_run)))
+            run_n_simulations_save_results(sys.argv[1],
+                                           sys.argv[2],
+                                           outname,
+                                           num_sims=sims_per_run,
+                                           abs_bin_size=25,
+                                           frac_bin_size=0.05,
+                                           verbose = True)
 
     # find all the files in this directory that start with sim_results_ or dfsim_run_
     simulation_filepaths =  list(set(glob.glob("./simulations/sim_results_*.tsv")) | set(glob.glob("./simulations/dfsim_run_*.tsv")))
