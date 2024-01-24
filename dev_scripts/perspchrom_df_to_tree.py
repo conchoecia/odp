@@ -577,14 +577,26 @@ class coloc_array():
             if not os.path.exists(thisfile):
                 raise Exception("File does not exist: {}".format(thisfile))
             # read in the file as a pandas df
-            all_dfs.append(pd.read_csv(thisfile, sep="\t"))
+            tempdf = pd.read_csv(thisfile, sep="\t")
+            all_dfs.append(tempdf)
+
+            # From the last df, get the unique obs_count for observed.
+            # If the length of this is not 1, then something went wrong with the simulation
+            observed_obs_count = tempdf[tempdf["ob_ex"] == "observed"]["obs_count"].unique()
+            if len(observed_obs_count) != 1:
+                raise Exception("The length of the observed_obs_count is not 1. Something went wrong with the simulation.")
+            self.num_observed_observations += observed_obs_count[0]
+            # Also check this same thing for the expected rows
+            expected_obs_count = tempdf[tempdf["ob_ex"] == "expected"]["obs_count"].unique()
+            if len(expected_obs_count) != 1:
+                raise Exception("The length of the expected_obs_count is not 1. Something went wrong with the simulation.")
+            self.num_expected_observations += expected_obs_count[0]
 
         # CONCATENATED DF FOR THE TRACES
         # Concatenate the dfs. This will have all the entries from all the dfs.
         #  Many rows may be duplicated. This is only if two simulation files had the same
         #  number of counts.
         self.plotmatrix_concatdf = pd.concat(all_dfs).reset_index(drop = True)
-        print(self.plotmatrix_concatdf)
 
         # check that the len of df is not zero. If it is zero, we have not successully read in any of the files
         if len(self.plotmatrix_concatdf) == 0:
@@ -854,17 +866,6 @@ def generate_stats_df(sample_df_filepath, outfilename) -> int:
     statsdf.to_csv(outfilename, sep="\t", index=False)
     return 0
 
-#def generate_blank_counts_panel(ax):
-#    """
-#    Sets up a panel for the raw counts matrix from the dataset.
-#
-#    Notes:
-#      - 20240118: Because the way that the tree is constructed, different topologies
-#                  can be generated. This means that we should just summarize the whole
-#                  dataset by dividing by the number of simulations. So we get a mean
-#                  per-bin count.
-#    """
-
 def i2f(i, dimension):
     """
     converts the index to the fraction of the dimension.
@@ -1025,12 +1026,13 @@ def generate_ALG_mean_counts_panel(ax, cax, sumdf, ALGdf):
     # get only the rows that are observed
     df_ALG = df_ALG[df_ALG["ob_ex"] == "observed"]
     # get the first value of the bin to get the ALG name. This is easier than looking for a tuple
-    df_ALG["bin"] = df_ALG["bin"].apply(ast.literal_eval)
-    df_ALG["ALG1"] =df_ALG["bin"].apply(lambda x: x[0])
-    df_ALG["ALG2"] =df_ALG["bin"].apply(lambda x: x[1])
+    df_ALG["bin"]  = df_ALG["bin"].apply(ast.literal_eval)
+    df_ALG["ALG1"] = df_ALG["bin"].apply(lambda x: x[0])
+    df_ALG["ALG2"] = df_ALG["bin"].apply(lambda x: x[1])
 
-    # print all the rows with the value R in col ALG1 or ALG2
-    print(df_ALG[(df_ALG["ALG1"] == "R") | (df_ALG["ALG2"] == "R")])
+    # This was for debugging - can be deleted
+    # # print all the rows with the value R in col ALG1 or ALG2
+    # print(df_ALG[(df_ALG["ALG1"] == "R") | (df_ALG["ALG2"] == "R")])
 
     # make sure that the length of the df is not zero
     if len(df_ALG) == 0:
@@ -1108,7 +1110,6 @@ def generate_ALG_mean_counts_panel(ax, cax, sumdf, ALGdf):
     cax.set_ylabel("Mean number of ALG fusions per topology")
     return ax, cax
 
-
 def generate_mean_counts_panel(ax, cax, sumdf, size_frac, abs_CC):
     """
     Takes in the sumdf and makes a heatmap of the mean counts per cell.
@@ -1136,10 +1137,6 @@ def generate_mean_counts_panel(ax, cax, sumdf, size_frac, abs_CC):
     # remove the rows that are ALG_num ALG
     df_size = df_size[df_size["ALG_num"] == "num"]
 
-    ## print the rows that contain any nans
-    #printdf = df_size[df_size.isna().any(axis=1)]
-    #print(printdf)
-    #print()
     x = []
     y = []
     values = []
@@ -1166,7 +1163,6 @@ def generate_mean_counts_panel(ax, cax, sumdf, size_frac, abs_CC):
             # get the color of the square. The colormap should center around 0
             color = colormap(norm(values[i]))
             # print the color as rgb. The value to 2 decimal places.
-            #print(x[i], y[i], "{:.2f}".format(values[i]), rgb_float_to_hex(color))
             # make the square. The x and y are the bottom left corner of the square. The width and height are the step size.
             rect = mpatches.Rectangle((x[i],y[i]), step_size, step_size,
                                       linewidth=0, edgecolor='none',
@@ -1280,7 +1276,6 @@ def generate_obs_exp_panel(ax, cax, sumdf, size_frac, abs_CC, absmax = 6):
         # get the color of the square. The colormap should center around 0
         color = colormap(norm(values[i]))
         # print the color as rgb. The value to 2 decimal places.
-        #print(x[i], y[i], "{:.2f}".format(values[i]), rgb_float_to_hex(color))
         # make the square. The x and y are the bottom left corner of the square. The width and height are the step size.
         rect = mpatches.Rectangle((x[i],y[i]), step_size, step_size,
                                   linewidth=0, edgecolor='none',
@@ -1346,7 +1341,7 @@ def generate_obs_exp_panel(ax, cax, sumdf, size_frac, abs_CC, absmax = 6):
 
     return ax, cax
 
-def generate_trace_panel(ax, simulation_filepaths, ALG_num, frac_or_size, abs_CC):
+def generate_trace_panel(ax, branches_in_clade, simulation_filepaths, ALG_num, frac_or_size, abs_CC):
     """
     This generates the traces for the observed/expected matrices.
     We will use this to check for convergence.
@@ -1375,6 +1370,9 @@ def generate_trace_panel(ax, simulation_filepaths, ALG_num, frac_or_size, abs_CC
         tempdf = tempdf[tempdf["ALG_num"]   == ALG_num      ] # get the rows that are or are not ALGs
         tempdf = tempdf[tempdf["size_frac"] == frac_or_size ] # get the rows that match the method variable
         tempdf = tempdf[tempdf["abs_CC"]    == abs_CC       ] # get the rows that match the abs_CC variable
+        # get only the rows that have the branches_in_clade
+        tempdf = tempdf[tempdf["branch"].isin(branches_in_clade)]
+
         # assert that we are only dealing with a single type of size_frac and abs_CC
         assert_single_size_abs_condition(tempdf)
         num_sims += int(tempdf["obs_count"].max())
@@ -1389,8 +1387,6 @@ def generate_trace_panel(ax, simulation_filepaths, ALG_num, frac_or_size, abs_CC
         ove_size = df_to_obs_exp_dict(dicts)
         # now we go through the matrix and add the traces for this value
         for thisbin in ove_size:
-            #if thisbin == '(100, 250)':
-            #    print("Num sims: {}, thisbin: {}, ove_size: {} merged_df row: {}".format(num_sims, thisbin, ove_size[thisbin], merged_df[merged_df["bin"] == thisbin]))
             if thisbin not in lines:
                 lines[thisbin] = {"num_sim": [], "value": []}
             lines[thisbin]["num_sim"].append( num_sims         )
@@ -1557,7 +1553,8 @@ class PhyloTree:
         # return the edges
         return daughter_edges
 
-def _make_one_simulation_plot(algdf, c, T, taxid, outfileprefix, absmax = 6):
+def _make_one_simulation_plot(algdf, c, T, taxid, simulation_filepaths,
+                              outfileprefix, absmax = 6):
     """
     makes a single plot for a single NCBI taxid
 
@@ -1577,8 +1574,13 @@ def _make_one_simulation_plot(algdf, c, T, taxid, outfileprefix, absmax = 6):
     plotdf = c.plotmatrix_sumdf[c.plotmatrix_sumdf["branch"].isin(branches_in_clade)]
 
     # now we don't care about the branch. Groupby the other columns and sum them up. They are all counts
-    plotdf = plotdf.groupby(["ALG_num", "bin", "ob_ex", "size_frac", "abs_CC", "obs_count"])["counts"].sum().reset_index()
+    plotdf  = plotdf.groupby(["ALG_num", "bin", "ob_ex", "size_frac", "abs_CC" ])["counts"].sum().reset_index()
+    # if ob_ex is expected, "obs_count" will be c.expected_obs_count, otherwise it will be c.observed_obs_count
+    plotdf["obs_count"] = [c.num_expected_observations if x == "expected" else c.num_observed_observations for x in plotdf["ob_ex"]]
+    # merge these so that the sumdf has both the counts and the obs_count
     plotdf["count_per_sim"] = plotdf["counts"] / plotdf["obs_count"]
+
+    print("the plotdf is:\n{}".format(plotdf))
 
     # make one big plot with all of the data
     # Make the figure
@@ -1613,10 +1615,11 @@ def _make_one_simulation_plot(algdf, c, T, taxid, outfileprefix, absmax = 6):
             temp1, temp2 = generate_obs_exp_panel(
                 axes[-2], axes[-1], plotdf, thissize, thisabs)
 
-            ## generate the square for the trace.
-            #axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
-            ## add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
-            #axes[-1] = generate_trace_panel(axes[-1], simulation_filepaths, "num", thissize, thisabs)
+            # generate the square for the trace.
+            axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
+            # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+            axes[-1] = generate_trace_panel(axes[-1], branches_in_clade,
+                                            simulation_filepaths, "num", thissize, thisabs)
 
             # update the bottom
             bottom = bottom + panelheight + 1.1
@@ -1639,10 +1642,11 @@ def _make_one_simulation_plot(algdf, c, T, taxid, outfileprefix, absmax = 6):
     axes[-2] = temp1
     axes[-1] = temp2
 
-    ## generate the square for the trace.
-    #axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
-    ## add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
-    #axes[-1] = generate_trace_panel(axes[-1], simulation_filepaths, "ALG", "size", "abs")
+    # generate the square for the trace.
+    axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
+    # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+    axes[-1] = generate_trace_panel(axes[-1], branches_in_clade,
+                                    simulation_filepaths, "ALG", "size", "abs")
 
     # Add a title to the plot to indicate the NCBI taxid and the taxon name
     # Move it to the middle of the plot
@@ -1677,7 +1681,8 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, per_sp_df, algdfpat
     c.plotmatrix_listoffiles_to_plotmatrix(simulation_filepaths)
 
     for taxid in clades_of_interest:
-        _make_one_simulation_plot(algdf, c, T, taxid, outfileprefix, absmax = absmax)
+        _make_one_simulation_plot(algdf, c, T, taxid, simulation_filepaths,
+                                  outfileprefix, absmax = absmax)
 
 def unit_test_coloc_array_identical():
     """
@@ -1747,7 +1752,7 @@ def main():
     #                               abs_bin_size=25   ,
     #                               frac_bin_size=0.05,
     #                               verbose = True    )
-    read_simulations_and_make_heatmaps(["testfile.tsv"], sys.argv[1], sys.argv[2], "simulations", clades_of_interest)
+    #read_simulations_and_make_heatmaps(["testfile.tsv"], sys.argv[1], sys.argv[2], "simulations", clades_of_interest)
 
     #sampledf = pd.read_csv(sys.argv[1], sep="\t")
     #algdf = parse_rbh_file(sys.argv[2])
@@ -1763,25 +1768,27 @@ def main():
     #print(ALG_coloc_df)
     #sys.exit()
 
-    #num_simulations = 20
-    #sims_per_run    = 2
-    #for i in range(int(num_simulations/sims_per_run)):
-    #    outname = "simulations/sim_results_{}_{}.tsv".format(i, sims_per_run)
-    #    if not os.path.exists(outname):
-    #        print("running simulation {}/{}".format(i+1, int(num_simulations/sims_per_run)))
-    #        run_n_simulations_save_results(sys.argv[1],
-    #                                       sys.argv[2],
-    #                                       outname,
-    #                                       num_sims=sims_per_run,
-    #                                       abs_bin_size=25,
-    #                                       frac_bin_size=0.05,
-    #                                       verbose = True)
+    num_simulations = 40
+    sims_per_run    = 2
+    for i in range(int(num_simulations/sims_per_run)):
+        outname = "simulations/sim_results_{}_{}.tsv".format(i, sims_per_run)
+        if not os.path.exists(outname):
+            print("running simulation {}/{}".format(i+1, int(num_simulations/sims_per_run)))
+            run_n_simulations_save_results(sys.argv[1],
+                                           sys.argv[2],
+                                           outname,
+                                           num_sims=sims_per_run,
+                                           abs_bin_size=25,
+                                           frac_bin_size=0.05,
+                                           verbose = True)
 
-    ## find all the files in this directory that start with sim_results_ or dfsim_run_
-    #simulation_filepaths =  list(set(glob.glob("./simulations/sim_results_*.tsv")) | set(glob.glob("./simulations/dfsim_run_*.tsv")))
-    #if len(simulation_filepaths) == 0:
-    #    raise Exception("No simulation files found in ./simulations/")
-    #read_simulations_and_make_heatmaps(simulation_filepaths, sys.argv[2], "simulations.pdf")
+    # find all the files in this directory that start with sim_results_ or dfsim_run_
+    simulation_filepaths =  list(set(glob.glob("./simulations/sim_results_*.tsv")) | set(glob.glob("./simulations/dfsim_run_*.tsv")))
+    print(simulation_filepaths)
+    if len(simulation_filepaths) == 0:
+        raise Exception("No simulation files found in ./simulations/")
+    read_simulations_and_make_heatmaps(simulation_filepaths, sys.argv[1], sys.argv[2],
+                                       "simulations", clades_of_interest)
 
 if __name__ == "__main__":
     main()
