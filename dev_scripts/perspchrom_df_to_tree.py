@@ -326,11 +326,10 @@ def stats_df_to_loss_fusion_dfs(perspchromdf, ALGdf,
 
     The way that we do this is by going through each species, and analyzing the changes in
         ALGs on each lineage. If a change has been observed already on a lineage, then that
-        count is not double counted. TODO This may be from weighting the changes, or from
-        not incrementing the counter.
+        count is not double counted.
 
     The final matrix will show on one axis, the smaller ALG contributing to a fusion, and on
-        the other axis, the larger ALG contributing to a fusion. Doing this in a per-species
+        the other axis, the larger ALG contributing to a fusion. Doing this in a per-branch
         fashion will allow us to track the existing fusions to more accurately consider the
         changes at each evolutionary timepoint.
 
@@ -524,23 +523,19 @@ class coloc_array():
         self.num_expected_observations = 0
 
         # initialize the observed and expected matrices. Just an empty dict for now
+        # The structure of these dicts is: dict[(source, target)][(bin1, bin2)] = count
         self.observed_matrix_size_abs  = {}
         self.expected_matrix_size_abs  = {}
         self.observed_matrix_size_CC  = {}
         self.expected_matrix_size_CC  = {}
 
         # Initialize the observed and expected matrices for the fractionals.
-        #  Use a dict to store the observed and expected matrix
-        ffrange = list(np.arange(0, 1+self.frac_bin_size, self.frac_bin_size))
+        #  Same as the above, we don't do initialize anything because we don't know which phylogenetic branches
+        #   we will have.
         self.observed_matrix_frac_abs  = {}
         self.expected_matrix_frac_abs  = {}
         self.observed_matrix_frac_CC  = {}
         self.expected_matrix_frac_CC  = {}
-        for i in range(len(ffrange)):
-            for j in range(i, len(ffrange)):
-                for thisdict in [self.observed_matrix_frac_abs, self.expected_matrix_frac_abs,
-                                 self.observed_matrix_frac_CC, self.expected_matrix_frac_CC]:
-                    thisdict[(ffrange[i], ffrange[j])] = 0
 
         # Initialize the observed and expected matrices for the ALGs
         self.observed_matrix_ALG  = {}
@@ -549,7 +544,6 @@ class coloc_array():
         self.num_observed_observations_ALGs = 0
         # The number of times we ran the randomized ALG loss/fusion analysis for ALGs.
         self.num_expected_observations_ALGs = 0
-
 
         self.plotmatrix_concatdf = None  # This is the concatenation of the observed and expected matrices from many simulations
         self.plotmatrix_sumdf    = None  # This is the sum of the observed and expected matrices
@@ -590,16 +584,17 @@ class coloc_array():
         #  Many rows may be duplicated. This is only if two simulation files had the same
         #  number of counts.
         self.plotmatrix_concatdf = pd.concat(all_dfs).reset_index(drop = True)
+        print(self.plotmatrix_concatdf)
 
         # check that the len of df is not zero. If it is zero, we have not successully read in any of the files
         if len(self.plotmatrix_concatdf) == 0:
             raise Exception("No data was read in. Check that the simulation filepaths are correct.")
 
         # SUMDF FOR FINAL PLOTTING. Sum up both the obs_count and the counts
-        sumdf  = self.plotmatrix_concatdf.groupby(["ALG_num", "bin", "ob_ex", "size_frac", "abs_CC"])["counts"].sum().reset_index()
-        sumdf2 = self.plotmatrix_concatdf.groupby(["ALG_num", "bin", "ob_ex", "size_frac", "abs_CC"])["obs_count"].sum().reset_index()
+        sumdf  = self.plotmatrix_concatdf.groupby(["ALG_num", "branch", "bin", "ob_ex", "size_frac", "abs_CC"])["counts"].sum().reset_index()
+        sumdf2 = self.plotmatrix_concatdf.groupby(["ALG_num", "branch", "bin", "ob_ex", "size_frac", "abs_CC"])["obs_count"].sum().reset_index()
         # merge these so that the sumdf has both the counts and the obs_count
-        self.plotmatrix_sumdf = pd.merge(sumdf, sumdf2, on=["ALG_num", "bin", "ob_ex", "size_frac", "abs_CC"])
+        self.plotmatrix_sumdf = pd.merge(sumdf, sumdf2, on=["ALG_num", "branch", "bin", "ob_ex", "size_frac", "abs_CC"])
         self.plotmatrix_sumdf["count_per_sim"] = self.plotmatrix_sumdf["counts"]/self.plotmatrix_sumdf["obs_count"]
 
         # make sure that ALG_num.unique: ['num', 'ALG']
@@ -640,11 +635,24 @@ class coloc_array():
             oppbin = tuple(sorted([row["thiscolor"][1], row["thiscolor"][0]]))
             for thisdict in [dict, opp_dict]:
                 for bin in [thisbin, oppbin]:
-                    if bin not in thisdict:
-                        thisdict[bin] = 0
-            dict[thisbin] += 1
-            dict[oppbin]  += 1
-            # add the ALG0 info to the dict
+                    if row["thisedge"] not in thisdict:
+                        thisdict[row["thisedge"]] = {}
+                    if bin not in thisdict[row["thisedge"]]:
+                        thisdict[row["thisedge"]][bin] = 0
+            dict[row["thisedge"]][thisbin] += 1
+            dict[row["thisedge"]][oppbin]  += 1
+
+    def _safe_add_branch_bin_to_dicts(self, dicts, thisedge, bin):
+        """
+        Helper function for add_matrix. For any number of dicts, add the branch and bin to the dicts.
+        The structure of all the dicts will be dict[branch][bin] = 0
+        """
+        for thisdict in dicts:
+            # first check if the phylogenetic branch is in the dict
+            if thisedge not in thisdict:
+                thisdict[thisedge] = {}
+            if bin not in thisdict[thisedge]:
+                thisdict[thisedge][bin] = 0
 
     def add_matrix(self, coloc_array, ooe):
         """
@@ -678,35 +686,47 @@ class coloc_array():
             raise Exception("ooe must be either observed or expected")
         # iterate through the rows
         for i, row in coloc_array.iterrows():
+            # ****************** SIZE OF ALGs ***************************
             # Keep track of the sizes of the single ALGs, not the CCs
             bin0 = self._size_to_bin(row["coloc0_size"])
             bin1 = self._size_to_bin(row["coloc1_size"])
             size_key = tuple(sorted([bin0,bin1]))
-            for thisdict in [dicts["size_abs"], opp_dicts["size_abs"]]:
-                if size_key not in thisdict:
-                    thisdict[size_key] = 0
-            dicts["size_abs"][size_key] += 1
+            self._safe_add_branch_bin_to_dicts([dicts["size_abs"], opp_dicts["size_abs"]],
+                                               row["thisedge"],
+                                               size_key)
+            # In the above for loop, we have added the phylogenetic branch to the dict if it was not already there.
+            # Here, we actually add the value. The above code ensures we will protect against divide by zero errors later.
+            dicts["size_abs"][row["thisedge"]][size_key] += 1
 
+            # ********************** SIZE OF CCs ***************************
             # Keep track of the CC sizes of the ALG fusions, not the size of the individual ALGs
             bin0 = self._size_to_bin(row["coloc0_CC_size"])
             bin1 = self._size_to_bin(row["coloc1_CC_size"])
             size_key = tuple(sorted([bin0,bin1]))
-            for thisdict in [dicts["size_CC"], opp_dicts["size_CC"]]:
-                if size_key not in thisdict:
-                    thisdict[size_key] = 0
-            dicts["size_CC"][size_key] += 1
+            self._safe_add_branch_bin_to_dicts([dicts["size_CC"], opp_dicts["size_CC"]],
+                                               row["thisedge"],
+                                               size_key)
+            dicts["size_CC"][row["thisedge"]][size_key] += 1
 
+            # ********************** FRACTION OF ALGs ***************************
             # get the fraction of the single ALG size versus the largest ALG size.
             frac0 = self._frac_to_bin(row["coloc0_percent_of_largest"])
             frac1 = self._frac_to_bin(row["coloc1_percent_of_largest"])
             frac_key = tuple(sorted([frac0, frac1]))
-            dicts["frac_abs"][frac_key] += 1
+            self._safe_add_branch_bin_to_dicts([dicts["frac_abs"], opp_dicts["frac_abs"]],
+                                               row["thisedge"],
+                                               frac_key)
+            dicts["frac_abs"][row["thisedge"]][frac_key] += 1
 
+            #  ********************** FRACTION OF CCs ***************************
             # get the fraction of the CC size versus the largest ALG size.
             frac0 = self._frac_to_bin(row["coloc0_CC_percent_of_largest"])
             frac1 = self._frac_to_bin(row["coloc1_CC_percent_of_largest"])
             frac_key = tuple(sorted([frac0, frac1]))
-            dicts["frac_CC"][frac_key] += 1
+            self._safe_add_branch_bin_to_dicts([dicts["frac_CC"], opp_dicts["frac_CC"]],
+                                               row["thisedge"],
+                                               frac_key)
+            dicts["frac_CC"][row["thisedge"]][frac_key] += 1
 
     def save_obs_expected_file(self, filename):
         """
@@ -734,18 +754,20 @@ class coloc_array():
             raise Exception("self.num_observed_observations must equal self.num_expected_observations")
 
         for dictkey in iteration_dict:
-            for bin in iteration_dict[dictkey]:
-                # use the name observed if the string observed is in the variable name of thisdict
-                obex     = "observed" if "observed" in dictkey else "expected"
-                sizefrac = "size"     if "size"     in dictkey else "frac"
-                abscc    = "abs"      if "abs"      in dictkey else "CC"
-                entries.append({"ALG_num": "num",
-                                "bin": bin,
-                                "ob_ex": obex,
-                                "size_frac": sizefrac,
-                                "abs_CC": abscc,
-                                "counts": iteration_dict[dictkey][bin],
-                                "obs_count": self.num_observed_observations})
+            for branch in iteration_dict[dictkey]:
+                for bin in iteration_dict[dictkey][branch]:
+                    # use the name observed if the string observed is in the variable name of thisdict
+                    obex     = "observed" if "observed" in dictkey else "expected"
+                    sizefrac = "size"     if "size"     in dictkey else "frac"
+                    abscc    = "abs"      if "abs"      in dictkey else "CC"
+                    entries.append({"ALG_num": "num",
+                                    "branch": branch,
+                                    "bin": bin,
+                                    "ob_ex": obex,
+                                    "size_frac": sizefrac,
+                                    "abs_CC": abscc,
+                                    "counts": iteration_dict[dictkey][branch][bin],
+                                    "obs_count": self.num_observed_observations})
 
         # Enforce that the number of observed observations and the number of expected observations are the same
         # This means that the values will not be over- or under-estimated.
@@ -754,36 +776,23 @@ class coloc_array():
         # now we add the ALG entries
         iteration_dict = {"observed_ALG": self.observed_matrix_ALG, "expected_ALG": self.expected_matrix_ALG}
         for dictkey in iteration_dict:
-            for bin in iteration_dict[dictkey]:
-                # use the name observed if the string observed is in the variable name of thisdict
-                obex     = "observed" if "observed" in dictkey else "expected"
-                entries.append({"ALG_num": "ALG",
-                                "bin": bin,
-                                "ob_ex": obex,
-                                "size_frac": "size",
-                                "abs_CC": "abs",
-                                "counts": iteration_dict[dictkey][bin],
-                                "obs_count": self.num_observed_observations_ALGs})
+            for branch in iteration_dict[dictkey]:
+                for bin in iteration_dict[dictkey][branch]:
+                    # use the name observed if the string observed is in the variable name of thisdict
+                    obex     = "observed" if "observed" in dictkey else "expected"
+                    entries.append({"ALG_num": "ALG",
+                                    "branch": branch,
+                                    "bin": bin,
+                                    "ob_ex": obex,
+                                    "size_frac": "size",
+                                    "abs_CC": "abs",
+                                    "counts": iteration_dict[dictkey][branch][bin],
+                                    "obs_count": self.num_observed_observations_ALGs})
 
         # make a df of the entries
         df = pd.DataFrame(entries)
         # save it to a file, with headers, no indices
         df.to_csv(filename, sep="\t", index=False)
-
-    def ret_obs_expected(self):
-        """
-        Perform the math on the whole matrices and return.
-        Note: 20240119 - haven't used this anywhere yet.
-        """
-        ove_size = {}
-        ove_frac = {}
-
-        for thisbin in self.observed_matrix:
-            ove_size[thisbin] = 0 if self.expected_matrix[thisbin] == 0 else self.observed_matrix[thisbin]/self.expected_matrix[thisbin]
-        for thisbin in self.observed_matrix_frac:
-            ove_frac[thisbin] = 0 if self.expected_matrix_frac[thisbin] == 0 else self.observed_matrix_frac[thisbin]/self.expected_matrix_frac[thisbin]
-
-        return ove_size, ove_frac
 
 def run_n_simulations_save_results(sampledfpath, algdfpath, filename,
                                    num_sims=10, abs_bin_size=25, frac_bin_size=0.05,
@@ -1482,23 +1491,99 @@ def df_to_obs_exp_dict(df):
             ove_size[thisbin] = obsexp
     return ove_size
 
-def read_simulations_and_make_heatmaps(simulation_filepaths, algdfpath, outfilename, absmax = 6):
+class PhyloTree:
     """
-    This function reads in a file list of simulation files, sums up all the data,
-     and makes a heatmap of the results. We are able to do this as it is a Monte Carlo
-     simulation, so the results are independent.
+    This class is used to store a phylogenetic tree.
+    The tree is implemented as a directional graph.
+    The tree can be constructed by lists of edges. The nodes are inferred from the edges.
     """
-    # read in the algdf
-    algdf = parse_rbh_file(algdfpath)
-    algdf = algdf.sort_values(by=["Size"]).reset_index(drop=True)
+    def __init__(self) -> None:
+        # initialize the graph using networkx
+        self.G = nx.DiGraph()
 
-    c = coloc_array()
-    c.plotmatrix_listoffiles_to_plotmatrix(simulation_filepaths)
+    def add_taxname_to_all_nodes(self):
+        """
+        This function adds the taxname to a single node. Uses ete3.
+        """
+        # use ete3 to get the names of the taxids
+        ncbi = NCBITaxa()
+
+        for node in self.G.nodes():
+            self.G.nodes[node]["taxname"] = ncbi.get_taxid_translator([node])[node].replace(" ", "-")
+
+    def add_lineage_string(self, lineage_string) -> int:
+        """
+        The lineage strings look like this:
+          - 1;131567;2759;33154;33208;6040;6042;1779146;1779162;6060;6061;1937956;6063
+
+        Notes:
+          - The edges from this string will be (1, 131567), (131567, 2759), (2759, 33154), etc.
+        """
+        fields = [int(x) for x in lineage_string.split(";")]
+        for i in range(len(fields)-1):
+            self.G.add_edge(fields[i], fields[i+1])
+        return 0
+
+    def build_tree_from_per_sp_chrom_df(self, per_sp_chrom_df) -> int:
+        """
+        This function takes in a per_sp_chrom_df and builds a tree from it.
+        """
+        # if this is a string look for a file
+        if isinstance(per_sp_chrom_df, str):
+            per_sp_chrom_df = pd.read_csv(per_sp_chrom_df, sep="\t")
+        elif not isinstance(per_sp_chrom_df, pd.DataFrame):
+            raise Exception("per_sp_chrom_df must be either a string or a pandas dataframe")
+        # get the lineage strings
+        lineage_strings = per_sp_chrom_df["taxidstring"].unique()
+        # add each lineage string to the tree
+        for thislineage in lineage_strings:
+            self.add_lineage_string(thislineage)
+        return 0
+
+    def get_edges_in_clade(self, node) -> list:
+        """
+        This function takes in a node ID (clade and returns a recursive list of all the daughter edges.
+        """
+        if not isinstance(node, int):
+            node = int(node)
+        # get the outgoing edges from this node. Cast to tuples
+        daughter_edges = list(self.G.out_edges(node))
+        # recursive break condition - if there are no outgoing edges, then return an empty list
+        if len(daughter_edges) == 0:
+            return []
+        daughter_nodes = [x[1] for x in daughter_edges]
+        for thisnode in daughter_nodes:
+            daughter_edges += self.get_edges_in_clade(thisnode)
+        # return the edges
+        return daughter_edges
+
+def _make_one_simulation_plot(algdf, c, T, taxid, outfileprefix, absmax = 6):
+    """
+    makes a single plot for a single NCBI taxid
+
+    Inputs:
+      - c is the coloc_array object
+      - T is the PhyloTree object
+      - taxid is the NCBI taxid that we are plotting
+    """
+    # First we figure out which branches are in the clade we care about.
+    # we cast the tuples to strings because of how they're stored in the df
+    branches_in_clade = [str(x) for x in T.get_edges_in_clade(taxid)]
+    taxon_name = T.G.nodes[taxid]["taxname"]
+    # raise an error if ther eis nothing in this clade
+    if len(branches_in_clade) == 0:
+        raise Exception("There are no branches in the clade {}".format(taxid))
+    # make a filtered df that only contains the branches in the clade
+    plotdf = c.plotmatrix_sumdf[c.plotmatrix_sumdf["branch"].isin(branches_in_clade)]
+
+    # now we don't care about the branch. Groupby the other columns and sum them up. They are all counts
+    plotdf = plotdf.groupby(["ALG_num", "bin", "ob_ex", "size_frac", "abs_CC", "obs_count"])["counts"].sum().reset_index()
+    plotdf["count_per_sim"] = plotdf["counts"] / plotdf["obs_count"]
 
     # make one big plot with all of the data
     # Make the figure
     fw = 20
-    fh = 13
+    fh = 32
     fig = plt.figure(figsize=(fw, fh))
     axes = []
 
@@ -1517,7 +1602,7 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, algdfpath, outfilen
             axes.append(fig.add_axes(counts))
             axes.append(fig.add_axes(cbar))
             temp1, temp2 = generate_mean_counts_panel(
-                axes[-2], axes[-1], c.plotmatrix_sumdf, thissize, thisabs)
+                axes[-2], axes[-1], plotdf, thissize, thisabs)
             axes[-2] = temp1
             axes[-1] = temp2
 
@@ -1526,12 +1611,12 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, algdfpath, outfilen
             axes.append(fig.add_axes(counts))
             axes.append(fig.add_axes(cbar))
             temp1, temp2 = generate_obs_exp_panel(
-                axes[-2], axes[-1], c.plotmatrix_sumdf, thissize, thisabs)
+                axes[-2], axes[-1], plotdf, thissize, thisabs)
 
-            # generate the square for the trace.
-            axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
-            # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
-            axes[-1] = generate_trace_panel(axes[-1], simulation_filepaths, "num", thissize, thisabs)
+            ## generate the square for the trace.
+            #axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
+            ## add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+            #axes[-1] = generate_trace_panel(axes[-1], simulation_filepaths, "num", thissize, thisabs)
 
             # update the bottom
             bottom = bottom + panelheight + 1.1
@@ -1541,7 +1626,7 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, algdfpath, outfilen
     axes.append(fig.add_axes(counts))
     axes.append(fig.add_axes(cbar))
     temp1, temp2 = generate_ALG_mean_counts_panel(
-        axes[-2], axes[-1], c.plotmatrix_sumdf, algdf)
+        axes[-2], axes[-1], plotdf, algdf)
     axes[-2] = temp1
     axes[-1] = temp2
 
@@ -1550,18 +1635,49 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, algdfpath, outfilen
     axes.append(fig.add_axes(counts))
     axes.append(fig.add_axes(cbar))
     temp1, temp2 = generate_ALG_obs_exp_counts_panel(
-        axes[-2], axes[-1], c.plotmatrix_sumdf, algdf)
+        axes[-2], axes[-1], plotdf, algdf)
     axes[-2] = temp1
     axes[-1] = temp2
 
-    # generate the square for the trace.
-    axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
-    # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
-    axes[-1] = generate_trace_panel(axes[-1], simulation_filepaths, "ALG", "size", "abs")
+    ## generate the square for the trace.
+    #axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
+    ## add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+    #axes[-1] = generate_trace_panel(axes[-1], simulation_filepaths, "ALG", "size", "abs")
 
+    # Add a title to the plot to indicate the NCBI taxid and the taxon name
+    # Move it to the middle of the plot
+    fig_title = "NCBI taxid: {}, taxon name: {}".format(taxid, taxon_name)
+    plt.text(-0.75, 1.15, fig_title, fontsize = 30, horizontalalignment='right', verticalalignment='center', transform=plt.gca().transAxes)
 
+    outfilename = "{}_{}_{}.pdf".format(outfileprefix, taxid, taxon_name)
     # save the plot as a pdf
     fig.savefig(outfilename, bbox_inches="tight")
+    plt.close()
+
+def read_simulations_and_make_heatmaps(simulation_filepaths, per_sp_df, algdfpath, outfileprefix,
+                                       clades_of_interest, absmax = 6):
+    """
+    This function reads in a file list of simulation files, sums up all the data,
+     and makes a heatmap of the results.
+
+    Makes on plot per NCBI taxid that we care about.
+    We are able to do this as it is a Monte Carlo
+     simulation, so the results are independent.
+    """
+    # Try to build a tree and print a clade
+    T = PhyloTree()
+    T.build_tree_from_per_sp_chrom_df(per_sp_df)
+    T.add_taxname_to_all_nodes()
+
+    # read in the algdf
+    algdf = parse_rbh_file(algdfpath)
+    algdf = algdf.sort_values(by=["Size"]).reset_index(drop=True)
+
+    c = coloc_array()
+    c.plotmatrix_listoffiles_to_plotmatrix(simulation_filepaths)
+
+    for taxid in clades_of_interest:
+        _make_one_simulation_plot(algdf, c, T, taxid, outfileprefix, absmax = absmax)
 
 def unit_test_coloc_array_identical():
     """
@@ -1617,6 +1733,10 @@ def unit_test_coloc_array_identical():
 
 
 def main():
+    clades_of_interest = [6605, # cephalopods
+                          #33208 # Metazoa
+                          ]
+
     ## Specify the file path of the TSV file. Use sys.argv[1]. The file will be called something like per_species_ALG_presence_fusions.tsv
     #generate_stats_df(sys.argv[1], "statsdf.tsv")
 
@@ -1627,7 +1747,7 @@ def main():
     #                               abs_bin_size=25   ,
     #                               frac_bin_size=0.05,
     #                               verbose = True    )
-    #read_simulations_and_make_heatmaps(["testfile.tsv"], sys.argv[2], "simulations.pdf")
+    read_simulations_and_make_heatmaps(["testfile.tsv"], sys.argv[1], sys.argv[2], "simulations", clades_of_interest)
 
     #sampledf = pd.read_csv(sys.argv[1], sep="\t")
     #algdf = parse_rbh_file(sys.argv[2])
@@ -1643,25 +1763,25 @@ def main():
     #print(ALG_coloc_df)
     #sys.exit()
 
-    num_simulations = 20
-    sims_per_run    = 2
-    for i in range(int(num_simulations/sims_per_run)):
-        outname = "simulations/sim_results_{}_{}.tsv".format(i, sims_per_run)
-        if not os.path.exists(outname):
-            print("running simulation {}/{}".format(i+1, int(num_simulations/sims_per_run)))
-            run_n_simulations_save_results(sys.argv[1],
-                                           sys.argv[2],
-                                           outname,
-                                           num_sims=sims_per_run,
-                                           abs_bin_size=25,
-                                           frac_bin_size=0.05,
-                                           verbose = True)
+    #num_simulations = 20
+    #sims_per_run    = 2
+    #for i in range(int(num_simulations/sims_per_run)):
+    #    outname = "simulations/sim_results_{}_{}.tsv".format(i, sims_per_run)
+    #    if not os.path.exists(outname):
+    #        print("running simulation {}/{}".format(i+1, int(num_simulations/sims_per_run)))
+    #        run_n_simulations_save_results(sys.argv[1],
+    #                                       sys.argv[2],
+    #                                       outname,
+    #                                       num_sims=sims_per_run,
+    #                                       abs_bin_size=25,
+    #                                       frac_bin_size=0.05,
+    #                                       verbose = True)
 
-    # find all the files in this directory that start with sim_results_ or dfsim_run_
-    simulation_filepaths =  list(set(glob.glob("./simulations/sim_results_*.tsv")) | set(glob.glob("./simulations/dfsim_run_*.tsv")))
-    if len(simulation_filepaths) == 0:
-        raise Exception("No simulation files found in ./simulations/")
-    read_simulations_and_make_heatmaps(simulation_filepaths, sys.argv[2], "simulations.pdf")
+    ## find all the files in this directory that start with sim_results_ or dfsim_run_
+    #simulation_filepaths =  list(set(glob.glob("./simulations/sim_results_*.tsv")) | set(glob.glob("./simulations/dfsim_run_*.tsv")))
+    #if len(simulation_filepaths) == 0:
+    #    raise Exception("No simulation files found in ./simulations/")
+    #read_simulations_and_make_heatmaps(simulation_filepaths, sys.argv[2], "simulations.pdf")
 
 if __name__ == "__main__":
     main()
