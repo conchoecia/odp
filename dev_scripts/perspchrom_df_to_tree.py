@@ -1785,24 +1785,35 @@ def unit_test_coloc_array_identical():
 def main():
     #generate_node_taxid_file_from_per_sp_chrom_df(sys.argv[1], "node_taxid.tsv")
 
-    clades_of_interest = [10197,   # Ctenophora
-                          33213,   # Bilateria
-                          31265,   # Acoela
-                          33317,   # Protostomia
-                          1206794, # Ecdysozoa
-                          6231,    # Nematoda
-                          88770,   # Panarthropoda
-                          7088,    # Lepidoptera
-                          2697495, # Spiralia
-                          6544,    # Bivalvia
-                          7586,    # Echinodermata
-                          6073,    # Cnidaria
-                          7711,    # Chordata
-                          7742,    # Vertebrata
-                          6605,    # cephalopods
-                          33208,   # Metazoa
-                          6040,    # Porifera
-                          6042,    # Demospongiae
+    # how many BCnS ALGs correspond to two or more chromosomes
+    # obs/exp value for different ALG fusion combinations
+    # obs/exp value for number of losses
+    # x-axis number of chromosomes, in that species, y-axis is number of fusions leading
+    # x-axis number of chromosomes, in that speciers, y-axis is the number of losses
+    #  ... and some variation on that.
+    clades_of_interest = [6340,     # Annelida
+                          6447,     # Mollusca
+                          6606,     # Coleoidea
+                          33511,    # Deuterostomia
+                          33317,    # Protostomia
+                          # 10197,   # Ctenophora
+                          # 33213,   # Bilateria
+                          # 31265,   # Acoela
+                          # 33317,   # Protostomia
+                          # 1206794, # Ecdysozoa
+                          # 6231,    # Nematoda
+                          # 88770,   # Panarthropoda
+                          # 7088,    # Lepidoptera
+                          # 2697495, # Spiralia
+                          # 6544,    # Bivalvia
+                          # 7586,    # Echinodermata
+                          # 6073,    # Cnidaria
+                          # 7711,    # Chordata
+                          # 7742,    # Vertebrata
+                          # 6605,    # cephalopods
+                          # 33208,   # Metazoa
+                          # 6040,    # Porifera
+                          # 6042,    # Demospongiae
                           ]
 
     ## Specify the file path of the TSV file. Use sys.argv[1]. The file will be called something like per_species_ALG_presence_fusions.tsv
