@@ -40,8 +40,8 @@ rule sim:
         sims_per_file = config["sims_per_file"]
     threads: 1
     resources:
-        runtime = 40,   # around 100 simulations takes 20 minutes
-        mem_mb  = 400
+        runtime = 60,   # around 100 simulations takes 20 minutes
+        mem_mb  = 1200
     run:
         pdtt.run_n_simulations_save_results(input.sampledf,
                                            input.rbhdf,

@@ -1030,6 +1030,9 @@ def generate_ALG_mean_counts_panel(ax, cax, sumdf, ALGdf):
     df_ALG["ALG1"] = df_ALG["bin"].apply(lambda x: x[0])
     df_ALG["ALG2"] = df_ALG["bin"].apply(lambda x: x[1])
 
+    print(df_ALG)
+
+
     # This was for debugging - can be deleted
     # # print all the rows with the value R in col ALG1 or ALG2
     # print(df_ALG[(df_ALG["ALG1"] == "R") | (df_ALG["ALG2"] == "R")])
@@ -1536,22 +1539,46 @@ class PhyloTree:
             self.add_lineage_string(thislineage)
         return 0
 
+    def _get_edges_in_clade_helper(self, node):
+        """
+        This is the recursive case for the get_edges_in_clade function.
+        """
+        # get the outgoing edges from this node.
+        out_edges = list(self.G.out_edges(node))
+        # recursive break condition - if there are no outgoing edges, then return an empty list
+        if len(out_edges) == 0:
+            return []
+        out_nodes = [x[1] for x in out_edges]
+        for thisnode in out_nodes:
+            out_edges += self._get_edges_in_clade_helper(thisnode)
+        return out_edges
+
     def get_edges_in_clade(self, node) -> list:
         """
-        This function takes in a node ID (clade and returns a recursive list of all the daughter edges.
+        This function takes in a node ID (clade and returns a recursive list of all
+          the outgoing edges, and the single incoming edge.
         """
         if not isinstance(node, int):
             node = int(node)
-        # get the outgoing edges from this node. Cast to tuples
-        daughter_edges = list(self.G.out_edges(node))
-        # recursive break condition - if there are no outgoing edges, then return an empty list
-        if len(daughter_edges) == 0:
-            return []
-        daughter_nodes = [x[1] for x in daughter_edges]
-        for thisnode in daughter_nodes:
-            daughter_edges += self.get_edges_in_clade(thisnode)
-        # return the edges
-        return daughter_edges
+
+        # get the single incoming edge. Make sure it is a tuple
+        in_edges = list(self.G.in_edges(node))
+        print("The in edges are {}".format(in_edges))
+        if len(in_edges) > 1:
+            raise Exception("There should only be one incoming edge. We don't allow reticulate phylogenetic trees. Found {}".format(in_edges))
+
+        return in_edges + self._get_edges_in_clade_helper(node)
+
+def generate_node_taxid_file_from_per_sp_chrom_df(per_sp_chrom_df, outfile):
+    """
+    Builds a tree from the per_sp_chrom_df and writes a file that contains the taxid and the node ID
+    """
+    T = PhyloTree()
+    T.build_tree_from_per_sp_chrom_df(per_sp_chrom_df)
+    T.add_taxname_to_all_nodes()
+    with open(outfile, "w") as f:
+        for node in T.G.nodes():
+            f.write("{}\t{}\n".format(node, T.G.nodes[node]["taxname"]))
 
 def _make_one_simulation_plot(algdf, c, T, taxid, simulation_filepaths,
                               outfileprefix, absmax = 6):
@@ -1567,6 +1594,12 @@ def _make_one_simulation_plot(algdf, c, T, taxid, simulation_filepaths,
     # we cast the tuples to strings because of how they're stored in the df
     branches_in_clade = [str(x) for x in T.get_edges_in_clade(taxid)]
     taxon_name = T.G.nodes[taxid]["taxname"]
+    print("We're plotting the taxid {} ({})".format(taxid, taxon_name))
+    print("branches in this clade are")
+    for thisbranch in branches_in_clade:
+        taxid1 = int(thisbranch.split(",")[0].replace("(", ""))
+        taxid2 = int(thisbranch.split(",")[1].replace(")", ""))
+        print("  {}:  {}-{}".format(thisbranch, T.G.nodes[taxid1]["taxname"], T.G.nodes[taxid2]["taxname"]))
     # raise an error if ther eis nothing in this clade
     if len(branches_in_clade) == 0:
         raise Exception("There are no branches in the clade {}".format(taxid))
@@ -1738,8 +1771,26 @@ def unit_test_coloc_array_identical():
 
 
 def main():
-    clades_of_interest = [6605, # cephalopods
-                          #33208 # Metazoa
+    #generate_node_taxid_file_from_per_sp_chrom_df(sys.argv[1], "node_taxid.tsv")
+
+    clades_of_interest = [10197,   # Ctenophora
+                          33213,   # Bilateria
+                          31265,   # Acoela
+                          33317,   # Protostomia
+                          1206794, # Ecdysozoa
+                          6231,    # Nematoda
+                          88770,   # Panarthropoda
+                          7088,    # Lepidoptera
+                          2697495, # Spiralia
+                          6544,    # Bivalvia
+                          7586,    # Echinodermata
+                          6073,    # Cnidaria
+                          7711,    # Chordata
+                          7742,    # Vertebrata
+                          6605,    # cephalopods
+                          33208,   # Metazoa
+                          6040,    # Porifera
+                          6042,    # Demospongiae
                           ]
 
     ## Specify the file path of the TSV file. Use sys.argv[1]. The file will be called something like per_species_ALG_presence_fusions.tsv
@@ -1768,7 +1819,7 @@ def main():
     #print(ALG_coloc_df)
     #sys.exit()
 
-    num_simulations = 40
+    num_simulations = 60
     sims_per_run    = 2
     for i in range(int(num_simulations/sims_per_run)):
         outname = "simulations/sim_results_{}_{}.tsv".format(i, sims_per_run)
