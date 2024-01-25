@@ -39,6 +39,8 @@ rule sim:
     params:
         sims_per_file = config["sims_per_file"]
     threads: 1
+    benchmark:
+        "benchmarks/sim_{simnum}.tsv"
     resources:
         runtime = 60,   # around 100 simulations takes 20 minutes
         mem_mb  = 1200
