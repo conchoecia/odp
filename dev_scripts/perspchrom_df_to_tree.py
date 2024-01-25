@@ -1030,9 +1030,6 @@ def generate_ALG_mean_counts_panel(ax, cax, sumdf, ALGdf):
     df_ALG["ALG1"] = df_ALG["bin"].apply(lambda x: x[0])
     df_ALG["ALG2"] = df_ALG["bin"].apply(lambda x: x[1])
 
-    print(df_ALG)
-
-
     # This was for debugging - can be deleted
     # # print all the rows with the value R in col ALG1 or ALG2
     # print(df_ALG[(df_ALG["ALG1"] == "R") | (df_ALG["ALG2"] == "R")])
@@ -1594,12 +1591,13 @@ def _make_one_simulation_plot(algdf, c, T, taxid, simulation_filepaths,
     # we cast the tuples to strings because of how they're stored in the df
     branches_in_clade = [str(x) for x in T.get_edges_in_clade(taxid)]
     taxon_name = T.G.nodes[taxid]["taxname"]
-    print("We're plotting the taxid {} ({})".format(taxid, taxon_name))
-    print("branches in this clade are")
-    for thisbranch in branches_in_clade:
-        taxid1 = int(thisbranch.split(",")[0].replace("(", ""))
-        taxid2 = int(thisbranch.split(",")[1].replace(")", ""))
-        print("  {}:  {}-{}".format(thisbranch, T.G.nodes[taxid1]["taxname"], T.G.nodes[taxid2]["taxname"]))
+    ## this is useful for debugging
+    #print("We're plotting the taxid {} ({})".format(taxid, taxon_name))
+    #print("branches in this clade are")
+    #for thisbranch in branches_in_clade:
+    #    taxid1 = int(thisbranch.split(",")[0].replace("(", ""))
+    #    taxid2 = int(thisbranch.split(",")[1].replace(")", ""))
+    #    print("  {}:  {}-{}".format(thisbranch, T.G.nodes[taxid1]["taxname"], T.G.nodes[taxid2]["taxname"]))
     # raise an error if ther eis nothing in this clade
     if len(branches_in_clade) == 0:
         raise Exception("There are no branches in the clade {}".format(taxid))
@@ -1614,82 +1612,96 @@ def _make_one_simulation_plot(algdf, c, T, taxid, simulation_filepaths,
     plotdf["count_per_sim"] = plotdf["counts"] / plotdf["obs_count"]
 
     print("the plotdf is:\n{}".format(plotdf))
+    plotting = True if len(plotdf) > 0 else False
 
-    # make one big plot with all of the data
-    # Make the figure
-    fw = 20
-    fh = 32
-    fig = plt.figure(figsize=(fw, fh))
-    axes = []
+    if not plotting:
+        fig = plt.figure(figsize=(6, 2))
+        # turn off all the axes
+        plt.axis('off')
+        figtitle = "Sorry, we did not observe and fusions on the branch leading up to or within the clade: {} - {}".format(
+            taxid, taxon_name)
+        plt.text(0.5, 0.5, figtitle, fontsize = 30, horizontalalignment='center',
+                 verticalalignment='center', transform=plt.gca().transAxes)
+        outfilename = "{}_{}_{}.pdf".format(outfileprefix, taxid, taxon_name)
+        # save the plot as a pdf
+        fig.savefig(outfilename, bbox_inches="tight")
+        plt.close()
+    elif plotting:
+        # make one big plot with all of the data
+        # Make the figure
+        fw = 20
+        fh = 32
+        fig = plt.figure(figsize=(fw, fh))
+        axes = []
 
-    #for aligning all the panels
-    left1 = 0.6
-    left2 = 7.5
-    left3 = 14
+        #for aligning all the panels
+        left1 = 0.6
+        left2 = 7.5
+        left3 = 14
 
-    # CC, size section below
-    bottom = 0.6
-    panelheight = 5
-    for thisabs in ["abs", "CC"]:
-        for thissize in ["frac", "size"]:
-            # make a plot of the mean counts
-            counts, cbar = gen_square_ax_and_colorbar(left1, bottom, fw, fh, panelheight)
-            axes.append(fig.add_axes(counts))
-            axes.append(fig.add_axes(cbar))
-            temp1, temp2 = generate_mean_counts_panel(
-                axes[-2], axes[-1], plotdf, thissize, thisabs)
-            axes[-2] = temp1
-            axes[-1] = temp2
+        # CC, size section below
+        bottom = 0.6
+        panelheight = 5
+        for thisabs in ["abs", "CC"]:
+            for thissize in ["frac", "size"]:
+                # make a plot of the mean counts
+                counts, cbar = gen_square_ax_and_colorbar(left1, bottom, fw, fh, panelheight)
+                axes.append(fig.add_axes(counts))
+                axes.append(fig.add_axes(cbar))
+                temp1, temp2 = generate_mean_counts_panel(
+                    axes[-2], axes[-1], plotdf, thissize, thisabs)
+                axes[-2] = temp1
+                axes[-1] = temp2
 
-            # make the heatmap axes
-            counts, cbar = gen_square_ax_and_colorbar(left2, bottom, fw, fh, panelheight)
-            axes.append(fig.add_axes(counts))
-            axes.append(fig.add_axes(cbar))
-            temp1, temp2 = generate_obs_exp_panel(
-                axes[-2], axes[-1], plotdf, thissize, thisabs)
+                # make the heatmap axes
+                counts, cbar = gen_square_ax_and_colorbar(left2, bottom, fw, fh, panelheight)
+                axes.append(fig.add_axes(counts))
+                axes.append(fig.add_axes(cbar))
+                temp1, temp2 = generate_obs_exp_panel(
+                    axes[-2], axes[-1], plotdf, thissize, thisabs)
 
-            # generate the square for the trace.
-            axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
-            # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
-            axes[-1] = generate_trace_panel(axes[-1], branches_in_clade,
-                                            simulation_filepaths, "num", thissize, thisabs)
+                # generate the square for the trace.
+                axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
+                # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+                axes[-1] = generate_trace_panel(axes[-1], branches_in_clade,
+                                                simulation_filepaths, "num", thissize, thisabs)
 
-            # update the bottom
-            bottom = bottom + panelheight + 1.1
+                # update the bottom
+                bottom = bottom + panelheight + 1.1
 
-    # make a plot of the mean ALG counts
-    counts, cbar = gen_square_ax_and_colorbar(left1, bottom, fw, fh, panelheight)
-    axes.append(fig.add_axes(counts))
-    axes.append(fig.add_axes(cbar))
-    temp1, temp2 = generate_ALG_mean_counts_panel(
-        axes[-2], axes[-1], plotdf, algdf)
-    axes[-2] = temp1
-    axes[-1] = temp2
+        # make a plot of the mean ALG counts
+        counts, cbar = gen_square_ax_and_colorbar(left1, bottom, fw, fh, panelheight)
+        axes.append(fig.add_axes(counts))
+        axes.append(fig.add_axes(cbar))
+        temp1, temp2 = generate_ALG_mean_counts_panel(
+            axes[-2], axes[-1], plotdf, algdf)
+        axes[-2] = temp1
+        axes[-1] = temp2
 
-    # make a plot of the mean ALG counts
-    counts, cbar = gen_square_ax_and_colorbar(left2, bottom, fw, fh, panelheight)
-    axes.append(fig.add_axes(counts))
-    axes.append(fig.add_axes(cbar))
-    temp1, temp2 = generate_ALG_obs_exp_counts_panel(
-        axes[-2], axes[-1], plotdf, algdf)
-    axes[-2] = temp1
-    axes[-1] = temp2
+        # make a plot of the mean ALG counts
+        counts, cbar = gen_square_ax_and_colorbar(left2, bottom, fw, fh, panelheight)
+        axes.append(fig.add_axes(counts))
+        axes.append(fig.add_axes(cbar))
+        temp1, temp2 = generate_ALG_obs_exp_counts_panel(
+            axes[-2], axes[-1], plotdf, algdf)
+        axes[-2] = temp1
+        axes[-1] = temp2
 
-    # generate the square for the trace.
-    axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
-    # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
-    axes[-1] = generate_trace_panel(axes[-1], branches_in_clade,
-                                    simulation_filepaths, "ALG", "size", "abs")
+        # generate the square for the trace.
+        axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
+        # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+        axes[-1] = generate_trace_panel(axes[-1], branches_in_clade,
+                                        simulation_filepaths, "ALG", "size", "abs")
 
-    # Add a title to the plot to indicate the NCBI taxid and the taxon name
-    # Move it to the middle of the plot
-    fig_title = "NCBI taxid: {}, taxon name: {}".format(taxid, taxon_name)
-    plt.text(-0.75, 1.15, fig_title, fontsize = 30, horizontalalignment='right', verticalalignment='center', transform=plt.gca().transAxes)
+        # Add a title to the plot to indicate the NCBI taxid and the taxon name
+        # Move it to the middle of the plot
+        fig_title = "NCBI taxid: {}, taxon name: {}".format(taxid, taxon_name)
+        plt.text(-0.75, 1.15, fig_title, fontsize = 30, horizontalalignment='right', verticalalignment='center', transform=plt.gca().transAxes)
 
-    outfilename = "{}_{}_{}.pdf".format(outfileprefix, taxid, taxon_name)
-    # save the plot as a pdf
-    fig.savefig(outfilename, bbox_inches="tight")
-    plt.close()
+        outfilename = "{}_{}_{}.pdf".format(outfileprefix, taxid, taxon_name)
+        # save the plot as a pdf
+        fig.savefig(outfilename, bbox_inches="tight")
+        plt.close()
 
 def read_simulations_and_make_heatmaps(simulation_filepaths, per_sp_df, algdfpath, outfileprefix,
                                        clades_of_interest, absmax = 6):
