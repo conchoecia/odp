@@ -7,6 +7,15 @@ sys.arvg[1] the path to the 'per_species_ALG_presence_fusions.tsv' file
 sys.arvg[2] the path to the 'species_chrom_counts.tsv' file
 """
 
+# odp stuff to format the plot
+import os
+import sys
+# ODP-specific imports
+thisfile_path = os.path.dirname(os.path.realpath(__file__))
+scripts_path = os.path.join(thisfile_path, "../scripts")
+sys.path.insert(1, scripts_path)
+import odp_plotting_functions as odp_plot
+
 # matplotlib stuff
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -207,6 +216,9 @@ def panel_chromosomes_vs_fractionloss(ax, labels, chromnum, colocs, losses, num_
     fraction_coloc = []
     new_chromnum   = []
 
+    ignored_fraction_coloc = []
+    ignored_chromnum       = []
+
     for i in range(len(chromnum)):
         # FIRST DO COLOC
         num_combinations = comb(num_ALGs + losses[i], 2)
@@ -214,10 +226,18 @@ def panel_chromosomes_vs_fractionloss(ax, labels, chromnum, colocs, losses, num_
             pass
             #fraction_coloc.append(0)
         else:
-            fraction_coloc.append(colocs[i]/num_combinations)
-            new_chromnum.append(chromnum[i])
+            thisfrac = colocs[i]/num_combinations
+            if thisfrac == 0:
+                ignored_fraction_coloc.append(thisfrac)
+                ignored_chromnum.append(chromnum[i])
+            else:
+                fraction_coloc.append(thisfrac)
+                new_chromnum.append(chromnum[i])
 
-    ax.scatter(new_chromnum, fraction_coloc, color="black", lw = 0, alpha = 0.05)
+    ax.scatter(new_chromnum, fraction_coloc,
+               color = "black", lw = 0, alpha = 0.05)
+    ax.scatter(ignored_chromnum, ignored_fraction_coloc,
+               color = "red", lw = 0, alpha = 0.05)
     ax.set_xlim(0, np.median(chromnum)*3)
     ax.set_xlabel("Number of chromosomes")
     ax.set_ylabel("Fraction of possible fusions")
@@ -246,6 +266,12 @@ def panel_chromosomes_vs_fractionloss(ax, labels, chromnum, colocs, losses, num_
     ax.text(0.5, 0.75, "chromnum <= 20\nSpearman's coeff.: {:.3f}\nP-value: {:e}\nKendall's tau coeff: {:.3f}\nP-value: {:e}".format(
         spearman_corr, p_value, kendall_tau, kp_value), va= "top", transform=ax.transAxes)
 
+    # Make a legend
+    ax.scatter([], [], label = "coeff. measured",
+               color = "black", lw = 0, alpha = 0.8)
+    ax.scatter([], [], label = "coeff. ignored",
+               color="red", lw = 0, alpha = 0.8)
+    ax.legend(loc="center right")
 
     return ax
 
@@ -341,6 +367,9 @@ def plot_chrom_number_vs_changes(changesfilename, chromsizefilename, outfilename
     """
     saves a pdf of the plot of the number of chromosomes vs the number of changes
     """
+    # CALL THIS TO GET THE VISUAL STYLE WE NEED
+    odp_plot.format_matplotlib()
+
     # make a dictionary of the sample id to the number of chromosomes
     df = pd.read_csv(chromsizefilename, sep='\t')
     chromsize_to_chromnumber = dict(zip(df["sample"], df["chromosomes"]))
