@@ -372,7 +372,7 @@ rule make_diamond_and_blast_db:
         """
         mkdir -p {params.outdir}
         diamond makedb --in {input.pep} --db {output.dmnd}
-        zcat {input.pep} | makeblastdb -in -out {input.pep} -title {params.title} -dbtype prot
+        zcat {input.pep} | makeblastdb -in - -out {input.pep} -title {params.title} -dbtype prot
         """
 
 rule diamond_blast:
@@ -383,10 +383,10 @@ rule diamond_blast:
     input:
         pep1  = ancient(config["tool"] + "/db/{sample1}_prots.pep.gz"),
         pep2  = ancient(config["tool"] + "/db/{sample2}_prots.pep.gz"),
-        phr   = ancient(config["tool"] + "/db/{sample2}_prots.pep.phr"),
-        pin   = ancient(config["tool"] + "/db/{sample2}_prots.pep.pin"),
-        psq   = ancient(config["tool"] + "/db/{sample2}_prots.pep.psq"),
-        dmnd2 = ancient(config["tool"] + "/db/dmnd/{sample2}_prots.dmnd"),
+        phr   = ancient(config["tool"] + "/db/{sample2}_prots.pep.gz.phr"),
+        pin   = ancient(config["tool"] + "/db/{sample2}_prots.pep.gz.pin"),
+        psq   = ancient(config["tool"] + "/db/{sample2}_prots.pep.gz.psq"),
+        dmnd2 = ancient(config["tool"] + "/db/dmnd/{sample2}_prots.gz.dmnd"),
     output:
         blastp = config["tool"] + "/step0-blastp_results/{sample1}_against_{sample2}.blastp"
     benchmark: "benchmarks/diamond_blast/{sample1}_{sample2}_diamond_blast.benchmark.txt"
