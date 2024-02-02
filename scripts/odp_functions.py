@@ -41,11 +41,23 @@ def general_legal_run():
        We do not allow this, as some of the outfiles may overwrite program files.
     """
     snakefile_path = os.path.dirname(os.path.abspath(__file__))
-    odp_path = os.path.abspath(os.path.join(snakefile_path, ".."))
+    odp_path   = os.path.abspath(os.path.join(snakefile_path, ".."))
+    safe_dirs   = [os.path.join(odp_path, "tests/test_odp_basic")]
     cwd      = os.getcwd()
 
+
+    # if we are in the odp directory, but in the test directory, that's fine
     # test if we are in the odp directory
+    crash = False
     if odp_path in cwd:
+        crash = True
+    if cwd in safe_dirs:
+        # we don't care, actually. Just put the flag back to False
+        print(f"We are in the test directory, {cwd}", file = sys.stderr)
+        crash = False
+
+    # check to see if we crash
+    if crash:
         # raise an error telling the user not to run the analysis in the odp directory
         outmessage =  "*********************************************************************\n"
         outmessage += "* ERROR:\n"
