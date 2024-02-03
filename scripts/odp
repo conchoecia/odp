@@ -298,18 +298,17 @@ rule check_input_legality:
         # We always check to see if the chrom file is legal, regardless of whether we're ignoring duplicate prots.
         if not odpf.chrom_file_is_legal(input.chrom):
             raise IOError("The chrom file is not legal: {}".format(input.chrom))
-        if params.duplicate_handling == "fail":
-            # We want to enforce that the input files are legal
-            # See the odpf.check_species_input_legality function for more details
-            if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom):
-                with open(output.input_pass, "w") as outf:
-                    outf.write("pass")
-        elif params.duplicate_handling == "pass":
-            # we just assume that everything is copacetic and let the program continue
+        if params.duplicate_handling not in ["fail", "pass"]:
+            raise IOError("duplicate_proteins in the config.yaml must be set to either 'fail' or 'pass'")
+        dup_proteins_allowed = False
+        if params.duplicate_handling == "pass":
+            dup_proteins_allowed = True
+
+        if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom,
+                                             dup_proteins_allowed):
+            # we only write the file if it passes
             with open(output.input_pass, "w") as outf:
                 outf.write("pass")
-        else:
-            raise IOError("Right now we can only handle fail and pass cases. Sorry.")
 
 def filtprot_get_mem_mb(wildcards, attempt):
     """

@@ -41,10 +41,9 @@ def general_legal_run():
        We do not allow this, as some of the outfiles may overwrite program files.
     """
     snakefile_path = os.path.dirname(os.path.abspath(__file__))
-    odp_path   = os.path.abspath(os.path.join(snakefile_path, ".."))
-    safe_dirs   = [os.path.join(odp_path, "tests/test_odp_basic")]
-    cwd      = os.getcwd()
-
+    odp_path       = os.path.abspath(os.path.join(snakefile_path, ".."))
+    safe_dirs      = [os.path.join(odp_path, "tests/test_odp_basic")]
+    cwd            = os.path.abspath(os.getcwd())
 
     # if we are in the odp directory, but in the test directory, that's fine
     # test if we are in the odp directory
@@ -357,7 +356,7 @@ def chrom_file_is_legal(chrompath):
     # if we get here, everything is good
     return True
 
-def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
+def check_species_input_legality(fastapath, peppath, chrompath, dup_proteins_allowed = False) -> bool:
     """
     This function checks that the input files are legal.
     There are certain fields that are required,
@@ -377,6 +376,9 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
       2. Check that the proteins in column 1 were seen in the protein fasta file
       3. Check that the scaffolds were seen in the genome assembly fasta file
     """
+    # we need to check that dup_proteins_allowed is type bool
+    if not isinstance(dup_proteins_allowed, bool):
+        raise IOError("dup_proteins_allowed must be a boolean, True or False. However, it is " + str(dup_proteins_allowed) + " of type " + str(type(dup_proteins_allowed)) + ".")
 
     # PARSE AND CHECK THE GENOME ASSEMBLY
     # 1. check that the file exists
@@ -435,6 +437,7 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
         outmessage += "* ERROR:\n"
         outmessage += "*  There is a protein fasta with duplicate sequence headers.\n"
         outmessage += "*  Each sequence in the protein fasta must have a unique ID.\n"
+        outmessage += "*  Otherwise, how are we to know which sequence is which?\n"
         outmessage += "*\n"
         outmessage += "*  The protein pep with the problem is: " + peppath + "\n"
         outmessage += "*  There are " + str(len(duplicate_headers)) + " duplicate sequence headers.\n"
@@ -449,38 +452,72 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
         outmessage += "*********************************************************************\n"
         raise IOError(outmessage)
 
-    # 3. Check that each sequence ID exists only once
-    if len(duplicate_sequences) > 0:
-        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicate_sequences)[:3]])
-        # raise an error because each ID should only occur once
-        outmessage =  "*********************************************************************\n"
-        outmessage += "* ERROR:\n"
-        outmessage += "*  Some protein sequences in your file are identical.\n"
-        outmessage += "*  Each protein sequence must be unique.\n"
-        outmessage += "*\n"
-        outmessage += "*  The protein fasta with the problem is: " + peppath + "\n"
-        outmessage += "*  There are " + str(len(duplicate_sequences)) + " duplicate sequences.\n"
-        outmessage += "*  Here are the first 1 to 3:\n"
-        outmessage += dupstring
-        outmessage += "*\n"
-        outmessage += "*  The reason this is problematic is that duplicate protein seqs\n"
-        outmessage += "*   may interfere with proper reciprocal blastp match detection.\n"
-        outmessage += "*\n"
-        outmessage += "*  Please remove the identical sequences from the protein fasta\n"
-        outmessage += "*   file, regenerate the chrom files, and try again.\n"
-        outmessage += "*********************************************************************\n"
-        raise IOError(outmessage)
+    # 3. Check that each sequence ID exists only once.
+    #    This is the only case where we can choose to allow duplicates.
+    if not dup_proteins_allowed:
+        if len(duplicate_sequences) > 0:
+            dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicate_sequences)[:3]])
+            # raise an error because each ID should only occur once
+            outmessage =  "*********************************************************************\n"
+            outmessage += "* ERROR:\n"
+            outmessage += "*  Some protein sequences in your file are identical.\n"
+            outmessage += "*  Each protein sequence must be unique.\n"
+            outmessage += "*  If you aren't sure why, PLEASE READ THESE TWO LINKS below:\n"
+            outmessage += "*    - https://github.com/conchoecia/odp/issues/49\n"
+            outmessage += "*    - https://github.com/conchoecia/odp/issues/62\n"
+            outmessage += "*\n"
+            outmessage += "*  The protein fasta with the problem is: " + peppath + "\n"
+            outmessage += "*  There are " + str(len(duplicate_sequences)) + " duplicate sequences.\n"
+            outmessage += "*  Here are the first 1 to 3:\n"
+            outmessage += dupstring
+            outmessage += "*\n"
+            outmessage += "*  The reason this is problematic is that duplicate protein seqs\n"
+            outmessage += "*   may interfere with proper reciprocal blastp match detection.\n"
+            outmessage += "*\n"
+            outmessage += "*  Please remove the identical sequences from the protein fasta\n"
+            outmessage += "*   file, regenerate the chrom files, and try again.\n"
+            outmessage += "*                          -- OR --\n"
+            outmessage += "*  !!! IF YOU WANT THIS ERROR TO GO AWAY without modifying your data,\n"
+            outmessage += "*   set the 'duplicate_proteins' line in your 'config.yaml'\n"
+            outmessage += "*   to \"pass\". The default is \"fail\"\n"
+            outmessage += "*  !!! In other words, add this line to your 'config.yaml' file:\n"
+            outmessage += "*   ```\n"
+            outmessage += "*   duplicate_proteins: \"pass\"\n"
+            outmessage += "*   ```\n"
+            outmessage += "*\n"
+            outmessage += "*  Your final file would look something like this:\n"
+            outmessage += "*   ```\n"
+            outmessage += "*   ignore_autobreaks: True\n"
+            outmessage += "*   diamond_or_blastp: \"diamond\"\n"
+            outmessage += "*   duplicate_proteins: \"pass\"\n"
+            outmessage += "*   plot_LGs: True\n"
+            outmessage += "*   plot_sp_sp: True\n"
+            outmessage += "*   species:\n"
+            outmessage += "*     Celegans:\n"
+            outmessage += "*       proteins: /path/to/proteins_in_Cel_genome.fasta\n"
+            outmessage += "*       chrom: /path/to/Cel_genome_annotation.chrom\n"
+            outmessage += "*       genome: /path/to/Cel_genome_assembly.fasta\n"
+            outmessage += "*       minscafsize: 1000000  # Only plots scaffolds that are 1 Mbp or longer\n"
+            outmessage += "*     Homosapiens:\n"
+            outmessage += "*       proteins: /path/to/Human_prots.fasta\n"
+            outmessage += "*       chrom: /path/to/Human_annotation.chrom\n"
+            outmessage += "*       genome: /path/to/Human_genome_assembly.fasta\n"
+            outmessage += "*       minscafsize: 8000000  # Only plots scaffolds that are 8 Mbp or larger\n"
+            outmessage += "*   ```\n"
+            outmessage += "*********************************************************************\n"
+            raise IOError(outmessage)
 
     # PARSE AND CHECK THE CHROM FILE
     # 1. check that the file exists
     check_file_exists(chrompath)
     proteins_not_in_pep    = set()
     scaffolds_not_in_fasta = set()
-    for line in open(chrompath, 'r'):
+    chromhandle = fasta.get_open_func(chrompath)
+    for line in chromhandle:
         line = line.strip()
         if line:
             fields = line.split("\t")
-            # check that the protein was seen in the protein fasta file 
+            # check that the protein was seen in the protein fasta file
             protid = fields[0]
             scaffold = fields[1]
             if protid not in protein_headers:
@@ -490,24 +527,49 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
 
     # 2. Check that the proteins in column 1 were seen in the protein fasta file
     if len(proteins_not_in_pep) > 0:
+        #   if there are any duplicates, print out a string of the first 3
+        proteins_not_in_pep   = list(proteins_not_in_pep)
+        dupstring = ""
+        for i in range(3):
+            dupstring += "*    - " + str(proteins_not_in_pep[i]) + "\n"
         # raise an error because the proteins should have been seen already
         dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(proteins_not_in_pep)[:3]])
         outmessage =  "*********************************************************************\n"
         outmessage += "* ERROR:\n"
         outmessage += "*  Some proteins in the .chrom file were not seen in the protein\n"
-        outmessage += "*   .fasta file.\n"
+        outmessage += "*   .fasta file. This is problematic, because it could indicate\n"
+        outmessage += "*   missing data, a problem generating the chrom file, or a problem\n"
+        outmessage += "*   generating the protein fasta file.\n"
         outmessage += "*\n"
         outmessage += "*  The chrom file with the problem is: " + chrompath + "\n"
-        outmessage += "*  There are " + str(len(proteins_not_in_pep)) + " proteins in the .chrom not seen in the protein .fasta\n"
+        outmessage += "*  There are " + str(len(proteins_not_in_pep)) + " proteins in the\n"
+        outmessage += "*    .chrom not seen in the protein .fasta\n"
         outmessage += "*  Here are the first 1 to 3:\n"
         outmessage += dupstring
         outmessage += "*\n"
         outmessage += "*  The reason this is problematic is that we need to access every\n"
         outmessage += "*   protein specified in the .chrom file, but it is unavailable.\n"
         outmessage += "*\n"
+        outmessage += "*  For example, in you sample one of the proteins we found in the\n"
+        outmessage += "*    above chrom file was: " + proteins_not_in_pep[0] + "\n"
+        outmessage += "*  This means that in the protein fasta file, there needs to be an\n"
+        outmessage += "*    entry with the same name.\n"
+        outmessage += "*  In the protein fasta file, there should be one protein that looks\n"
+        outmessage += "*    like this, with a > character, the protein ID from the chrom file,\n"
+        outmessage += "*    and then a newline or a space character ' '\n"
+        outmessage += "*    ```\n"
+        outmessage += "*    >" + proteins_not_in_pep[0] + " Optional sequence description here\n"
+        outmessage += "*    MSNKKRN... (the protein's sequences on this and subsequent lines.)\n"
+        outmessage += "*    >Next_protein_sequence\n"
+        outmessage += "*    MNELSKENNIE....\n"
+        outmessage += "*    ```\n"
         outmessage += "*  Please investigate whether there are too many entries in the .chrom\n"
         outmessage += "*   file, or if something is missing from the protein .fasta file.\n"
-        outmessage += "*   Then, fix your files and re-run this pipeline.\n"  
+        outmessage += "*   Then, fix your files and re-run this pipeline.\n"
+        outmessage += "*\n"
+        outmessage += "* If you need more help, please visit:\n"
+        outmessage += "*  https://github.com/conchoecia/odp?tab=readme-ov-file#chrom-file-specifications\n"
+        outmessage += "*\n"
         outmessage += "*********************************************************************\n"
         raise IOError(outmessage)
 
@@ -530,7 +592,7 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
         outmessage += "*\n"
         outmessage += "*  Please investigate whether there are too many entries in the .chrom\n"
         outmessage += "*   file, or if something is missing from the genome .fasta file.\n"
-        outmessage += "*   Then, fix your files and re-run this pipeline.\n"  
+        outmessage += "*   Then, fix your files and re-run this pipeline.\n"
         outmessage += "*********************************************************************\n"
 
     # everything passed
