@@ -34,3 +34,8 @@ DELETEME*
 DELETE*
 dev_scripts/*/*.yaml
 run_script.sh
+# testing files
+tests/test_odp_basic/odp/
+tests/test_odp_basic/.snakemake/
+tests/test_odp_basic/benchmarks/
+

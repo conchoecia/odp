@@ -1,10 +1,12 @@
 """
 These are functions that are shared by odp, odp_trio, and other scripts
 """
+
 # this is all needed to load our custom fasta parser
+import gzip
 import os
 import sys
-snakefile_path = os.path.dirname(os.path.abspath(__file__)) 
+snakefile_path = os.path.dirname(os.path.abspath(__file__))
 dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
 import fasta
@@ -38,12 +40,24 @@ def general_legal_run():
     1. This program is not being run in a subdirectory of the odp install.
        We do not allow this, as some of the outfiles may overwrite program files.
     """
-    snakefile_path = os.path.dirname(os.path.abspath(__file__)) 
-    odp_path = os.path.abspath(os.path.join(snakefile_path, ".."))
+    snakefile_path = os.path.dirname(os.path.abspath(__file__))
+    odp_path   = os.path.abspath(os.path.join(snakefile_path, ".."))
+    safe_dirs   = [os.path.join(odp_path, "tests/test_odp_basic")]
     cwd      = os.getcwd()
 
+
+    # if we are in the odp directory, but in the test directory, that's fine
     # test if we are in the odp directory
+    crash = False
     if odp_path in cwd:
+        crash = True
+    if cwd in safe_dirs:
+        # we don't care, actually. Just put the flag back to False
+        print(f"We are in the test directory, {cwd}", file = sys.stderr)
+        crash = False
+
+    # check to see if we crash
+    if crash:
         # raise an error telling the user not to run the analysis in the odp directory
         outmessage =  "*********************************************************************\n"
         outmessage += "* ERROR:\n"
@@ -202,6 +216,9 @@ def reciprocal_best_hits_jackhmmer(
       species even if the e-values for the "best hit" are equivalent. This fixes
       one of the problems with blastp results. The results are still reciprocal
       best, though.
+
+    Update 20230103: This function is not used anymore. It was used for jackhammer.
+      Jackhammer did not work well for this program, so ignoring it.
     """
     jackhmmercol = ["target_name", "accession",  "query_name",
                     "accession",
@@ -211,15 +228,14 @@ def reciprocal_best_hits_jackhmmer(
                     "ov", "env", "dom", "rep", "inc",
                     "description_of_target"]
     f_raw = pd.read_csv(x_to_y_blastp_results,
-                        sep = "\s+", comment = "#",
+                        sep = "\\s+", comment = "#",
                         usecols=range(len(jackhmmercol)))
     f_raw.columns = jackhmmercol
     fdf = f_raw.sort_values(["query_name", "score", "evalue" ], ascending=[True, False, True]).drop_duplicates(subset="query_name")
-    #fdf = f_raw.sort_values(["query_name", "score", "evalue" ], ascending=[True, False, True]).groupby("query_name").head(2)
 
 
     r_raw = pd.read_csv(y_to_x_blastp_results,
-                        sep="\s+", comment = "#",
+                        sep="\\s+", comment = "#",
                         usecols=range(len(jackhmmercol)))
     r_raw.columns = jackhmmercol
     rdf = r_raw.sort_values(["query_name", "score", "evalue"], ascending=[True, False, True]).drop_duplicates(subset="query_name")
@@ -280,23 +296,82 @@ def check_file_exists(filepath) -> bool:
         outmessage =  "*********************************************************************\n"
         raise IOError(outmessage)
     else:
-        return True 
+        return True
+
+def chrom_file_is_legal(chrompath):
+    """
+    Checks if a chrom file is legal. Can be gzipped or not.
+    Columns (and types) are:
+     - protein_id (string)
+     - scaffold (string)
+     - strand (string)
+     - start (int)
+     - stop (int)
+
+    This doesn't check if the proteins or scaffolds are legal. It simply checks if the file format is legal.
+
+    The function that checks if this matches the protein and genome file is check_species_input_legality().
+
+    BREAK CONDITIONS
+      - Any of the fields have leading or trailing whitespace
+      - Any of the following strings appear in theses respective columns: pid     scaf    strand  start   stop
+      - Field 2 isn't a ['+', '-', '.']
+      - Field 3 can't be converted to an int
+      - Field 4 can't be converted to an int
+
+    If any of the columns don't match this, or if there is a header string, returns False.
+    If everything is good, returns True.
+    """
+    # 1. check that the file exists
+    check_file_exists(chrompath)
+    # 2. Open the file for whatever type it is
+    chromhandle = fasta.get_open_func(chrompath)
+    # go through the file line by line and inspect each element
+    for line in chromhandle:
+        line = line.strip()
+        if line:
+            fields = line.strip().split("\t")
+            # check if any of the fields have leading or trailing whitespace
+            for field in fields:
+                if field != field.strip():
+                    print("There is leading or trailing whitespace in this field: " + field)
+                    return False
+            # check if any of the fields are the header strings
+            if fields[0] == "pid" or fields[1] == "scaf" or fields[2] == "strand" or fields[3] == "start" or fields[4] == "stop":
+                print("One of the fields is a header string: " + str(fields))
+                return False
+            # Check if field 2 is a ['+', '-', '.']
+            if fields[2] not in ['+', '-', '.']:
+                print("Field 2 is not a ['+', '-', '.']: " + str(fields))
+                return False
+            # check that field 3 is able to be converted to an int
+            if not fields[3].isdigit():
+                print("Field 3 is not an int: " + str(fields))
+                return False
+            # check that field 4 is able to be converted to an int
+            if not fields[4].isdigit():
+                print("Field 4 is not an int: " + str(fields))
+                return False
+    # close the handle
+    chromhandle.close()
+    # if we get here, everything is good
+    return True
 
 def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
     """
     This function checks that the input files are legal.
     There are certain fields that are required,
       and they must be in a specific format.
-    
+
     First read in the genome assembly fasta file:
       1. Check that the file exists
       2. Check that each sequence ID exists only once
-    
+
     Then read in the protein file:
       1. Check that the file exists
-      2. Check that each sequence ID exists only once 
+      2. Check that each sequence ID exists only once
       3. Check that there are no duplicate protein sequences
-    
+
     Lastly, read in the .chrom file:
       1. Check that the file exists
       2. Check that the proteins in column 1 were seen in the protein fasta file
@@ -457,10 +532,10 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
         outmessage += "*   file, or if something is missing from the genome .fasta file.\n"
         outmessage += "*   Then, fix your files and re-run this pipeline.\n"  
         outmessage += "*********************************************************************\n"
-    
+
     # everything passed
     return True
-    
+
 def check_legality(config):
     """
     This function checks for legal config entries.
@@ -614,18 +689,31 @@ def generate_coord_structs_from_chrom_to_loc(chrom_file):
 
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     """
-    takes a chrom file, only keeps proteins in input_fasta from chrom file,
-     saves those prots to output_fasta
+    Takes a chrom file, gzipped or not, only keeps proteins in input_fasta from chrom file,
+     saves those prots to output_fasta.
     """
     keep_these = set()
     printed_already = set()
-    with open(chrom_file, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                splitd = line.split()
-                keep_these.add(splitd[0])
-    outhandle = open(output_fasta, "w")
+    chromhandle = fasta.get_open_func(chrom_file)
+    for line in chromhandle:
+        line = line.strip()
+        if line:
+            splitd = line.split()
+            keep_these.add(splitd[0])
+    chromhandle.close()
+    # If the output_fasta file name has a .gz, then we need to write a gzip file.
+    # Otherwise, just write to a regular file.
+    output_gz = False
+    for thisending in [".gz", ".gzip"]:
+        if output_fasta.endswith(thisending):
+            output_gz = True
+    outhandle = None
+    if output_gz:
+        outhandle = gzip.open(output_fasta, "wt")
+    else:
+        outhandle = open(output_fasta, "w")
+
+    # now that we have handled the output, filter the fasta file
     for record in fasta.parse(input_fasta):
         if record.id in keep_these and record.id not in printed_already:
             # The record object has the properties
@@ -634,7 +722,10 @@ def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
             #  - Record.desc
             # get rid of the description to avoid parsing errors later
             record.desc=""
-            print(record, file = outhandle)
+            if output_gz:
+                outhandle.write(record.format(wrap=80))
+            else:
+                print(record.format(wrap=80), file = outhandle, end="")
             printed_already.add(record.id)
     outhandle.close()
 

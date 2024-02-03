@@ -1,11 +1,22 @@
 """
-This script performs mutual-best protein diamond BLAST searches,
- then makes synteny plots of those results.
+Program  : odp
+Language : snakemake
+Date     : 2021-01-21
+Author   : Darrin T. Schultz
+Email    : darrin.schultz@univie.ac.at
+Github   : https://github.com/conchoecia/odp
+License  : GNU GENERAL PUBLIC LICENSE, Version 3, 29 June 2007. See the LICENSE file.
 
-Author: Darrin Schultz
-Email : dts@ucsc.edu
+Description:
+  This program is part of the Oxford Dot Plot (odp) package on github.
+  This script performs mutual-best protein diamond BLAST searches,
+  then makes synteny plots of those results. Performs many other functions.
+  See the documentation for more details.
 
+Usage instructions:
+  - See https://github.com/conchoecia/odp#getting-started
 """
+
 # This block imports fasta-parser as fasta
 import os
 import sys
@@ -25,9 +36,12 @@ import odp_color_manager as oc
 from odp_color_manager import generate_random_color as grc
 
 # other standard python libraries
+import gzip
 from itertools import permutations
 from itertools import combinations
 import logging
+import shutil
+import subprocess
 
 # non-standard dependencies
 import matplotlib
@@ -64,14 +78,11 @@ else:
 if "species" not in config:
     raise IOError("You must have a 'species' fields in the config file.")
 
+
 # make sure none of the sample names have underscores
 for thissample in config["species"]:
     if "_" in thissample:
         raise IOError("Sample names can't have '_' char: {}".format(thissample))
-
-# make sure there are at least 2 samples
-if len(config["species"]) < 2:
-    raise IOError("There must be at least 2 samples")
 
 # check if we have specified how to handle duplicate protein sequences
 if "duplicate_proteins" not in config:
@@ -85,6 +96,10 @@ if "duplicate_proteins" not in config:
 # see if we have included any illegal arguments
 illegal = set()
 for this_sample in config["species"]:
+    # this bit of code allows for users to also use the term minscaflen instead of minscafsize
+    if "minscaflen" in config["species"][this_sample]:
+        config["species"][this_sample]["minscafsize"] = config["species"][this_sample]["minscaflen"]
+        del config["species"][this_sample]["minscaflen"]
     for key in config["species"][this_sample]:
         if key not in legal:
             illegal.add(key)
@@ -134,7 +149,7 @@ if (config["prot_to_color"] == {}) and (config["prot_to_color_rbh"] == {}):
         # now find the .rbh file in the trim directory
         for thisfile in os.listdir(thisdir):
             if thisfile.endswith(".rbh"):
-                config["prot_to_color_rbh"][trim] = os.path.join(thisdir, thisfile) 
+                config["prot_to_color_rbh"][trim] = os.path.join(thisdir, thisfile)
 
 # come up with a list of blast/diamond jobs
 # we must have every combination that is in the analyses_list
@@ -192,16 +207,16 @@ if "plot_LGs" not in config:
     config["plot_LGs"] = True
 
 if config["plot_LGs"]:
-    # This set of files plots the installed LGs against all of the datasets
-    file_targets += [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(hmm, sp)
-      for sp in config["analysisspecies"] for hmm in config["prot_to_color"]]
-    # color by the things in the chrom settings
-    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
-      for x in config["analysispairs"] for y in config["prot_to_color"]]
-    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
-      for x in config["analysispairs"] for y in config["prot_to_color"]]
-    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
-      for x in config["analysispairs"] for y in config["prot_to_color"]]
+    ## This set of files plots the installed LGs against all of the datasets
+    #file_targets += [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(hmm, sp)
+    #  for sp in config["analysisspecies"] for hmm in config["prot_to_color"]]
+    ## color by the things in the chrom settings
+    #file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
+    #  for x in config["analysispairs"] for y in config["prot_to_color"]]
+    #file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
+    #  for x in config["analysispairs"] for y in config["prot_to_color"]]
+    #file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
+    #  for x in config["analysispairs"] for y in config["prot_to_color"]]
 
     # We also want to plot the ALGs as if they were genomes, against the individual species
     # This line specifically is for testing the RBH-as-a-species analysis
@@ -224,8 +239,8 @@ if config["plot_LG_decay"]:
            hmm = config["prot_to_color"], sp = config["species"])
 
 wildcard_constraints:
-    sample1="[A-Za-z0-9]+",
-    sample2="[A-Za-z0-9]+",
+    sample1="[A-Za-z0-9-.]+",
+    sample2="[A-Za-z0-9-.]+",
     #datatype="[A-Za-z0-9]+",
     #kmer="[A-Za-z0-9]+",
     #nom="[A-Za-z0-9.]+",
@@ -238,6 +253,18 @@ rule all:
     input:
         file_targets
 
+def legality_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed could change.
+    """
+    attemptdict = {1: 4000,
+                   2: 8000,
+                   3: 16000,
+                   4: 64000,
+                   5: 256000,
+                   6: 512000}
+    return attemptdict[attempt]
+
 rule check_input_legality:
     """
     The very first thing that we must do is to check the input files.
@@ -246,6 +273,11 @@ rule check_input_legality:
       - The genome .fasta file
       - The .chrom file
       - The protein .fasta file
+
+    Notes:
+    202140106 - This job appears to request too much RAM, causing OOM errors even
+        when the input files are small. I'm not sure why this is happening.
+        As a result, I am now adding a resources to limit the number of simultaneous jobs.
     """
     input:
         fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
@@ -255,8 +287,17 @@ rule check_input_legality:
         input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     params:
         duplicate_handling = config["duplicate_proteins"]
+    benchmark: "benchmarks/check_input_legality/{sample}.check_input_legality.benchmark.txt"
+    resources:
+        io_slots = 1,
+        mem_mb = legality_get_mem_mb, # 20240105 - Got this from here: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#dynamic-resources
+        runtime   = 60   # 10 minutes
     threads: 1
+    retries: 6
     run:
+        # We always check to see if the chrom file is legal, regardless of whether we're ignoring duplicate prots.
+        if not odpf.chrom_file_is_legal(input.chrom):
+            raise IOError("The chrom file is not legal: {}".format(input.chrom))
         if params.duplicate_handling == "fail":
             # We want to enforce that the input files are legal
             # See the odpf.check_species_input_legality function for more details
@@ -270,6 +311,18 @@ rule check_input_legality:
         else:
             raise IOError("Right now we can only handle fail and pass cases. Sorry.")
 
+def filtprot_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for filtering prots could change.
+    """
+    attemptdict = {1: 2000,
+                   2: 4000,
+                   3: 16000,
+                   4: 64000,
+                   5: 256000,
+                   6: 512000}
+    return attemptdict[attempt]
+
 rule filter_prots:
     """
     Sometimes the prot file with have sequences that are not present in
@@ -282,7 +335,13 @@ rule filter_prots:
         chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"],
         input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
-        pep = config["tool"] + "/db/{sample}_prots.pep"
+        pep = config["tool"] + "/db/{sample}_prots.pep.gz"
+    retries: 6
+    benchmark: "benchmarks/filter_prots/{sample}.filter_prots.benchmark.txt"
+    resources:
+        io_slots = 1,
+        mem_mb = filtprot_get_mem_mb, # should be small
+        runtime   = 10  # ten minutes
     threads: 1
     run:
         odpf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
@@ -293,45 +352,57 @@ rule make_diamond_and_blast_db:
     We only do this one the sample has passed the input QC checks.
     """
     input:
-        pep = ancient(config["tool"] + "/db/{sample}_prots.pep"),
+        pep = ancient(config["tool"] + "/db/{sample}_prots.pep.gz"),
         input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
-        dmnd = config["tool"] + "/db/dmnd/{sample}_prots.dmnd",
-        phr  = config["tool"] + "/db/{sample}_prots.pep.phr",
-        pin  = config["tool"] + "/db/{sample}_prots.pep.pin",
-        psq  = config["tool"] + "/db/{sample}_prots.pep.psq"
+        dmnd = config["tool"] + "/db/dmnd/{sample}_prots.gz.dmnd",
+        phr  = config["tool"] + "/db/{sample}_prots.pep.gz.phr",
+        pin  = config["tool"] + "/db/{sample}_prots.pep.gz.pin",
+        psq  = config["tool"] + "/db/{sample}_prots.pep.gz.psq"
     params:
-        outdir = config["tool"] + "/db/dmnd"
-    threads: workflow.cores - 1
+        outdir = config["tool"] + "/db/dmnd",
+        title  = "{sample}_prots.pep.gz"
+    benchmark: "benchmarks/make_diamond_and_blast_db/{sample}.make_diamond_and_blast_db.benchmark.txt"
+    resources:
+        io_slots = 1,
+        mem_mb = 1000, # should be small
+        runtime   = 10  # ten minutes
+    threads: 1 # No reason to have more than one thread
     shell:
         """
         mkdir -p {params.outdir}
         diamond makedb --in {input.pep} --db {output.dmnd}
-        makeblastdb -in {input.pep} -dbtype prot
+        zcat {input.pep} | makeblastdb -in - -out {input.pep} -title {params.title} -dbtype prot
         """
 
 rule diamond_blast:
+    """
+    This blasts the proteins against the proteins of another sample.
+    TODO: the blastp output needs to be switched to gzipped files to save space.
+    """
     input:
-        pep1  = ancient(config["tool"] + "/db/{sample1}_prots.pep"),
-        pep2  = ancient(config["tool"] + "/db/{sample2}_prots.pep"),
-        phr   = ancient(config["tool"] + "/db/{sample2}_prots.pep.phr"),
-        pin   = ancient(config["tool"] + "/db/{sample2}_prots.pep.pin"),
-        psq   = ancient(config["tool"] + "/db/{sample2}_prots.pep.psq"),
-        dmnd2 = ancient(config["tool"] + "/db/dmnd/{sample2}_prots.dmnd"),
+        pep1  = ancient(config["tool"] + "/db/{sample1}_prots.pep.gz"),
+        pep2  = ancient(config["tool"] + "/db/{sample2}_prots.pep.gz"),
+        phr   = ancient(config["tool"] + "/db/{sample2}_prots.pep.gz.phr"),
+        pin   = ancient(config["tool"] + "/db/{sample2}_prots.pep.gz.pin"),
+        psq   = ancient(config["tool"] + "/db/{sample2}_prots.pep.gz.psq"),
+        dmnd2 = ancient(config["tool"] + "/db/dmnd/{sample2}_prots.gz.dmnd"),
     output:
         blastp = config["tool"] + "/step0-blastp_results/{sample1}_against_{sample2}.blastp"
-    threads: (workflow.cores - 1)
+    benchmark: "benchmarks/diamond_blast/{sample1}_{sample2}_diamond_blast.benchmark.txt"
+    resources:
+        mem_mb = 2000, # 20231206 - I don't actually know how long this will take.
+        runtime   = 20    # 20231206 - I don't actually know how long this will take. Currently 20 minutes in seconds.
+    threads: 8
     params:
         search_method = config["diamond_or_blastp"]
     priority: 1
     shell:
         """
         if [ "{params.search_method}" = "blastp" ]; then
-            blastp -query {input.pep1} -db {input.pep2} \
-              -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
+            zcat {input.pep1} | blastp -db {input.pep2} -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
         elif [ "{params.search_method}" = "diamond" ]; then
-            diamond blastp --query {input.pep1} --db {input.dmnd2} \
-              --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
+            diamond blastp --query {input.pep1} --db {input.dmnd2} --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
         fi
         """
 
@@ -345,14 +416,18 @@ rule reciprocal_best_hits:
         blastp2to1 = config["tool"] + "/step0-blastp_results/{sample2}_against_{sample1}.blastp"
     output:
         blastp1to2 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample1}_and_{sample2}_recip.temp.blastp",
-        blastp2to1 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample2}_and_{sample1}_recip.temp.blastp",
+        blastp2to1 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample2}_and_{sample1}_recip.temp.blastp"
+    benchmark: "benchmarks/reciprocal_best_hits/{sample1}_{sample2}.reciprocal_best_hits.benchmark.txt"
+    resources:
+        mem_mb = 1000, # Should be small
+        runtime   = 20  # 20 minutes in seconds
     threads: 1
     run:
         odpf.reciprocal_best_hits_blastp_or_diamond_blastp(
             input.blastp1to2, input.blastp2to1, output.blastp1to2)
-        df = pd.read_csv(output.blastp1to2, sep = "\t", header = None)
+        df = pd.read_csv(output.blastp1to2, sep = '\t', header = None)
         newdf = df[[1,0,2,3,4,5,8,9,6,7,10,11]]
-        newdf.to_csv(output.blastp2to1, sep ="\t", header = None, index = None)
+        newdf.to_csv(output.blastp2to1, sep ='\t', header = None, index = None)
 
 def get_component_size_dict(G):
     """
@@ -374,14 +449,11 @@ rule n_ways_reciprocal_best:
     Gets reciprocal best hits from 3 or more samples
     For a protein to be retained, it must be a reciprocal-best hit in three samples.
 
-              A      B
-             / \    /|\
-            B___C  A-+-C , --et cetera
-                    \|/
-                     D
-
-    # Here I need to draw an ascii pentagram with lines connected to each element A, B, C, D, E
-
+              A       B
+             / |    /| |
+            B___C  A-+-C , ... et cetera. These are k-complete graphs.
+                   | |/
+                    D
 
     The output of this rule is a yaml file with admissible proteins from each sample
     """
@@ -393,6 +465,10 @@ rule n_ways_reciprocal_best:
         acceptable_prots = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_acceptable_prots.txt",
         blast_network    = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_edges.txt",
         rbh              = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh"
+    benchmark: "benchmarks/n_ways_reciprocal_best_hits/{analysis}.n_ways_reciprocal_best_hits.benchmark.txt"
+    resources:
+        mem_mb = 1000, # should be small
+        runtime   = 20  # 20 minutes in seconds
     threads: 1
     run:
         # prot to group
@@ -458,7 +534,7 @@ rule n_ways_reciprocal_best:
                         gene_list.add(bgene)
                         gene_to_species[agene] = a
                         gene_to_species[bgene] = b
-                        #add these since we've added the genes already
+                        # add these since we've added the genes already
                         checked_names.add(a)
                         checked_names.add(b)
                         # now add the edge
@@ -479,7 +555,6 @@ rule n_ways_reciprocal_best:
             if G.degree[thisnode] != (len(all_species) - 1):
                 remnodes.add(thisnode)
         for node in remnodes:
-            print(node)
             G.remove_node(node)
         remnodes.clear()
         # now get the n-connected components
@@ -610,6 +685,7 @@ def calc_D_for_y_and_x(df, xsample, ysample):
                                   "{}_break_ix".format(thisdir)],
                             ascending = True)
         df = df.reset_index(drop = True)
+        #print("df\n", df)
         breaks = df["{}_breakchrom".format(thisdir)].unique()
         thisdir_dfs = []
         # this just calculates Dx
@@ -624,6 +700,7 @@ def calc_D_for_y_and_x(df, xsample, ysample):
             subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
             xdf["{}_D".format(thisdir)] = subtractdf.apply(lambda x: np.sqrt(np.square(x).sum()), axis = 1)
             thisdir_dfs.append(xdf)
+        print("thisdir_dfs\n", thisdir_dfs)
         df = pd.concat(thisdir_dfs)
     df.reset_index(drop=True, inplace = True)
     return df
@@ -654,35 +731,6 @@ def calculate_FET(genesdf, scafdict):
 
     genesdf["whole_FET"] = -1
     genesdf["break_FET"] = -1
-
-    # Set the types of the dataframe.
-    # We do this because we need to make sure that the columns are cast correctly.
-    # Something breaks downstream otherwise, or the print formatting is now correct.
-    # These core columns will ALWAYS be present. Otherwise, we parse below
-    types = {"rbh"        : str,
-             "gene_group" : str,
-             "whole_FET"  : float,
-             "break_FET"  : float}
-    for colname in genesdf.columns:
-        if colname.endswith("_gene"):
-            types[colname] = str
-        if colname.endswith("_scaf"):
-            types[colname] = str
-        elif colname.endswith("_pos"):
-            types[colname] = int
-        elif colname.endswith("_ix"):
-            types[colname] = int
-        elif colname.endswith("_break_ix"):
-            types[colname] = int
-        elif colname.endswith("_breakchrom"):
-            types[colname] = object
-        elif colname == "color":
-            types[colname] = str
-        else:
-            types[colname] = str
-    # now re-cast the columns
-    genesdf = genesdf.astype(types)
-
     # now perform Fisher's Exact Test
     if len(all_species) == 2:
         sp1 = list(sorted(all_species))[0]
@@ -984,7 +1032,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
     #   - Keep track of which CCs have been added to the plotting order lists
     #   - Do this until all x-axis scaffolds have been seen. Check list of seen CCs against len of CCs to see if we missed something
     CCs_seen = set()
-    x_scaffolds_by_size = df["{}_scaf".format(xsample)].value_counts().index.tolist()
+    x_scaffolds_by_size = df["{}_scaf".format(xsample)].value_counts().index.tolist() 
     if len(x_scaffolds_by_size) != len(df["{}_scaf".format(xsample)].unique()):
         print("ERROR: these x-axis counts should match")
         sys.exit()
@@ -1735,7 +1783,8 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
         "Dots that are a solid color are in cells with a FET p-value less than or equal to 0.05.",
         "Dots that are translucent are in cells with a FET p-value greater than 0.05.",
         "The Dx and Dy values depict places where there may be sudden breaks in synteny.",
-        "See the supplementary information the following paper for more information on Dx and Dy: Simakov, Oleg, et al. \"Deeply conserved synteny resolves early events in vertebrate evolution.\" Nature Ecology & Evolution 4.6 (2020): 820-830.",
+        "See the supplementary information the following paper for more information on Dx and Dy: Simakov, Oleg, et al.",
+        "Deeply conserved synteny resolves early events in vertebrate evolution. Nature Ecology & Evolution 4.6 (2020): 820-830.",
         "(b) depicts the same information as panel a, but it is plotted in the",
         "organisms chromosome basepair coordinates rather than gene index.",
         "This is useful for visualizing gene-poor regions of the chromosomes",
@@ -1759,6 +1808,19 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     plt.savefig(synplot)
 
+def chromsize_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 4000,
+                   2: 8000,
+                   3: 16000,
+                   4: 32000,
+                   5: 64000,
+                   6: 128000,
+                   7: 256000}
+    return attemptdict[attempt]
+
 rule get_chromsize_of_one_species:
     """
     This chromsize file is used later to speed up the synteny_plot analysis.
@@ -1768,21 +1830,45 @@ rule get_chromsize_of_one_species:
 
     We filter out the scaffolds that are too small here.
 
-    We require that the sample pass the input file checks first
+    We require that the sample pass the input file checks first.
+    Notes:
+      - 20240106 - We use this implementation instead of the fasta package because it consumes
+        less RAM.
     """
     input:
         fasta = lambda wildcards: config["species"][wildcards.sp]["genome"],
         input_pass = config["tool"] + "/db/input_check/{sp}_pass.txt"
     output:
         chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
-    threads:
-        1
+    benchmark: "benchmarks/get_chromsize_of_one_species/{sp}.get_chromsize_of_one_species.benchmark.txt"
+    resources:
+        io_slots = 1,
+        mem_mb = chromsize_get_mem_mb, # Use 2GB of RAM in case there are large chromosomes
+        runtime   = 20   # ten minutes in seconds
+    retries: 7
+    threads: 1
     run:
-        with open(output.chromsize, "w") as o:
-            for record in fasta.parse(input.fasta):
-                recordlen = len(record.seq)
-                if recordlen >= config["species"][wildcards.sp]["minscafsize"]:
-                    o.write("{}\t{}\t{}\n".format(wildcards.sp, record.id, len(record.seq)))
+        outhandle = open(output.chromsize, "w")
+        scaffold_lengths = {}
+        # determine whether we open with gzip or not
+        handle = fasta.get_open_func(input.fasta)
+        for line in handle:
+            line = line.strip()
+
+            if line.startswith('>'):
+                # Header line indicating a new scaffold
+                current_scaffold = line[1:].split(" ")[0]
+                scaffold_lengths[current_scaffold] = 0
+            else:
+                # Sequence line, update scaffold length
+                if current_scaffold is not None:
+                    scaffold_lengths[current_scaffold] += len(line)
+        handle.close()
+
+        for thisscaf in scaffold_lengths:
+            print("{}\t{}\t{}".format(wildcards.sp,
+                                      thisscaf, scaffold_lengths[thisscaf]), file = outhandle)
+        outhandle.close()
 
 def chromsize_to_s2c2s(chromsize_path):
     """
@@ -1809,22 +1895,21 @@ rule get_chromsize_of_analysis_pair:
     We filter out the scaffolds that are too small here.
     """
     input:
-        fastas = lambda wildcards: [config["species"][x]["genome"]
+        fastas = lambda wildcards: [config["tool"] + "/step0-chromsize/species/{}.chromsize".format(x)
                             for x in config["analysispairs"][wildcards.analysis]],
         pass1  = lambda wildcards: config["tool"] + "/db/input_check/{}_pass.txt".format(wildcards.analysis.split("_")[0]),
         pass2  = lambda wildcards: config["tool"] + "/db/input_check/{}_pass.txt".format(wildcards.analysis.split("_")[1])
     output:
         chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize"
-    threads:
-        1
-    run:
-        with open(output.chromsize, "w") as o:
-            for thissp in config["analysispairs"][wildcards.analysis]:
-                thisfasta = config["species"][thissp]["genome"]
-                for record in fasta.parse(thisfasta):
-                    recordlen = len(record.seq)
-                    if recordlen >= config["species"][thissp]["minscafsize"]:
-                        o.write("{}\t{}\t{}\n".format(thissp, record.id, len(record.seq)))
+    benchmark: "benchmarks/get_chromsize_of_analysis_pair/{analysis}.get_chromsize_of_analysis_pair.benchmark.txt"
+    resources:
+        mem_mb = 500,  # 20231206 I don't actually know how much RAM this uses. But it probably is not much.
+        runtime   = 5   # Five minutes. 20231206 I don't actually know how much time this uses.
+    threads: 1
+    shell:
+        """
+        cat {input.fastas} > {output.chromsize}
+        """
 
 rule analysis_D_and_FET:
     """
@@ -1838,11 +1923,13 @@ rule analysis_D_and_FET:
     output:
         rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.D.FET.rbh"
     params:
-        xsample = lambda wildcards: config["analysispairs"][wildcards.analysis][0], 
+        xsample = lambda wildcards: config["analysispairs"][wildcards.analysis][0],
         ysample = lambda wildcards: config["analysispairs"][wildcards.analysis][1]
     threads: 1
+    benchmark: "benchmarks/analysis_D_and_FET/{analysis}.analysis_D_and_FET.benchmark.txt"
     resources:
-        mem_mb = 5000 # usually uses 2.5Gb of RAM
+        runtime   = 30, # 20231206 I don't know how long this will actually take. 30 minutes.
+        mem_mb = 5000  # 20231205 This usually uses 2.5Gb of RAM.
     run:
         # read in the rbh file
         df = pd.read_csv(input.rbh, delimiter="\t")
@@ -1876,6 +1963,10 @@ rule filtered_D_FET_rbh:
         rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.D.FET.rbh"
     output:
         filt = config["tool"] + "/step1-rbh-filtered/{analysis}_reciprocal_best_hits.D.FET.filt.rbh"
+    benchmark: "benchmarks/filtered_D_FET_rbh/{analysis}.filtered_D_FET_rbh.benchmark.txt"
+    resources:
+        mem_mb = 1000, # 20231205 usually takes 0.2 to 0.3GB of RAM.
+        runtime   = 45  # 45 minutes. 20231206 This is probably too long.
     threads: 1
     run:
         # read in the rbh file
@@ -1918,8 +2009,12 @@ rule species_HMM_D_and_FET:
     output:
         rbh = config["tool"] + "/step1-rbh/{hmm}_{sp}_reciprocal_best_hits.hmm.D.FET.rbh",
     params:
-        xsample = lambda wildcards: wildcards.hmm, 
+        xsample = lambda wildcards: wildcards.hmm,
         ysample = lambda wildcards: wildcards.sp
+    benchmark: "benchmarks/species_HMM_D_and_FET/{hmm}_{sp}_.species_HMM_D_and_FET.benchmark.txt"
+    resources:
+        mem_mb = 5000, # usually takes ???GB of RAM
+        runtime   = 30  # 30 minutes
     threads: 1
     run:
         # read in the rbh file
@@ -1958,8 +2053,10 @@ rule plot_synteny_nocolor:
         xy  = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_xy_synteny.pdf",
         yx  = config["tool"] + "/step2-figures/synteny_nocolor/{analysis}_yx_synteny.pdf"
     threads: 1
+    benchmark: "benchmarks/plot_synteny_nocolor/{analysis}.plot_synteny_nocolor.benchmark.txt"
     resources:
-        mem_mb = 5000 # usually takes 2.5Gb of RAM
+        mem_mb = 5000, # usually takes ??Gb of RAM
+        runtime   = 30  # 30 minutes
     params:
         analysis = lambda wildcards: wildcards.analysis,
         orthology_method = config["diamond_or_blastp"]
@@ -1995,29 +2092,209 @@ rule plot_synteny_nocolor:
                      params.orthology_method,
                      sort_y_by_x = sort_y_by_x)
 
-rule hmm_against_prots:
+def tmp_unzip_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 2000,
+                   2: 4000,
+                   3: 8000,
+                   4: 16000}
+    return attemptdict[attempt]
+
+rule temp_unzip_protein:
+    """
+    Temporarily unzip the protein file for usage in the hmmsearch.
+    The program hmmsearch needs a regular text file to be able to navigate line-by-line.
+    """
+    input:
+        proteins = config["tool"] + "/db/{sample}_prots.pep.gz",
+    output:
+        protein = temp(config["tool"] + "/db/{sample}_prots.pep")
+    threads: 1
+    benchmark: "benchmarks/temp_unzip_protein/{sample}.temp_unzip_protein.benchmark.txt"
+    retries: 4
+    resources:
+        io_slots = 1,
+        mem_mb = tmp_unzip_get_mem_mb, # Some example consumption for single cores: 500M, 120M, 288M
+        runtime   = 5
+    shell:
+        """
+        zcat {input.proteins} > {output.protein}
+        """
+
+def hmm_against_prots_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for filtering prots could change.
+    """
+    attemptdict = {1: 5000,
+                   2: 16000,
+                   3: 64000,
+                   4: 256000}
+    return attemptdict[attempt]
+
+rule hmm_1_against_prots:
+    """
+    This runs hmmsearch of an LG_db against one species.
+    It will output all of the results into the format used by HMM search.
+
+    To save time, we will first check whether the target proteins are a subset of the proteins
+     in the hmmsearch database. If they are, we will skip this step to save compute time.
+
+    The output results of hmmsearch looks like this:
+    #                                                                                             --- full sequence ---- --- best 1 domain ----   --- domain number estimation ----
+    # target name                        accession    query name                       accession    E-value  score  bias   E-value  score  bias   exp reg clu  ov env dom rep inc description of target
+    # -------------------                ----------   --------------------             ---------- --------- ------ ----- --------- ------ -----   --- --- --- --- --- --- --- --- ---------------------
+    Simakov2022BCnS_genefamily_4903_HVU  -            Simakov2022BCnS_genefamily_4903  -            1.8e-46  153.7   0.5     2e-46  153.6   0.5   1.0   1   0   0   1   1   1   1 -
+    Simakov2022BCnS_genefamily_10760_HVU -            Simakov2022BCnS_genefamily_10760 -           4.9e-258  855.3  29.8  4.4e-153  508.5  15.1   2.6   1   1   2   3   3   3   2 -
+    Simakov2022BCnS_genefamily_1288_HVU  -            Simakov2022BCnS_genefamily_1288  -           1.7e-190  630.9  17.3  5.5e-112  372.1  10.2   2.3   1   1   1   2   2   2   2 -
+    Simakov2022BCnS_genefamily_3389_HVU  -            Simakov2022BCnS_genefamily_1288  -               0.28    7.3   7.1      0.39    6.8   7.1   1.1   1   0   0   1   1   1   0 -
+    Simakov2022BCnS_genefamily_9576_HVU  -            Simakov2022BCnS_genefamily_1288  -                2.4    4.2  16.9         4    3.5  16.9   1.2   1   0   0   1   1   1   0 -
+    Simakov2022BCnS_genefamily_1894_HVU  -            Simakov2022BCnS_genefamily_1894  -                  0 1024.2  12.2         0 1024.0  12.2   1.0   1   0   0   1   1   1   1 -
+    Simakov2022BCnS_genefamily_5502_HVU  -            Simakov2022BCnS_genefamily_1894  -            9.9e-06   21.7   0.2   1.6e-05   21.0   0.2   1.2   1   0   0   1   1   1   1 -
+    Simakov2022BCnS_genefamily_4972_HVU  -            Simakov2022BCnS_genefamily_1894  -            0.00018   17.6   0.1     0.002   14.1   0.0   2.1   2   0   0   2   2   2   0 -
+    Simakov2022BCnS_genefamily_4273_RES  -            Simakov2022BCnS_genefamily_1894  -             0.0068   12.4   0.1     0.012   11.5   0.1   1.3   1   0   0   1   1   1   0 -
+    Simakov2022BCnS_genefamily_10977_HVU -            Simakov2022BCnS_genefamily_10977 -           6.2e-131  434.6  15.6    7e-131  434.4  15.6   1.0   1   0   0   1   1   1   1 -
+
+    # Notes on thread usage: This program seems to only use each thread at 50% load, so providing 4 cores appears to use 2 or 3 cores. More cores does make it go faster, but not linearly.
+    """
     input:
         hmm = lambda wildcards: os.path.join(
             config["prot_to_color"][wildcards.coloredby],
             [x for x in list(os.listdir(
             config["prot_to_color"][wildcards.coloredby]))
                                       if x.endswith(".hmm")][0]),
-        proteins = config["tool"] + "/db/{sample}_prots.pep",
+        rbh = lambda wildcards: config["prot_to_color_rbh"][wildcards.coloredby],
+        proteins = config["tool"] + "/db/{sample}_prots.pep" #yes, this is supposed to be unzipped
     output:
-        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"
-    threads: min(10, int(workflow.cores/4))
+        hmm   = temp(config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch")
+    benchmark: "benchmarks/hmm_1_against_prots/{coloredby}_against_{sample}.hmm_1_against_prots.benchmark.txt"
+    resources:
+        mem_mb = hmm_against_prots_get_mem_mb, # Some example consumption for single cores: 500M, 120M, 288M
+        runtime   = 480  # 20231211 - 3 hours in minutes. 2 hours was too short with 3 threads. Now trying with 8 threads.
+    threads: 8 # 20231211 - 3 threads was very slow and used only around 500MB of RAM at peak. Trying 8 threads.
+    retries: 4
+    run:
+        # GET THE PROTEIN IDS IN THE RBH FILE
+        # first we load the .rbh file to process all of the possible protein IDs
+        rbhdf = pd.read_csv(input.rbh, sep = "\t")
+        # get all of the '*_gene' columns
+        gene_columns = [x for x in rbhdf.columns if x.endswith("_gene")]
+        # get all of the species prefixes, the first part of the '*_gene' columns. Keep everything up until the last _ character
+        all_species = ["_".join(x.split("_")[0:-1]) for x in gene_columns]
+        # concatenate the contents of the "*_gene" columns
+        all_protein_ids = set()
+        for thiscol in gene_columns:
+            all_protein_ids = all_protein_ids.union(set(rbhdf[thiscol].unique()))
+        # now, for the column rbh, tag "_" + the species name to the end of the protein ID, for each species, and add these to all_protein_ids
+        for thissp in all_species:
+            all_protein_ids = all_protein_ids.union(set([x + "_" + thissp for x in rbhdf["rbh"].unique()]))
+
+        # GET THE PROTEIN IDS IN THE SAMPLE
+        sample_protein_ids = set()
+        for record in fasta.parse(input.proteins):
+            sample_protein_ids.add(record.id)
+
+        # DECISION TIME
+        # If the protein ids in the sample are a subset of what was found in the RBH file, then print out a pseudo-hmmsearch file
+        # If not, continue with the actual hmm search.
+        if sample_protein_ids.issubset(all_protein_ids):
+            # write out a pseudo hmmsearch file
+            with open(output.hmm, "w") as o:
+                for thisid in sample_protein_ids:
+                    # we must determine which gene family (rbh column) in the rbh file this protein belongs to.
+                    thisgenefamily = ""
+                    potential_gene_family_id = "_".join(thisid.split("_")[0:-1])
+
+                    # this case applies to when this is a gene family protein name
+                    if potential_gene_family_id in rbhdf["rbh"].unique():
+                        # the genefamily is the rbh value of this column
+                        thisgenefamily = potential_gene_family_id
+                    else:
+                        for thiscol in gene_columns:
+                            # this case applies to when this is a specific protein ID that exists in another sample
+                            if thisid in rbhdf[thiscol].unique():
+                                # the genefamily is the rbh value of this column
+                                thisgenefamily = rbhdf.loc[rbhdf[thiscol] == thisid, "rbh"].values[0]
+                                break
+                    if thisgenefamily == "":
+                        raise IOError("The gene family wasn't assigned for some reason. This should not happpen. One possible cause is that the protein fasta file had a blank header.")
+                    # there are 19 fields. The first is the protein ID, the fourth is the gene family, and the rest are alignment scores
+                    print("{}\t-\t{}\t-\t0\t9999\t0\t0\t9999\t0\t1\t1\t1\t1\t1\t1\t1\t1\t1".format(
+                        thisid, thisgenefamily), file = o)
+        else:
+            # remove the file from the output.hmm, just get that directory path
+            outdirec_path = os.path.dirname(output.hmm)
+            # safely, recursively make the outdirec_path for output.hmm
+            os.makedirs(outdirec_path, exist_ok = True)
+            # first check that the hmmsearch program is an executable in the current environment. If not, raise an error.
+            if shutil.which("hmmsearch") is None:
+                raise IOError("The hmmsearch program is not in the current environment. Please install it or configure your environment and try again. For slurm clusters, you might try 'module load hmmer' or 'conda install -c bioconda hmmer'.")
+            # Example HMM command
+            hmm_command = f"hmmsearch --incE 1E-5 --tblout {output.hmm} --cpu {threads} --noali --notextw {input.hmm} {input.proteins} > /dev/null"
+            # Run the HMM command using subprocess. Check the return code. If it is not 0, raise an error.
+            # check = True returns a CalledProcessError if the return code is not 0
+            subprocess.run(hmm_command, shell = True, check = True)
+        # We have output the hmmsearch file. We need to check it to make sure that all of the entries have the same number of fields
+        # Every field must look like this
+        #   EAA03888.3           -          Simakov2022BCnS_genefamily_4903 -            3.4e-25   87.8   0.0   4.3e-25   87.5   0.0   1.0   1   0   0   1   1   1   1 -
+        # There are 19 fields
+        with open(output.hmm, "r") as f:
+            counter = 0
+            prev = ""
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    fields = line.split()
+                    if len(fields) != 19:
+                        raise IOError("The hmmsearch file has an incorrect number of fields. This should not happen. This means that this job failed for sample {}. Please check the hmmsearch file and try again.".format(wildcards.sample))
+
+def gzhmm_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 1000,
+                   2: 2000,
+                   3: 4000,
+                   4: 8000,
+                   5: 16000,
+                   6: 320000,
+                   7: 640000}
+    return attemptdict[attempt]
+
+rule hmm_2_gzip_hmm_results:
+    """
+    gzip the hmm search results. This left too many possibilities for failure previously.
+    """
+    input:
+        hmm   = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch"
+    output:
+        hmmgz = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.gz"
+    threads: 1
+    retries: 7
+    benchmark: "benchmarks/hmm_2_gzip_hmm_results/{coloredby}_against_{sample}.hmm_2_gzip_hmm_results.benchmark.txt"
+    resources:
+        mem_mb    = gzhmm_get_mem_mb, # should be relatively small
+        runtime   = 30    # 30 minutes
     shell:
         """
-        hmmsearch --incE 1E-5 \
-          --tblout {output.hmm} \
-          --cpu {threads} \
-          --noali \
-          --notextw \
-          {input.hmm} \
-          {input.proteins} > /dev/null
+        gzip < {input.hmm} > {output.hmmgz}
         """
 
-rule filter_each_hmm_result:
+def filthmm_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 1000,
+                   2: 2000,
+                   3: 4000,
+                   4: 8000,
+                   5: 16000,
+                   6: 320000,
+                   7: 640000}
+    return attemptdict[attempt]
+
+rule hmm_3_filter_hmm_result:
     """
     The header fields are:
     # target name        accession  query name                         accession    E-value  score  bias   E-value  score  bias   exp reg clu  ov env dom rep inc description of target
@@ -2028,14 +2305,19 @@ rule filter_each_hmm_result:
     gets the top five hits for each hmm and converts them to blastp outfmt 6 format
     """
     input:
-        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch",
+        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.gz"
     output:
-        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp"
+        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp.gz"
     threads: 1
+    retries: 7
+    benchmark: "benchmarks/hmm_3_filter_hmm_result/{coloredby}_against_{sample}.hmm_3_filter_hmm_result.benchmark.txt"
+    resources:
+        mem_mb = filthmm_get_mem_mb, # usually uses 0.2-0.3 GB of RAM
+        runtime   = 60   # one hour
     run:
         top_hits = 5
-        outhandle = open(output.hmm, "w")
-        with open(input.hmm, "r") as f:
+        outhandle = gzip.open(output.hmm, "wt")
+        with gzip.open(input.hmm, "rt") as f:
             counter = 0
             prev = ""
             for line in f:
@@ -2061,23 +2343,42 @@ rule filter_each_hmm_result:
                         if counter >= top_hits:
                             pass # don't do anything
                         else:
-                            print("\t".join([str(x) for x in entry]), file = outhandle)
+                            outhandle.write( "\t".join([str(x) for x in entry]) + "\n" )
                     else:
-                        print("\t".join([str(x) for x in entry]), file = outhandle)
+                        outhandle.write(     "\t".join([str(x) for x in entry]) + "\n" )
                         counter = 0
                     prev = qseqid
         outhandle.close()
 
-rule hmm_search_to_rbh:
+def hmmsearch_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 2000,
+                   2: 4000,
+                   3: 8000,
+                   4: 16000,
+                   5: 32000,
+                   6: 64000,
+                   7: 128000,
+                   8: 256000}
+    return attemptdict[attempt]
+
+rule hmm_4_hmm_to_rbh:
     """
     converts a hmmsearch output to a reciprocal best hit file
     """
     input:
-        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp",
+        hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp.gz",
         sample_chrom  = lambda wildcards: config["species"][wildcards.sample]["chrom"],
         coloredby_rbh = lambda wildcards: config["prot_to_color_rbh"][wildcards.coloredby]
     output:
         rbh = config["tool"] + "/step1-rbh/{coloredby}_{sample}_reciprocal_best_hits.hmm.rbh"
+    retries: 8
+    benchmark: "benchmarks/hmm_4_hmm_to_rbh/{coloredby}_{sample}.hmm_4_hmm_to_rbh.benchmark.txt"
+    resources:
+        mem_mb = hmmsearch_get_mem_mb, # should be relatively small
+        runtime   = 30    # 30 minutes
     threads: 1
     run:
         ## final columns must be
@@ -2142,21 +2443,6 @@ rule hmm_search_to_rbh:
                       "{}_gene".format(wildcards.sample),
                       "{}_scaf".format(wildcards.sample),
                       "{}_pos".format( wildcards.sample)]]
-        # set the columns rbh, gene_group, color to be strings
-        # also set the {}_gene and {}_scaf columns to be strings
-        # TODO - in the future I need a function to set these as types
-        #        This block of code is messy and is repeated in other rules
-        genesdf["rbh"] = genesdf["rbh"].astype(str)
-        genesdf["gene_group"] = genesdf["gene_group"].astype(str)
-        genesdf["color"] = genesdf["color"].astype(str)
-        genesdf["{}_gene".format(wildcards.coloredby)] = genesdf["{}_gene".format(wildcards.coloredby)].astype(str)
-        genesdf["{}_scaf".format(wildcards.coloredby)] = genesdf["{}_scaf".format(wildcards.coloredby)].astype(str)
-        genesdf["{}_gene".format(wildcards.sample)] = genesdf["{}_gene".format(wildcards.sample)].astype(str)
-        genesdf["{}_scaf".format(wildcards.sample)] = genesdf["{}_scaf".format(wildcards.sample)].astype(str)
-        # set the {}_pos columns to be ints
-        genesdf["{}_pos".format(wildcards.coloredby)] = genesdf["{}_pos".format(wildcards.coloredby)].astype(int)
-        genesdf["{}_pos".format(wildcards.sample)] = genesdf["{}_pos".format(wildcards.sample)].astype(int)
-
         # delete the old dfs to remove references
         del df
         del rbhdf
@@ -2213,14 +2499,17 @@ rule plot_synteny_coloredby:
         rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.D.FET.rbh",
         colordir = lambda wildcards: config["prot_to_color"][wildcards.coloredby],
         chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize",
-        hmm_results = lambda wildcards: [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(
+        hmm_results = lambda wildcards: [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp.gz".format(
             wildcards.coloredby, x) for x in wildcards.analysis.split("_")]
     output:
         rbh = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_xy_reciprocal_best_hits.coloredby_{coloredby}.plotted.rbh",
         xy  = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_xy_synteny_coloredby_{coloredby}.pdf",
         yx  = config["tool"] + "/step2-figures/synteny_coloredby_{coloredby}/{analysis}_yx_synteny_coloredby_{coloredby}.pdf",
-    threads:
-        1
+    benchmark: "benchmarks/plot_synteny_coloredby/{coloredby}_analysis_{analysis}.plot_synteny_coloredby.benchmark.txt"
+    resources:
+        mem_mb = 5000, # usually takes 2.5Gb of RAM
+        runtime   = 30  # 30 minutes
+    threads: 1
     params:
         analysis = lambda wildcards: wildcards.analysis,
         orthology_method = config["diamond_or_blastp"],
@@ -2287,8 +2576,11 @@ rule plot_synteny_of_ALGs_plus_species:
         rbh = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_reciprocal_best_hits.plotted.rbh",
         xy  = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_synteny.pdf",
         yx  = config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_yx_synteny.pdf"
-    threads:
-        1
+    benchmark: "benchmarks/plot_synteny_of_ALGs_plus_species/{hmm}_{sp}.plot_synteny_of_ALGs_plus_species.benchmark.txt"
+    resources:
+        mem_mb = 5000, # usually takes ??GB of RAM
+        runtime   = 30  # 30 minutes in seconds
+    threads: 1
     params:
         orthology_method = config["diamond_or_blastp"],
         coloredby = lambda wildcards: wildcards.hmm,
@@ -2413,6 +2705,10 @@ rule ALG_decay_plot:
     output:
         plot = config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.pdf",
         data = config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.tsv"
+    benchmark: "benchmarks/ALG_decay_plot/{hmm}_{sp}.ALG_decay_plot.benchmark.txt"
+    resources:
+        mem_mb = 1000, # 20231206 This almost certainly will not take up 1GB of RAM. Just using this value temporarily.
+        runtime   = 10  # 20231206 Don't know what value. Just using 10 minutes. 10 minutes in seconds
     threads: 1
     run:
         # read in the rbh dataframe

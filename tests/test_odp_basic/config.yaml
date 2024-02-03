@@ -1,0 +1,17 @@
+ignore_autobreaks: True       # Skip steps to find breaks in synteny blocks
+diamond_or_blastp: "diamond"  # "diamond" or "blastp"
+duplicate_proteins: "pass"    # currently only "fail" or "pass".
+plot_LGs: True                # Plot the ALGs based on the installed databases
+plot_sp_sp: True              # Plot the synteny between two species, if False just generates .rbh files
+
+species:
+  Urchin:
+    proteins: ../testdb/mini_urchin/mini_urchin.pep.gz
+    chrom:    ../testdb/mini_urchin/mini_urchin.chrom.gz
+    genome:   ../testdb/mini_urchin/mini_urchin.fa.gz
+    minscafsize: 10  # Only plots scaffolds that are 10 bp or longer
+  Hydra:
+    proteins: ../testdb/mini_hydra/mini_hydra.pep.gz
+    chrom:    ../testdb/mini_hydra/mini_hydra.chrom.gz
+    genome:   ../testdb/mini_hydra/mini_hydra.fa.gz
+    minscafsize: 10  # Only plots scaffolds that are 10 bp or larger
