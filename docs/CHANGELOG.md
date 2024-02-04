@@ -1,5 +1,17 @@
 # In this document we will log changes to include with release notes.
-- v0.3.1 - Published on ?? (Pending)
+- v0.3.1 - Published on February 4th, 2024
+  - Improvements to the `scripts/odp` program.
+    - The script now handles gzipped protein fasta, genome assembly fasta, and chrom files. This will allow users to save disk space.
+    - Many intermediate files in the pipeline are now gzipped to save disk space.
+    - There is enhanced logic and more clear messages for users in the file legality checks. These checks came from a combination of errors that users encountered, and my own experiences. The inclusions of these checks, and the enhanced error messages, should make the program more user-friendly, and should help users become more aware of pitfalls or errors in their data.
+      - The program no longer runs if the user is attempting to run the program from within the `odp` installation directory. There is an allowance if the user runs the program from the `tests` directory.
+      - The program no longer allows for duplicate headers in the genome assembly fasta file. The warning message tells the user the first duplicate header found.
+      - The program also no longer allows duplicate headers in the protein fasta file.
+      - Duplicate protein sequences: sometimes there are duplicate protein sequences in the protein fasta file. The program now checks for this and warns the user if there are duplicates. The program will not run if there are duplicates. The user has an option to ignore this issue with a command line flag: `duplicate_proteins: "pass"`.
+        - See https://github.com/conchoecia/odp/issues/49
+        - See also https://github.com/conchoecia/odp/issues/62
+      - The program now requires that every protein ID found in the chrom file is present in the protein fasta file. This is a new requirement, and is predicated on the assumption that if the user specifies where a protein is located in a genome, that the protein should also be included in the pairwise comparisons. There is no option to ignore this issue, as offered above for duplicate protein sequences.
+      - The program also requires that every scaffold in the chrom file is also present in the genome assembly fasta file. There is no option to ignore this issue.
   - Removed redundant files from the package (specifically the genome_rearrangement_simulation2 and 3 files.)
   - Added the Simakov et al 2020 CLGs to the software.
   - Added another makefile that has a variable number of cores.
