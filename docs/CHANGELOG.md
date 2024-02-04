@@ -1,4 +1,6 @@
 # In this document we will log changes to include with release notes.
+- v0.3.2 - Published on February 5th, 2024
+  - Fixed a bug that caused uncompressed files to sometimes be attempted to read as zipped files.
 - v0.3.1 - Published on February 4th, 2024
   - Improvements to the `scripts/odp` program.
     - The script now handles gzipped protein fasta, genome assembly fasta, and chrom files. This will allow users to save disk space.
