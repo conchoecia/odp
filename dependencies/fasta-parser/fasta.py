@@ -208,30 +208,30 @@ def to_dict(sequences) -> dict:
     """
     return {record.id: record for record in sequences}
 
+def get_compression_type(
+        filename: typing.Union[str, pathlib.Path]
+    ) -> typing.Union[str, None]:
+    """Returns the compression type of a file based on its first few bytes.
 
-def get_compression_type(filename: typing.Union[str, pathlib.Path]) -> str:
-    """Guesses the compression (if any) of a file based on the first few bytes.
-
-    http://stackoverflow.com/questions/13044562
+    Args:
+        filename: a name or pathlib.Path of a file containing FASTA sequences
 
     Returns:
-        Compression type (gz, bz2, zip, zst, lz4, plain)
-    """
-    magic_dict = {(b'\x1f', b'\x8b', b'\x08'): 'gz',
-                  (b'\x42', b'\x5a', b'\x68'): 'bz2',
-                  (b'\x50', b'\x4b', b'\x03', b'\x04'): 'zip',
-                  (b'\xb5', b'\xfd'): 'zstandard'}
-    max_len = max(len(few_bytes) for few_bytes in magic_dict)
-    fh = open(filename, 'rb')
-    file_start = fh.read(max_len)
-    fh.close()
-    compression_type = None
-    for first_bytes in magic_dict:
-        if file_start.startswith(first_bytes):
-            compression_type = magic_dict[first_bytes]
-            break
-    return compression_type
+        A string representing the compression type of the file, or None
+        if the compression type could not be determined.
 
+    Reference:
+        http://stackoverflow.com/questions/13044562
+    """
+    MAGIC_DICT = {b'\x1f\x8b\x08': 'gz',
+                  b'\x42\x5a\x68': 'bz2',
+                  b'\x50\x4b\x03\x04': 'zip'}
+    with open(filename, 'rb') as fh:
+        file_start = fh.read(max(len(few_bytes) for few_bytes in MAGIC_DICT))
+    for first_bytes, compression_type in MAGIC_DICT.items():
+        if file_start.startswith(first_bytes):
+            return compression_type
+    return None
 
 def get_open_func(filename: typing.Union[str, pathlib.Path]) -> typing.Callable:
     """Returns a function to open a file.
