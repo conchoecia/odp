@@ -62,12 +62,14 @@ def parse_args():
       - ALGname: the name of the ALG database - use this to correctly identify the columns in the rbh file
       - prefix: the prefix of the rbh files. Also potentially includes the directory for the rbh files.
       - ALG_rbh: the name of the rbh file that contains the ALG information. This is used to get the ALG names, sizes, and colors.
+      - minsig: the minimum significance value for the whole_FET column in the rbh files. This is used to filter the rbh files.
     """
     parser = argparse.ArgumentParser(description='Plot the size of ALGs against the number of colocalized ALGs')
-    parser.add_argument('-d', '--directory', type=str, required=True, help='The directory where the ALG files are saved')
-    parser.add_argument('-a', '--ALGname', type=str, required=True, help='The name of the ALG database')
-    parser.add_argument('-p', '--prefix', type=str, required=True, help='The prefix of the rbh files. Also potentially includes the directory for the rbh files.')
-    parser.add_argument('-r', '--ALG_rbh', type=str, required=True, help='The name of the rbh file that contains the ALG information. This is used to get the ALG names, sizes, and colors.')
+    parser.add_argument('-d', '--directory', type=str,   required=True,   help='The directory where the ALG files are saved')
+    parser.add_argument('-a', '--ALGname',   type=str,   required=True,   help='The name of the ALG database')
+    parser.add_argument('-p', '--prefix',    type=str,   required=True,   help='The prefix of the rbh files. Also potentially includes the directory for the rbh files.')
+    parser.add_argument('-r', '--ALG_rbh',   type=str,   required=True,   help='The name of the rbh file that contains the ALG information. This is used to get the ALG names, sizes, and colors.')
+    parser.add_argument('-m', '--minsig',    type=float, default = 0.005, help='The minimum significance value for the whole_FET column in the rbh files. This is used to filter the rbh files.')
 
     args = parser.parse_args()
     # make sure that the directory exists
@@ -140,7 +142,7 @@ def parse_rbh_file(rbh_file) -> pd.DataFrame:
     df = df.reset_index(drop=True)
     return df
 
-def parse_ALG_fusions(list_of_rbh_files, ALG_df, ALGname) -> pd.DataFrame:
+def parse_ALG_fusions(list_of_rbh_files, ALG_df, ALGname, minsig) -> pd.DataFrame:
     """
     Takes in a list of rbh files and plots the size of ALGs (increasing) against a violin plot of the number
     of fusions that this ALG participates in for all of the species found in the RBH file.
@@ -153,6 +155,12 @@ def parse_ALG_fusions(list_of_rbh_files, ALG_df, ALGname) -> pd.DataFrame:
     R       | PMA     | ["Qa", "Qb"]
     Qa      | PMA     | ["R", "Qb"]
     Qb      | PMA     | ["R", "Qa"]
+
+    Inputs:
+      - list_of_rbh_files: a list of rbh files
+      - ALG_df: a dataframe of the ALG names, colors, and sizes
+      - ALGname: the name of the ALG database, for example, BCnSSimakov2022
+      - minsig: the minimum significance value for the whole_FET column in the rbh files. The default of this program is 0.005.
     """
     # We must structure the data in a way that can be output and used for plotting later.
     #  Each entry will be formatted like this, and will be a row in a dataframe later: {"ALGname": str, "Species": str, "Fused_with": str}
@@ -181,8 +189,8 @@ def parse_ALG_fusions(list_of_rbh_files, ALG_df, ALGname) -> pd.DataFrame:
         if (col1 not in rbh_df.columns) or (col2 not in rbh_df.columns) or (col3 not in rbh_df.columns):
             raise IOError("The rbh file {} does not have the correct columns for the species {}".format(thisfile, species))
 
-        # get the rows where whole_FET <= 0.05
-        rbh_df = rbh_df[rbh_df['whole_FET'] <= 0.005]
+        # get the rows where whole_FET <= minsig
+        rbh_df = rbh_df[rbh_df['whole_FET'] <= minsig]
         # now just keep the columns
         keep_these_columns = ["rbh", "gene_group", "color",
                               "{}_scaf".format(ALGname),
@@ -905,8 +913,8 @@ def main():
         grouped = df.groupby("{}_scaf".format(species))
         # iterate through the chromosomes.
         for name, group in grouped:
-            # filter out the rows that are not significantly correlated
-            group = group[group["whole_FET"] <= 0.005]
+            # filter out the rows that are not significantly correlated, using minsig
+            group = group[group["whole_FET"] <= args.minsig]
             thisentry = {x: 0 for x in ALGdf["ALGname"]}
             thisentry["sp.|.chromosome"] = "{}.|.{}".format(species,name)
             # if this chromosome has any significantly correlated ALGs, then add them to the dictionary

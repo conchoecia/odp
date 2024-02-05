@@ -17,8 +17,7 @@ import matplotlib.pyplot as plt
 # import patches
 import matplotlib.patches as mpatches
 # use twoslope norm to make a diverging color map
-from matplotlib.colors import Normalize, TwoSlopeNorm, LogNorm
-from matplotlib.colors import Normalize
+from matplotlib.colors import Normalize, TwoSlopeNorm
 
 # Filter out the DeprecationWarning related to the py23 module
 import warnings
@@ -26,9 +25,16 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="fontTools
 # import pdfpages
 from matplotlib.backends.backend_pdf import PdfPages
 
-
 # use networkx to make graphs for the lineage-specific fusion/losses
 import networkx as nx
+
+# odp stuff to format the plot
+# ODP-specific imports
+thisfile_path = os.path.dirname(os.path.realpath(__file__))
+scripts_path = os.path.join(thisfile_path, "../scripts")
+sys.path.insert(1, scripts_path)
+import odp_plotting_functions as odp_plot
+
 
 def rgb_float_to_hex(list_of_rgb_floats):
     """
@@ -1560,7 +1566,6 @@ class PhyloTree:
 
         # get the single incoming edge. Make sure it is a tuple
         in_edges = list(self.G.in_edges(node))
-        print("The in edges are {}".format(in_edges))
         if len(in_edges) > 1:
             raise Exception("There should only be one incoming edge. We don't allow reticulate phylogenetic trees. Found {}".format(in_edges))
 
@@ -1587,32 +1592,42 @@ def _make_one_simulation_plot(algdf, c, T, taxid, simulation_filepaths,
       - T is the PhyloTree object
       - taxid is the NCBI taxid that we are plotting
     """
-    # First we figure out which branches are in the clade we care about.
-    # we cast the tuples to strings because of how they're stored in the df
-    branches_in_clade = [str(x) for x in T.get_edges_in_clade(taxid)]
-    taxon_name = T.G.nodes[taxid]["taxname"]
-    ## this is useful for debugging
-    #print("We're plotting the taxid {} ({})".format(taxid, taxon_name))
-    #print("branches in this clade are")
-    #for thisbranch in branches_in_clade:
-    #    taxid1 = int(thisbranch.split(",")[0].replace("(", ""))
-    #    taxid2 = int(thisbranch.split(",")[1].replace(")", ""))
-    #    print("  {}:  {}-{}".format(thisbranch, T.G.nodes[taxid1]["taxname"], T.G.nodes[taxid2]["taxname"]))
-    # raise an error if ther eis nothing in this clade
-    if len(branches_in_clade) == 0:
-        raise Exception("There are no branches in the clade {}".format(taxid))
-    # make a filtered df that only contains the branches in the clade
-    plotdf = c.plotmatrix_sumdf[c.plotmatrix_sumdf["branch"].isin(branches_in_clade)]
+    plotting = True
+    # At this point we're not even sure if this species is in the graph. We must first check.
+    if not taxid in T.G.nodes():
+        # it isn't in the graph, we can't plot it.
+        plotting = False
+        # use ete3 ncbi to get the taxon name
+        ncbi = NCBITaxa()
+        taxon_name = ncbi.get_taxid_translator([taxid])[taxid].replace(" ", "-")
+    else:
+        # There is a chance we can plot it still
+        # First we figure out which branches are in the clade we care about.
+        # we cast the tuples to strings because of how they're stored in the df
+        branches_in_clade = [str(x) for x in T.get_edges_in_clade(taxid)]
+        taxon_name = T.G.nodes[taxid]["taxname"]
+        ## this is useful for debugging
+        #print("We're plotting the taxid {} ({})".format(taxid, taxon_name))
+        #print("branches in this clade are")
+        #for thisbranch in branches_in_clade:
+        #    taxid1 = int(thisbranch.split(",")[0].replace("(", ""))
+        #    taxid2 = int(thisbranch.split(",")[1].replace(")", ""))
+        #    print("  {}:  {}-{}".format(thisbranch, T.G.nodes[taxid1]["taxname"], T.G.nodes[taxid2]["taxname"]))
+        # raise an error if ther eis nothing in this clade
+        if len(branches_in_clade) == 0:
+            raise Exception("There are no branches in the clade {}".format(taxid))
+        # make a filtered df that only contains the branches in the clade
+        plotdf = c.plotmatrix_sumdf[c.plotmatrix_sumdf["branch"].isin(branches_in_clade)]
 
-    # now we don't care about the branch. Groupby the other columns and sum them up. They are all counts
-    plotdf  = plotdf.groupby(["ALG_num", "bin", "ob_ex", "size_frac", "abs_CC" ])["counts"].sum().reset_index()
-    # if ob_ex is expected, "obs_count" will be c.expected_obs_count, otherwise it will be c.observed_obs_count
-    plotdf["obs_count"] = [c.num_expected_observations if x == "expected" else c.num_observed_observations for x in plotdf["ob_ex"]]
-    # merge these so that the sumdf has both the counts and the obs_count
-    plotdf["count_per_sim"] = plotdf["counts"] / plotdf["obs_count"]
+        # now we don't care about the branch. Groupby the other columns and sum them up. They are all counts
+        plotdf  = plotdf.groupby(["ALG_num", "bin", "ob_ex", "size_frac", "abs_CC" ])["counts"].sum().reset_index()
+        # if ob_ex is expected, "obs_count" will be c.expected_obs_count, otherwise it will be c.observed_obs_count
+        plotdf["obs_count"] = [c.num_expected_observations if x == "expected" else c.num_observed_observations for x in plotdf["ob_ex"]]
+        # merge these so that the sumdf has both the counts and the obs_count
+        plotdf["count_per_sim"] = plotdf["counts"] / plotdf["obs_count"]
 
-    print("the plotdf is:\n{}".format(plotdf))
-    plotting = True if len(plotdf) > 0 else False
+        print("the plotdf is:\n{}".format(plotdf))
+        plotting = True if len(plotdf) > 0 else False
 
     if not plotting:
         fig = plt.figure(figsize=(6, 2))
@@ -1713,6 +1728,9 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, per_sp_df, algdfpat
     We are able to do this as it is a Monte Carlo
      simulation, so the results are independent.
     """
+    # CALL THIS TO GET THE VISUAL STYLE WE NEED
+    odp_plot.format_matplotlib()
+
     # Try to build a tree and print a clade
     T = PhyloTree()
     T.build_tree_from_per_sp_chrom_df(per_sp_df)
@@ -1791,33 +1809,33 @@ def main():
     # x-axis number of chromosomes, in that species, y-axis is number of fusions leading
     # x-axis number of chromosomes, in that speciers, y-axis is the number of losses
     #  ... and some variation on that.
-    clades_of_interest = [6340,     # Annelida
-                          6447,     # Mollusca
+    clades_of_interest = [# 6340,     # Annelida
+                          # 6447,     # Mollusca
                           6606,     # Coleoidea
                           33511,    # Deuterostomia
                           33317,    # Protostomia
-                          # 10197,   # Ctenophora
-                          # 33213,   # Bilateria
-                          # 31265,   # Acoela
-                          # 33317,   # Protostomia
-                          # 1206794, # Ecdysozoa
-                          # 6231,    # Nematoda
-                          # 88770,   # Panarthropoda
-                          # 7088,    # Lepidoptera
-                          # 2697495, # Spiralia
-                          # 6544,    # Bivalvia
-                          # 7586,    # Echinodermata
-                          # 6073,    # Cnidaria
-                          # 7711,    # Chordata
-                          # 7742,    # Vertebrata
-                          # 6605,    # cephalopods
-                          # 33208,   # Metazoa
-                          # 6040,    # Porifera
-                          # 6042,    # Demospongiae
+                          10197,   # Ctenophora
+                          33213,   # Bilateria
+                          31265,   # Acoela
+                          33317,   # Protostomia
+                          1206794, # Ecdysozoa
+                          6231,    # Nematoda
+                          88770,   # Panarthropoda
+                          7088,    # Lepidoptera
+                          2697495, # Spiralia
+                          6544,    # Bivalvia
+                          7586,    # Echinodermata
+                          6073,    # Cnidaria
+                          7711,    # Chordata
+                          7742,    # Vertebrata
+                          6605,    # cephalopods
+                          33208,   # Metazoa
+                          6040,    # Porifera
+                          6042,    # Demospongiae
                           ]
 
-    ## Specify the file path of the TSV file. Use sys.argv[1]. The file will be called something like per_species_ALG_presence_fusions.tsv
-    #generate_stats_df(sys.argv[1], "statsdf.tsv")
+    # Specify the file path of the TSV file. Use sys.argv[1]. The file will be called something like per_species_ALG_presence_fusions.tsv
+    generate_stats_df(sys.argv[1], "statsdf.tsv")
 
     #run_n_simulations_save_results(sys.argv[1]       ,
     #                               sys.argv[2]       ,
