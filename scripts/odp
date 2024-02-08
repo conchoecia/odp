@@ -207,16 +207,16 @@ if "plot_LGs" not in config:
     config["plot_LGs"] = True
 
 if config["plot_LGs"]:
-    ## This set of files plots the installed LGs against all of the datasets
-    #file_targets += [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(hmm, sp)
-    #  for sp in config["analysisspecies"] for hmm in config["prot_to_color"]]
-    ## color by the things in the chrom settings
-    #file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
-    #  for x in config["analysispairs"] for y in config["prot_to_color"]]
-    #file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
-    #  for x in config["analysispairs"] for y in config["prot_to_color"]]
-    #file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
-    #  for x in config["analysispairs"] for y in config["prot_to_color"]]
+    # This set of files plots the installed LGs against all of the datasets
+    file_targets += [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(hmm, sp)
+      for sp in config["analysisspecies"] for hmm in config["prot_to_color"]]
+    # color by the things in the chrom settings
+    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
+      for x in config["analysispairs"] for y in config["prot_to_color"]]
+    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
+      for x in config["analysispairs"] for y in config["prot_to_color"]]
+    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
+      for x in config["analysispairs"] for y in config["prot_to_color"]]
 
     # We also want to plot the ALGs as if they were genomes, against the individual species
     # This line specifically is for testing the RBH-as-a-species analysis
