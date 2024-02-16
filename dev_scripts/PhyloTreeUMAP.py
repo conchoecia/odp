@@ -261,7 +261,6 @@ class PhyloTree:
         # set the missing values of the sparse matrix to 999999999999
         sparse_matrix.data[sparse_matrix.data == 0] = 999999999999
 
-        print("The type of the sparse matrix is ", type(sparse_matrix))
         print("Fitting the UMAP")
         reducer = umap.UMAP(low_memory=True)
         start = time.time()
@@ -400,7 +399,14 @@ def rbh_directory_to_distance_matrix(rbh_directory, ALGname):
     rbh_files = list(sorted([os.path.join(rbh_directory, f)
                  for f in os.listdir(rbh_directory)
                  if f.endswith('.rbh')], reverse = True))
-    #rbh_files = rbh_files[:100]
+
+    # We must check that all of the rbh files, when split on '-', have an integer as the 2nd element.
+    # If not, the filename needs to be changed. Right now we parse the taxid from the filename.
+    for rbhfile in rbh_files:
+        thisfilename = os.path.basename(rbhfile)
+        taxid = thisfilename.split('-')[1]
+        if not re.match(r"^[0-9]*$", str(taxid)):
+            raise ValueError(f"There is a non-numeric character in the taxid string for file {rbhfile}. Exiting.")
 
     taxid_to_taxidstring = taxids_to_taxidstringdict(
         [int(os.path.basename(x).split('-')[1]) for x in rbh_files])
@@ -427,6 +433,9 @@ def rbh_directory_to_distance_matrix(rbh_directory, ALGname):
         thissample = [x for x in df.columns
                       if "_scaf" in x
                       and ALGname not in x][0].split("_")[0]
+        # check that the second field when splitting on '-' is an integer
+        if not re.match( r"^[0-9]*$", thissample.split("-")[1] ):
+            raise ValueError( f"There is a non-numeric character in the taxid string for the sample {thissample} when split with '-'. The file was {rbhfile} Exiting." )
         gb_filepath = f"results/{thissample}.gb.gz"
         if not os.path.exists(gb_filepath):
             rbh_to_gb(thissample, df, gb_filepath)
@@ -465,16 +474,23 @@ def parse_args():
 def main():
     args = parse_args()
 
+    # ┏┓┓ ┏┓  ┏┓┏┓┏┓┏┓┳┏┓┏┓  •  ┏
+    # ┣┫┃ ┃┓━━┗┓┃┃┣ ┃ ┃┣ ┗┓  ┓┏┓╋┏┓
+    # ┛┗┗┛┗┛  ┗┛┣┛┗┛┗┛┻┗┛┗┛  ┗┛┗┛┗┛
     rbh_files = list(sorted([os.path.join(args.directory, f)
                  for f in os.listdir(args.directory)
                  if f.endswith('.rbh')], reverse = True))
+    # Generate the distance matrices. This is the part that saves the .gb.gz files.
+    print("generating the distance matrices")
+    rbh_directory_to_distance_matrix(args.directory, args.ALGname)
+    # If we didn't have any errors, then we know that all the taxids here will be correct
     taxid_to_taxidstring = taxids_to_taxidstringdict(
         [int(os.path.basename(x).split('-')[1]) for x in rbh_files])
 
-    # generate the distance matrices
-    print("generating the distance matrices")
-    rbh_directory_to_distance_matrix(args.directory, args.ALGname)
-
+    # ┏┓┓   ┓           •   ┏┳┓       ┏  ┏┓┓ ┏┓  ┳┓┳┓┓┏  ┏•┓
+    # ┃┃┣┓┓┏┃┏┓┏┓┏┓┏┓┏┓╋┓┏   ┃ ┏┓┏┓┏┓ ┃  ┣┫┃ ┃┓  ┣┫┣┫┣┫  ╋┓┃┏┓
+    # ┣┛┛┗┗┫┗┗┛┗┫┗ ┛┗┗ ┗┗┗   ┻ ┛ ┗ ┗  ┛  ┛┗┗┛┗┛  ┛┗┻┛┛┗  ┛┗┗┗
+    #      ┛    ┛
     # construct our dataframe
     T = PhyloTree()
     # Add in the rbh information
@@ -482,16 +498,30 @@ def main():
     # for all the files in the results directory, we will add the distances to the PhyloTree
     #for thisfile in [x for x in os.listdir("results") if x.endswith(".gb.gz")][:100]:
     counter = 0
+    # This part uses 16.5GB of memory for 3600 files
     gbgzfiles = [x for x in os.listdir("results") if x.endswith(".gb.gz")]
+    # check that for every .gz.gz file, the second things is an integer
+    for thisfile in gbgzfiles:
+        thissample = thisfile.replace(".gb.gz", "")
+        taxid = thissample.split("-")[1]
+        if not re.match(r"^[0-9]*$", taxid):
+            raise ValueError(f"There is a non-numeric character in the taxid string, {taxid}, for file {thisfile}. Exiting.")
+        if int(taxid) not in taxid_to_taxidstring:
+            raise ValueError(f"The taxid {taxid} is not in the taxid_to_taxidstring dictionary. The file was {thisfile}. Exiting.")
+    # Process the .gb.gz files and add them to the graph
     for thisfile in gbgzfiles:
         print(f"\r    Adding the file {counter}/{len(gbgzfiles)}", end="", file = sys.stdout)
         thissample = thisfile.replace(".gb.gz", "")
         taxid = int(thissample.split("-")[1])
-        distdf = pd.read_csv(f"results/{thisfile}", sep = "\t", compression = "gzip")
+        try:
+            distdf = pd.read_csv(f"results/{thisfile}", sep = "\t", compression = "gzip")
+        except:
+            raise IOError(f"The file {thisfile} could not be read in with pandas. There probably was something wrong wth the compression. Try deleteing this file. It will be regenerated. Exiting.")
         T.add_lineage_string_sample_distances(taxid_to_taxidstring[taxid],
                                               thissample, args.ALGname,
                                               distdf)
         counter += 1
+
     print()
     print("Done adding the files")
     T.merge_sampledistances_to_locdf()
