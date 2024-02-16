@@ -34,13 +34,18 @@ PREREQUISITES:
 
 import argparse
 import numpy as np
-from sklearn.decomposition import PCA
+from   sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
+import networkx as nx
 import itertools
 import os
 import pandas as pd
 import re
 import sys
+import time
+import umap
+#import warnings
+#warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
 from PIL import Image
 import numpy as np
@@ -52,7 +57,6 @@ import rbh_tools
 
 # import the stuff to work with lineages
 from ete3 import NCBITaxa,Tree
-
 
 # get the warnings
 import warnings
@@ -92,6 +96,13 @@ def hex_to_rgb(hex):
     hex = hex.lstrip('#')
     hlen = len(hex)
     return tuple(int(hex[i:i+hlen//3], 16) for i in range(0, hlen, hlen//3))
+
+def rgb_255_float_to_hex(rgb_floats):
+    """
+    Converts a single rgb 0-255 to a hex string.
+    """
+    return '#%02x%02x%02x' % (int(rgb_floats[0]), int(rgb_floats[1]), int(rgb_floats[2]))
+
 
 def parse_ALG_fusions(list_of_rbh_files, ALG_df, ALGname, minsig) -> pd.DataFrame:
     """
@@ -536,7 +547,6 @@ def dict_BCnSALG_to_color() -> dict:
            "D": "#47957F",  # 172
          "A1a": "#4DB5E3"}  # 207
 
-
 def image_colocalization_matrix(ALG_pres_abs_dataframe, color_dict = None,
                                 clustering = True, missing_data_color = "#990000") -> Image:
     """
@@ -843,41 +853,42 @@ def unsplit_ALGs(df, max_frac_split = 0.5):
             ALG_qc[ALG] = len(df[df[ALG] > 1]) / len(df[df[ALG] >= 1])
     return [x for x in ALG_qc if ALG_qc[x] <= max_frac_split ]
 
-def main():
-    # parse the args
-    args = parse_args()
+def rbh_files_to_locdf_and_perspchrom(rbh_files, ALGrbhfile, minsig, ALGname) -> (pd.DataFrame, pd.DataFrame):
+    """
+    This takes in a list of rbh files and returns two dataframes.
+    The RBH files are those that are species against ALGs.
 
-    # get the rbh files in the directory
-    rbh_files = list(sorted([os.path.join(args.directory, f)
-                 for f in os.listdir(args.directory)
-                 if f.endswith('.rbh')], reverse = True))
-
-    print("The rbh file set length before filtering is {}".format(len(rbh_files)))
-    # just pick the first rbh file to get the one species with each taxid. All of our files will have the NCBI taxid in the file name.
-    seen_taxids = set()
-    keep_these = []
-    # save the list of selected genomes to a file:
-    outhandle  = open("selected_genomes.txt", 'w')
-    for thisfile in rbh_files:
-        # get just the filename from the whole path
-        thisfilename = os.path.basename(thisfile)
-        # get the taxid. When we split on '-', it will be the 1st element, zero-based indexing.
-        taxid = int(thisfilename.split('-')[1])
-        if taxid not in seen_taxids:
-            keep_these.append(thisfile)
-            print("{}".format(thisfilename), file=outhandle)
-        seen_taxids.add(taxid)
-    outhandle.close()
-
-    rbh_files = keep_these
-    print("The rbh file set length after filtering is {}".format(len(rbh_files)))
-
-    #rbh_files = rbh_files[:10]
-    #keep_these = ["Rhopilema", "Branchiostoma", "Lytechinus"]
-    #rbh_files = [x for x in rbh_files if any([y in x for y in keep_these])]
+    The locdf looks like this:
+                                            sample gene_group    scaffold        pvalue  num_genes  frac_of_this_ALG_on_this_scaffold
+        allooctoploidhybrid-2876849-GCA024542945.1        A1a  CM045036.1  2.713967e-05         15                           0.082873
+        allooctoploidhybrid-2876849-GCA024542945.1        A1a  CM045038.1  2.440960e-02         11                           0.060773
+        allooctoploidhybrid-2876849-GCA024542945.1        A1a  CM045052.1  1.984298e-04         12                           0.066298
+        allooctoploidhybrid-2876849-GCA024542945.1        A1a  CM045053.1  9.969622e-13         25                           0.138122
+        allooctoploidhybrid-2876849-GCA024542945.1        A1a  CM045054.1  3.496336e-08         16                           0.088398
+                                               ...        ...         ...           ...        ...                                ...
+                    Zeusfaber-64108-GCA960531495.1         Qd  OY482860.1  8.905043e-04          8                           0.400000
+               Zeugodacustau-137263-GCA031772095.1         Ea  CM062648.1  1.620573e-03          9                           0.115385
+               Zeugodacustau-137263-GCA031772095.1         Eb  CM062648.1  4.219110e-02          5                           0.161290
+               Zeugodacustau-137263-GCA031772095.1          G  CM062650.1  2.983613e-02         34                           0.326923
+               Zeugodacustau-137263-GCA031772095.1          I  CM062649.1  3.457063e-09         38                           0.633333
+    """
+    # Check that the list of rbh files is not empty
+    if len(rbh_files) == 0:
+        raise IOError("The list of rbh files is empty.")
+    # Check that all of the files in the rbh_files list exist
+    for file in rbh_files:
+        if not os.path.exists(file):
+            raise IOError(f"The file {file} does not exist.")
+    # check that the ALGrbhfile exists
+    if not os.path.exists(ALGrbhfile):
+        raise IOError(f"The file {ALGrbhfile} does not exist.")
+    # if minsig is greater than 0.05, then raise an error telling the user that the value is too high
+    if minsig > 0.05:
+        raise ValueError("The minsig value is too high. It should be less than 0.05.")
+    # OK, we're done being paranoid. Let's get to work.
 
     # first we need to read through all of the rbh files to get all of the possible ALGs to plot
-    ALGdf = rbh_tools.parse_ALG_rbh_to_colordf(args.ALG_rbh)
+    ALGdf = rbh_tools.parse_ALG_rbh_to_colordf(ALGrbhfile)
 
     # First we figure out on which chromosomes the ALGs are located. Some may be split.
     sample_to_chromnum    = {}
@@ -889,7 +900,7 @@ def main():
         print(f"\r  Parsing rbh file {i+1}/{len(rbh_files)}", end = "", file = sys.stderr)
         file = rbh_files[i]
         rbhdf = rbh_tools.parse_rbh(file)
-        splitdf, samplename = rbh_tools.rbhdf_to_alglocdf(rbhdf, args.minsig, args.ALGname)
+        splitdf, samplename = rbh_tools.rbhdf_to_alglocdf(rbhdf, minsig, ALGname)
         chromnum = rbh_tools.rbh_to_scafnum(rbhdf, samplename)
         sample_to_chromnum[samplename] = chromnum
         entries.append(splitdf)
@@ -900,15 +911,10 @@ def main():
         if not re.match(r"^[0-9]*$", str(taxid)):
             raise ValueError("There is a non-numeric character in the taxid string")
         sample_to_taxid[samplename] = int(taxid)
-
     print()
-    print(f"  Parsing rbh file {len(rbh_files)}/{len(rbh_files)}", end = "", file = sys.stderr)
 
     # convert the entries into a dataframe
-    locdf = pd.concat(entries)
-    print("This is the df with all of the locations of the ALGs")
-    print(locdf)
-    print()
+    locdf = pd.concat(entries).reset_index(drop=True)
 
     # Now that we know the NCBI taxid for each sample, generate the taxid_to_lineagestring
     sample_to_taxidstring = taxids_to_taxidstringdict([sample_to_taxid[k] for k in sample_to_taxid])
@@ -940,59 +946,783 @@ def main():
     ## If the value is 1, then the ALG is present on only one chromosome.
     ## If 2, the ALG is present on two chromosomes, etc.
     sorted_ALG_list = list(ALGdf.sort_values("Size", ascending = False)["ALGname"])
-    for thisALG in sorted_ALG_list:
-        print(f"\r  Analyzing the composition of {counter+1}/{total_queries}          ", end = "", file = sys.stderr)
-        # write an apply function to count the number of times thisALG is present in the "gene_group" column of locdf["sample"] for the species in that row
-        perspchrom[thisALG] = perspchrom["species"].apply(lambda x: len(locdf[(locdf["sample"] == x) & (locdf["gene_group"] == thisALG)]))
-        counter += 1
+    # add these columns to perspchrom, initialize with 0
+    results = []
+    # go through all the rows in perspchrom
+    numsamp = len(perspchrom)
+    for i, row in perspchrom.iterrows():
+        print(f"\r  Analyzing the ALG composition of sample: {i}/{numsamp}          ", end = "", file = sys.stderr)
+        thissample = row["species"]
+        results.append({x: 0 for x in sorted_ALG_list})
+        # update with the valuecounts for the gene_group column
+        results[-1].update(locdf[locdf["sample"] == thissample]["gene_group"].value_counts().to_dict())
+        results[-1]["species"] = thissample
+    print()
+    # make a dataframe from the results list. The columns are the ALGs and the rows are the samples. Use the order of the sorted_ALG_list
+    resdf = pd.DataFrame(results, columns = ["species"] + sorted_ALG_list)
+    # Merge the resdf with perspchrom.
+    perspchrom = pd.merge(perspchrom, resdf, on = "species")
 
     # ┏┓┓ ┏┓  ┏┓┏┓┓ ┏┓┏┓┏┓┓ ┳┏┓┏┓┏┳┓┳┏┓┳┓  ┏┓┏┓┓ ┳┳┳┳┓┳┓┏┓
     # ┣┫┃ ┃┓  ┃ ┃┃┃ ┃┃┃ ┣┫┃ ┃┏┛┣┫ ┃ ┃┃┃┃┃  ┃ ┃┃┃ ┃┃┃┃┃┃┃┗┓
     # ┛┗┗┛┗┛  ┗┛┗┛┗┛┗┛┗┛┛┗┗┛┻┗┛┛┗ ┻ ┻┗┛┛┗  ┗┛┗┛┗┛┗┛┛ ┗┛┗┗┛
     # These columns mark if the ALGs are present on the same chromosomes
-    results = []
     columnnames = []
-    #DEBUG
-    #for x in perspchrom["species"]:
-    #    print("Sample is {}".format(x))
-    #    print("Sample locdf is \n{}".format(locdf[locdf["sample"] == x]))
-    #    print()
-    #    Ai  = "F"
-    #    Aii = "Eb"
-    #    print("set(locdf[(locdf['sample'] == x) & (locdf['gene_group'] == Ai )]['scaffold'])")
-    #    print(set(locdf[(locdf["sample"] == x) & (locdf["gene_group"] == Ai )]["scaffold"]))
-    #    print("set(locdf[(locdf['sample'] == x) & (locdf['gene_group'] == Aii )]['scaffold'])")
-    #    print(set(locdf[(locdf["sample"] == x) & (locdf["gene_group"] == Aii )]["scaffold"]))
-    #    sys.exit()
     # now add a column for each of the ALG pairs
     for i in range(len(sorted_ALG_list)-1):
         for ii in range(i+1, len(sorted_ALG_list)):
-            print(f"\r  Analyzing the composition of {counter+1}/{total_queries}          ", end = "", file = sys.stderr)
             Ai = sorted_ALG_list[i]
             Aii = sorted_ALG_list[ii]
-            columnnames.append((Ai, Aii))
-            # The lambda function checks that both of the ALGs are present in the sample,
-            # AND they are on the same chromosome. Looks in the locdf dataframe.
-            results.append(perspchrom["species"].apply(lambda x:
-                    1 if
-                        (Ai in locdf[locdf["sample"] == x]["gene_group"].values) and
-                        (Aii in locdf[locdf["sample"] == x]["gene_group"].values) and
-                        (len(
-                             set(locdf[(locdf["sample"] == x) & (locdf["gene_group"] == Ai )]["scaffold"]).intersection(
-                             set(locdf[(locdf["sample"] == x) & (locdf["gene_group"] == Aii)]["scaffold"])
-                            )) > 0
-                        )
-                    else 0)
-            )
-            counter += 1
+            columnnames.append(tuple(sorted((Ai, Aii))))
+    results = []
+    # now, for each species go through and add a 1 to the column if the ALGs are present on the same chromosome
+    for i, row in perspchrom.iterrows():
+        print(f"\r  Analyzing the colocalizations of sample: {i+1}/{numsamp}          ", end = "", file = sys.stderr)
+        results.append({x: 0 for x in columnnames})
+        results[-1]["species"] = row["species"]
+        gb = locdf[locdf["sample"] == row["species"]].groupby("scaffold")
+        # groupby the chromosome number, if there are groups that have multiple ALGs, then add a 1 to the appropriate column
+        for name, group in gb:
+            # get the ALGs in the group
+            ALGs_in_group = list(set(group["gene_group"]))
+            # go through the combinations and add a value to the perspchrom dataframe
+            for j in range(len(ALGs_in_group)-1):
+                for jj in range(j+1, len(ALGs_in_group)):
+                    Ai = ALGs_in_group[j]
+                    Aii = ALGs_in_group[jj]
+                    thiscolname = tuple(sorted((Ai, Aii)))
+                    results[-1][thiscolname] += 1
     print()
-    print(f"  Analyzing the composition of {counter+1}/{total_queries}", file = sys.stderr)
-    # concatenate the results, use the columnnames in the columnnames list
-    cattd = pd.concat(results, axis = 1)
-    cattd.columns = columnnames
-    # add cattd to perspchrom
-    perspchrom = pd.concat([perspchrom, cattd], axis = 1)
+    # make a df from the results dataframe. Use the columnnames list for the order.
+    resdf = pd.DataFrame(results, columns = ["species"] + columnnames)
+    # now merge back with the perspchrom dataframe
+    perspchrom = pd.merge(perspchrom, resdf, on = "species")
 
+    return locdf, perspchrom
+
+def assign_colors_to_nodes(graph, root, colors):
+    """
+    Assigns colors to nodes in a directed acyclic graph such that colors approach the average of all colors as 
+    you move towards the root.
+
+    Parameters:
+        graph (nx.DiGraph): Directed acyclic graph.
+        root: Root node of the graph.
+        colors (dict): Dictionary mapping node names to colors in hexadecimal notation.
+    """
+
+    def calculate_average_color(node):
+        """
+        Recursively calculates the average color of a node and its daughters.
+        """
+        daughters = list(graph.successors(node))
+        if not daughters:
+            return colors[node]
+
+        daughter_colors = [calculate_average_color(daughter) for daughter in daughters]
+        avg_color = np.mean(daughter_colors, axis=0)
+        return avg_color
+
+    def assign_color(node, parent_avg_color):
+        """
+        Assigns a color to a node based on the average color of its daughters and the parent's average color.
+        """
+        if node != root:
+            avg_color = calculate_average_color(node)
+            # Interpolate between the average color of daughters and the parent's average color
+            alpha = 0.5  # Adjust this parameter for the rate of interpolation
+            node_color = interpolate_color(avg_color, parent_avg_color, alpha)
+            colors[node] = node_color
+        else:
+            # For the root node, use its average color directly
+            colors[node] = parent_avg_color
+
+        for daughter in graph.successors(node):
+            assign_color(daughter, colors[node])
+
+    def interpolate_color(color1, color2, alpha):
+        """
+        Interpolates between two colors in hexadecimal notation.
+        """
+        ## Interpolate between RGB triples
+        #print("alpha ",   alpha)
+        #print("color1 ", color1)
+        #print("color2 ", color2)
+        #print("(alpha * color1) ", (alpha * color1))
+        #print("(1 - alpha) * color2) ", (1 - alpha) * color2)
+
+        interpolated_rgb = (alpha * color1) + ((1 - alpha) * color2)
+        return interpolated_rgb
+
+    # Start assigning colors from the root
+    root_color = calculate_average_color(root)
+    assign_color(root, root_color)
+
+def save_UMAP_plotly(tree_df, outprefix):
+    import plotly.express as px
+    # only get the rows where the '-' characters is in the index
+    for mode in ["withnodes", "withoutnodes"]:
+        tempdf = tree_df.copy()
+        outhtml = None
+        if mode == "withoutnodes":
+            tempdf = tempdf[tempdf.index.str.contains("-")]
+            outhtml = f"{outprefix}.withoutnodes.html"
+        elif mode == "withnodes":
+            outhtml = f"{outprefix}.withnodes.html"
+        else:
+            raise ValueError("The mode must be either 'withnodes' or 'withoutnodes'")
+        plotdf = tempdf.drop(columns = ["color"])
+        X = plotdf.values
+        print("This is X")
+        print(X)
+
+        # Add random noise to the data
+        noise_level = 0.1  # Adjust the noise level as needed
+        X_noisy = X + np.random.normal(0, noise_level, X.shape)
+
+        # Apply UMAP to reduce dimensionality
+        reducer = umap.UMAP()
+        embedding = reducer.fit_transform(X_noisy)
+
+        # Create a DataFrame with the embedding
+        df_embedding = pd.DataFrame(embedding, columns=['UMAP1', 'UMAP2'])
+
+        # Add the indices as labels
+        df_embedding['label'] = plotdf.index
+
+        # Add colors to the plot
+        # Assuming you have a 'color' column in your DataFrame indicating the color of each point
+        color_column = tempdf['color']  # Replace 'color' with the actual column name containing colors
+        fig = px.scatter(df_embedding,
+                         x='UMAP1', y='UMAP2',
+                         hover_name='label', color=color_column)
+        # Show the plot
+        fig.write_html(outhtml)
+
+def save_UMAP(tree_df):
+    """
+    This method saves the UMAP of the tree.
+    """
+    # make a UMAP of the self.tree_df, each point on the UMAP is one row of the dataframe, which is one node in the tree
+    # make a UMAP of the self.tree_df
+    # remove the colors dataframe
+    tempdf = tree_df.drop(columns = ["color"])
+    X = tempdf.values
+    print("This is X")
+    print(X)
+
+    # Add random noise to the data
+    noise_level = 0.1  # Adjust the noise level as needed
+    X_noisy = X + np.random.normal(0, noise_level, X.shape)
+
+    # Apply UMAP to reduce dimensionality
+    reducer = umap.UMAP()
+    embedding = reducer.fit_transform(X_noisy)
+
+    # Plot the reduced data, add the colors from the dataframe
+    #plt.scatter(embedding[:, 0], embedding[:, 1], s=5)  # Adjust 's' for the size of points
+    plt.scatter(embedding[:, 0], embedding[:, 1], s=5, c=tree_df["color"])  # Adjust 's' for the size of points
+    plt.gca().set_aspect('equal', 'datalim')  # Set equal aspect ratio
+    plt.title('UMAP visualization')
+    plt.xlabel('UMAP Dimension 1')
+    plt.ylabel('UMAP Dimension 2')
+    plt.show()
+
+class SplitLossColocTree:
+    """
+    This class is used to store a phylogenetic tree.
+    The tree is implemented as a directional graph.
+    The tree can be constructed by lists of edges. The nodes are inferred from the edges.
+    The lineage is input as a string of taxids, separated by semicolons, plus the sample name.
+
+    The point of this class;
+      - Each leave will have a state of how the ALGs are configured in that sample.
+        Using this information, we will infer the state of the ALGs on the internal nodes.
+      - With the internal information, we will determine on which branches different events happened.
+
+    # Every node has the following properties:
+      - completed: a boolean that is True if we know the state of the ALGs at this node.
+      -
+    """
+    color_dict_top = {
+                  33317:   "#F4B93E", # Protostomes
+                  33511:   "#78A6AF", # Deuterostomes
+                  10197:   "#54AB53", # Ctenophores
+                  6040 :   "#DCC0F3", # Sponges
+                  6073 :   "#387FB2", # Cnidarians
+                  10226:   "#C72480", # Placozoans
+                  1215728: "#2ECAC8", # Scalidophora
+                  6231:    "#9F2ECA", # Nematodes
+                  88770:   "#BF2424", # Panarthropoda
+                  2697495: "#2432BF", # Spiralia
+                  2697496: "#7624BF", # Gnathifera
+                  6447:    "#0CD6F2", # Mollusca
+                  6606:    "#F2B70C", # Coleoidea
+                  6340:    "#0CF247", # Annelida
+                  }
+    def __init__(self, perspchrom) -> None:
+        # initialize the bidirectional graph using networkx
+        self.G = nx.DiGraph()
+        self.perspchrom = perspchrom
+        # Before we delete anything, make a dict of samples to the taxidstring
+        self.sample_to_taxidlist = self.perspchrom.set_index("species")["taxidstring"].to_dict()
+        self.sample_to_taxidlist = {k: [int(x) for x in v.split(";")] for k, v in self.sample_to_taxidlist.items()}
+        self._build_tree_from_perspchrom()
+
+        # define the ALG nodes and the combination nodes
+        # Just define the ALG columns now
+        reject_these = ['species', 'taxid', 'taxidstring']
+        self.ALGcols = [ x for x in self.perspchrom if not isinstance(x, tuple) and x not in reject_these]
+        self.TUPcols = [ x for x in self.perspchrom if     isinstance(x, tuple) and x not in reject_these]
+        # add the completed property to all of the nodes
+        for node in self.G.nodes():
+            if node in self.perspchrom["species"].values:
+                self.G.nodes[node]["completed"] = True
+            else:
+                self.G.nodes[node]["completed"] = False
+        # keep track of all the leaves as places to start
+        self.leaves = [x for x in self.G.nodes() if self.G.out_degree(x) == 0]
+
+        # reindex the perspchrom dataframe with the species column
+        self.perspchrom = self.perspchrom.set_index("species")
+        # drop the columns taxid and taxidstring
+        self.perspchrom = self.perspchrom.drop(columns = ["taxid", "taxidstring"])
+        # copy the first row of perspchrom to be the empty predecessor. Get it as a df, not a series.
+        self.empty_predecessor = self.perspchrom.iloc[[0]].copy().reset_index(drop=True)
+
+        # set all the values to -1
+        for col in self.empty_predecessor.columns:
+            self.empty_predecessor[col] = -1
+        print(self.empty_predecessor)
+
+        # for all of the leaves, add the datatypes
+        for thisnode in self.leaves:
+            # make sure it returns a dataframe and not a series
+            self.G.nodes[thisnode]["dataframe"] = self.perspchrom.loc[[thisnode]].copy()
+
+        # assign the colors for all the nodes
+        self.node_to_color = {}
+        self.assign_colors()
+
+        # Final df for the tree
+        self.tree_df = None
+
+    def assign_colors(self):
+        """
+        Assigns colors to the nodes based on some preferences.
+        """
+        node_colors = {}
+        # go through the class variable, color_dict, and find all the leaves, then assign the colors
+        for sample in self.sample_to_taxidlist:
+            # first do the top-level colors
+            for thistop in self.color_dict_top:
+                if thistop in self.sample_to_taxidlist[sample]:
+                    node_colors[sample] = self.color_dict_top[thistop]
+            # then the subclade colors
+            for thissub in self.color_dict:
+                if thissub in self.sample_to_taxidlist[sample]:
+                    node_colors[sample] = self.color_dict[thissub]
+        # convert the node_colors to np arrays
+        node_colors = {node: np.array(hex_to_rgb(color)) for node, color in node_colors.items()}
+        # go through the leaves, and if the color is not assigned, give it a non-offensive blue "#3f3f7f"
+        for leaf in self.leaves:
+            if leaf not in node_colors:
+                node_colors[leaf] = np.array(hex_to_rgb("#3f3f7f"))
+
+        # Assign colors to nodes
+        root = [n for n,d in self.G.in_degree() if d==0][0]
+        assign_colors_to_nodes(self.G, root, node_colors)
+
+        ## Print the assigned colors for each node
+        #print("Node Colors:")
+        ## results
+        ##                       #E: #2faf1f
+        ##           #B: #5f5f3f #D: #af2f1f
+        ## A: #3f3f7f
+        ##           #C: #1f1fbf #F: #0f0fdf
+        #for node, color in node_colors.items():
+        #    newcolor = rgb_255_float_to_hex(color)
+        #    print(f"{node}: {newcolor}")
+
+        # go through the graph and add a color to each node
+        for node in self.G.nodes():
+            if node not in node_colors:
+                raise IOError(f"The node {node} does not have a color assigned to it.")
+            else:
+                self.G.nodes[node]["color"] = rgb_255_float_to_hex(node_colors[node])
+                self.node_to_color[node]    = rgb_255_float_to_hex(node_colors[node])
+
+    def save_tree_to_df(self, filename):
+        """
+        This method saves the rows of the tree as a dataframe
+        """
+        # get all the nodes in the tree
+        all_nodes = list(self.G.nodes())
+        all_dfs = [self.G.nodes[x]["dataframe"] for x in all_nodes]
+        all_dfs = pd.concat(all_dfs)
+        # change the columns of self.ALGcols to be ints
+        for col in self.ALGcols:
+            all_dfs[col] = all_dfs[col].astype(int)
+
+        # Add the colors column to the dataframe. Use concat because pandas
+        #  complains about performance if I try to add a column using
+        #  older spells: a la all_dfs["color"] = colors
+        colors = [self.node_to_color[x] for x in all_dfs.index]
+        all_dfs = pd.concat([pd.DataFrame({'color': colors}, index=all_dfs.index),
+                             all_dfs],
+                             axis=1)
+
+        # save to self.tree_df
+        self.tree_df = all_dfs
+        # save as a tsv
+        # When the floats were allowed to be any length, the tree size was 17 MB.
+        # When the floats were limited to 3 decimal places.
+        self.tree_df.to_csv(filename, sep = "\t")
+
+    def _get_predecessor(self, node):
+        """
+        Returns the predecessor of the node. If the node is the root, then returns None.
+        """
+        predecessors = list(self.G.predecessors(node))
+        if len(predecessors) == 0:
+            # we don't need to do anything because we're at the end of the tree.
+            return None
+        elif len(predecessors) > 1:
+            raise IOError(f"There should only be one predecessor in a phylogenetic tree. Found {predecessors}")
+        elif len(predecessors) == 1:
+            # there is only one parent
+            parent_node = list(self.G.predecessors(node))[0]
+            return parent_node
+
+    def percolate(self):
+        """
+        This function goes through the leaves in a breadth-first search.
+        Eventually, randomnly choose a starting order as another source of stochasticity in the algorithm.
+
+        To stochasitcally sample the trees, we must choose probabilities of changes in states.
+
+        Probabilities we must choose:
+          - ALG losses:
+            - When an ALG is absent in node A, but is present in sister node(s) B, we must decide whether the ALG was present
+              or not in the parent of A and B. Given that we know that these ALGs were present in the ancestor of animals, the most
+              likely scenario is that the ALG was present in the parent of A and B. The directionality of ALGs changing over time
+              is simply loss. We express this probability as (pALGeP|!A and eB) = 0.9999.
+              In other words, we choose that the ALG will appear in the parent of A and B in 99.99% of the cases.
+                    |
+                ----P----      (pALG eP | eA and eB) = 0.99999  (variable name prob_eP_eAeB)
+                |   |   |  AND
+                |   |   |      (pALG eP | !A and |eB| ) = 1 - ((1 - 0.99999) ** |eB|)
+                xA  eB  eB      In other words, the probability of the ALG being present in the parent increases with every observation.
+
+
+            - When the ALG is not present in A or B, the probability that it is present in the parent is negligibly low.
+              We express this probability as (pALGeP| !A and !B) = 0.00001. This means that 0.001% of the time, the ALG will be present
+              in the parent.
+                     |
+                   --P--  (pALG eP | !A and !B) = 0.00001  (variable name prob_eP_eAeB)
+                   |   |
+                   |   |
+                   xA  xB
+
+            - If there are no siblings to check, we can do nothing but to inherit the state of the one existing child node, A.
+              There is no probability to calculate in this case. This is the only option when there are no siblings.
+                     |
+                   --P--  (pP | A ) = 1  (The parent just inherits the state of the child. Because B is missing.)
+                   |
+                   |
+                   xA
+        """
+        prob_eP_xAeB = 0.99999
+        prob_eP_xAxB = 0.00001
+
+        # start at the leaves
+        queue = list(self.leaves)
+        while len(queue) > 0:
+            #print(f"Queue length: {len(queue)}, queue: {queue}", file = sys.stderr)
+            thisnode = queue.pop(0)
+
+            # ┏┓┏┓┏┳┓  ┏┓┏┓┳┓┏┓┳┓┏┳┓ - We need to get the parent node of thisnode.
+            # ┃┓┣  ┃   ┃┃┣┫┣┫┣ ┃┃ ┃    Then we must determine whether the ancestral state of the parent node
+            # ┗┛┗┛ ┻   ┣┛┛┗┛┗┗┛┛┗ ┻    has already been determined.
+            # get sister nodes. Do this by getting the node from the in edges
+            predecessor = self._get_predecessor(thisnode)
+            # If the predecessor is None, then this means we're at the end of the tree, and we can't do anything.
+            # If we have already completed the predecessor node, then that means it was visited from another sibling node.
+            # Therefore, we don't need to analyze this node.
+            if (predecessor is not None) and (self.G.nodes[predecessor]["completed"] is False):
+                # We should check that the predecessor node does not have a dataframe. If it does, but was not marked as completed,
+                #  then this means that there was some problem with the algorithm. It is important that we mark the predecessor node as
+                #  completed if we modify the dataframe.
+                if "dataframe" in self.G.nodes[predecessor]:
+                    raise IOError(f"The predecessor node {predecessor} has a dataframe, but was not marked as completed.")
+                #DEBUG
+                ## Now we know that we will modify the parent node. We can make a copy of the dataframe of thisnode and set all the
+                ##  the values to -1. this way, we will know if we have modified the value or not.
+                ## convert it to a series since it is just one row.
+                #if predecessor == "390379":
+                #    print(f"{thisnode} is the node and the predecessor is {predecessor}", file = sys.stderr)
+                #    print(f"The dataframe of this node is:")
+                #    print(self.G.nodes[thisnode]["dataframe"], file = sys.stderr)
+                #    sys.exit()
+                # make an empty dataframe
+                # set the index to the predecessor id
+                predecessordf = self.empty_predecessor.copy()
+                predecessordf.index = [predecessor]
+
+                # ┏┓┳┳┓┓ ┳┳┓┏┓┏┓ - We have determined there are multiple sibling clades. We get them
+                # ┗┓┃┣┫┃ ┃┃┃┃┓┗┓   and then we can determine the state of the parent node.
+                # ┗┛┻┻┛┗┛┻┛┗┗┛┗┛
+                # get the other direct descendants of the parent
+                siblings = [x for x in self.G.successors(predecessor) if x != thisnode]
+                # If there are no siblings, then the parent node inherits the state of this node.
+                # We then add the parent to the queue and mark it as completed.
+                if len(siblings) == 0:
+                    self.G.nodes[predecessor]["dataframe"] = self.G.nodes[thisnode]["dataframe"].copy()
+                    # set the index
+                    self.G.nodes[predecessor]["dataframe"].index = [predecessor]
+                    self.G.nodes[predecessor]["completed"] = True
+                    queue.append(predecessor)
+                # Now we filter to just get the siblings that are completed
+                siblings = [x for x in siblings if self.G.nodes[x]["completed"]]
+                if len(siblings) == 0:
+                    # For this node, there are no siblings that are completed, so we can't do anything.
+                    # We have to wait until the siblings are completed. We will come to this node later.
+                    # Add it to the back of the queue.
+                    queue.append(thisnode)
+                else:
+                    # let's make a tempdf of this dataframe and the sibling dataframes
+                    siblingdf = pd.concat([self.G.nodes[thisnode]["dataframe"]] + [self.G.nodes[x]["dataframe"] for x in siblings])
+
+                    values = {}
+                    # We first address the presence/absence of the ALGs in the parent node.
+                    # ┏┓┓ ┏┓  ┏┓┳┓┏┓┏┓┏┓┳┓┏┓┏┓  ┏┓┳┓┳┓  ┏┓┳┓┏┓┏┓┳┓┏┓┏┓
+                    # ┣┫┃ ┃┓  ┃┃┣┫┣ ┗┓┣ ┃┃┃ ┣   ┣┫┃┃┃┃  ┣┫┣┫┗┓┣ ┃┃┃ ┣
+                    # ┛┗┗┛┗┛  ┣┛┛┗┗┛┗┛┗┛┛┗┗┛┗┛  ┛┗┛┗┻┛  ┛┗┻┛┗┛┗┛┛┗┗┛┗┛
+                    # For evey ALG, we apply the logic above. Use the helper method to do this.
+                    pdf = self._determine_parental_ALG_PresAbs(predecessordf, siblingdf,
+                                                               prob_eP_xAeB = prob_eP_xAeB,
+                                                               prob_eP_xAxB = prob_eP_xAxB)
+
+                    # ┏┓┓ ┏┓ ┏┓┏┓┓ ┳┏┳┓┏┓
+                    # ┣┫┃ ┃┓ ┗┓┃┃┃ ┃ ┃ ┗┓ - We now infer what the number of ALGs was at each node.
+                    # ┛┗┗┛┗┛ ┗┛┣┛┗┛┻ ┻ ┗┛
+                    # For evey ALG, we apply the logic above. Use the helper method to do this.
+                    pdf = self._determine_parental_ALG_Splits(pdf, siblingdf)
+
+                    # ┏┓┓ ┏┓  ┏┓┏┓┓ ┏┓┏┓┏┓
+                    # ┣┫┃ ┃┓  ┃ ┃┃┃ ┃┃┃ ┗┓
+                    # ┛┗┗┛┗┛  ┗┛┗┛┗┛┗┛┗┛┗┛
+                    # now we should determine the state of the colocalized ALGs
+                    pdf = self._determine_ALG_colocalization(pdf, siblingdf)
+
+                    # add the parent to the queue, mark it as completed
+                    self.G.nodes[predecessor]["dataframe"] = pdf
+                    self.G.nodes[predecessor]["completed"] = True
+                    queue.append(predecessor)
+
+    def _conservation_of_colocalizations(self, df):
+        """
+        Takes in a dataframe and returns a dataframe of how often each tuple is conserved
+        """
+        results = {}
+        for thistup in self.TUPcols:
+            ALG1 = thistup[0]
+            ALG2 = thistup[1]
+            # The subdf the rows in which both ALG1 and ALG2 are present, get the value counts of the tuple
+            subdf = df[(df[ALG1] >= 1) & (df[ALG2] >= 1)][thistup]
+            if len(subdf) > 0:
+                numconserved = len(subdf[subdf == 1])
+                # round the next value to 3 decimal places
+                results[thistup] = round(numconserved / len(subdf), 3)
+            else:
+                # We can't make an inference, so this colocalization gets a value of 0
+                results[thistup] = 0
+        assert len(results) == len(self.TUPcols)
+        return results
+
+    def _determine_ALG_colocalization(self, pdf, sdf):
+        """
+        Use the leaves to determine the state of the parent.
+        """
+        # get all the leaves from the parent
+        predecessor_node = pdf.index[0]
+        leaves = [x for x in nx.descendants(self.G, predecessor_node) if self.G.out_degree(x) == 0]
+        # It is problematic if there are no leaves. Every predecessor's existence is predicated on a leaf's existence.
+        if len(leaves) == 0:
+            raise IOError(f"There are no leaves in the predecessor {predecessor_node}. This should not happen.")
+        # get the dataframes of the leaves
+        ldf = self.perspchrom.loc[leaves]
+        results = self._conservation_of_colocalizations(ldf)
+        # update the parent dataframe with the results. The results are tuple columns
+        for thistup in self.TUPcols:
+            pdf[thistup] = results[thistup]
+        return pdf
+
+    def _determine_parental_ALG_Splits(self, pdf, sdf):
+        """
+        Infers how many ALGs were at each node.
+
+        This rule determines what the colocalization state of the parent nodes are.
+        Like in the _determine_parental_ALG_Splits rule, we will do some filtering
+          to pick out the higher-quality genomes.
+
+        There are a few cases to handle.
+        - If there is only one genome in the sdf, then the parent inherits this state.
+        - If both of the values for the tuple are the same,
+          it is easy to determine what the value of the parent should be.
+        - If the values are different, look at the genomes of the sister clade.
+        """
+        sdf = self._filter_sdf_for_high_quality(sdf)
+
+        # If the sdf dataframe has a length of 1, then we just multiply the values by the current values in the pdf.
+        # Let's check quickly that the ALG columns in the pdf do not have any values that are -1. If they do, this means
+        #  that we didn't finish assigning the values during the ALG presence/absence step.
+        if (pdf[self.ALGcols] == -1).any().any():
+            raise IOError(f"The pdf has -1 values in the ALG columns. This means that we didn't finish assigning the values during the ALG presence/absence step.")
+        # Now we continue. If the sdf dataframe has a length of 1, then we just multiply the values by the current values in the pdf.
+        if len(sdf) == 0:
+            raise IOError(f"The sdf dataframe has a length of 0. This should not happen.")
+        elif len(sdf) == 1:
+            pdf[self.ALGcols] = pdf[self.ALGcols].multiply(sdf.iloc[0][self.ALGcols], axis = 1)
+        elif len(sdf) > 1:
+            # We must pick one of these numbers. For consistency, just pick an entire row from sdf and update the pdf.
+            randindex = np.random.choice(sdf.index)
+            pdf[self.ALGcols] = pdf[self.ALGcols].multiply(sdf.loc[randindex][self.ALGcols], axis = 1)
+
+        return pdf
+
+    def _filter_sdf_for_high_quality(self, sdf) -> pd.DataFrame:
+        """
+        This method is used to pick out the high-quality genomes from the dataframe.
+        Returns a filtered dataframe.
+        """
+        # First we must infer if we are looking at leaves or not.
+        # To check if we are looking at leaves, check if all the nodes from the index of sdf have any descendants in the graph.
+        leaves = []
+        for i in range(len(sdf)):
+            thisnode = sdf.index[i]
+            if thisnode in self.G.nodes():
+                if self.G.out_degree(thisnode) == 0:
+                    leaves.append(True)
+                else:
+                    leaves.append(False)
+        if all(leaves):
+            # There are many differences between the RefSeq and GenBank versions of the genome in the case of chromosome fusions.
+            # Because in theory we should trust the RefSeq version more, we will look for cases where there are both versions,
+            #  and we will only further consider the RefSeq version.
+            # To find it. we we change one character in the accession number. GCF=RefSeq, GCA=GenBank.
+            #
+            # Here is an example from Takifugu flavidus, where there are differences between the GCA and GCF versions of the genome.
+            #                                          A1a  D  F  C1  G  H  Ea  N  L  M  B1  I  B2  O1  A1b  Eb  O2  (A1a, A1b)  (D, O1)  (D, O2)  (Ea, O1)  (Ea, Eb)  (L, M)  (B1, B2)  (O1, O2)
+            #  Takifuguflavidus-433684-GCF003711565.1    3  3  3   2  4  3   4  2  3  3   2  2   2   3    2   3   2           2        2        2         2         3       3         2         2
+            #  Takifuguflavidus-433684-GCA003711565.2    3  3  2   3  2  3   4  3  3  2   2  2   1   3    2   3   2           2        2        2         2         3       2         1         2
+            stripped_rows     = [".".join(x.split(".")[:-1]) for x in sdf.index]
+            remove_these_rows = [i for i in sdf.index
+                                 if (i.split("-")[-1].startswith("GCA"))
+                                 and (".".join(i.replace("-GCA", "-GCF").split(".")[:-1]) in stripped_rows)]
+            sdf = sdf.drop(index = remove_these_rows)
+            # Now, there is an issue where there may be many poor-quality assemblies.
+            # If there are both RefSeq (GCF) and GenBank (GCA) versions of the genome, then we will only consider the RefSeq version.
+            #
+            # For example, look at all of these pig assemblies.
+            #                                A1a  D  F  C1  G  H  K  Ea  N  L  M  B1  I  O1  A1b  Eb  O2  Qa  (C1, M)  (G, H)  (Ea, Eb)  (O1, O2)
+            # Susscrofa-9823-GCA031225015.1    2  3  2   2  2  3  2   3  3  2  1   2  1   2    2   1   2   1        1       1         1         2
+            # Susscrofa-9823-GCF000003025.6<   2  3  2   3  3  3  2   3  3  3  3   2  1   2    2   2   2   2        2       2         2         2
+            # Susscrofa-9823-GCA031306245.1    2  3  2   2  2  3  2   2  3  2  1   2  1   2    2   1   2   1        1       1         1         2
+            # Susscrofa-9823-GCA002844635.1    2  3  2   2  2  3  2   3  2  3  1   2  1   2    2   1   2   1        1       1         1         2
+            # Susscrofa-9823-GCA023065335.1    0  0  0   0  0  0  0   0  0  0  0   0  0   0    0   0   0   0        0       0         0         0
+            # Susscrofa-9823-GCA015776825.1    2  3  2   2  2  3  2   2  3  2  1   3  2   2    2   1   2   1        1       1         1         2
+            # Susscrofa-9823-GCA023065355.1    0  0  0   0  0  0  0   0  0  0  0   0  0   0    0   0   0   0        0       0         0         0
+            # Susscrofa-9823-GCA030704935.1    2  3  2   2  2  3  2   2  3  2  1   2  1   2    2   1   2   2        1       1         1         2
+            # Susscrofa-9823-GCA007644095.1    2  3  2   2  2  3  1   2  2  2  1   1  1   2    2   1   2   1        1       1         1         2
+            # Susscrofa-9823-GCA024718415.1    2  3  2   2  2  3  2   3  3  2  1   1  1   2    2   1   2   1        1       1         1         2
+            # Susscrofa-9823-GCA900119615.2    0  0  0   0  0  0  0   0  0  0  0   0  0   0    0   0   0   0        0       0         0         0
+
+            # If there are any rows that are GCF, then keep only those rows.
+            if any([x.split("-")[-1].startswith("GCF") for x in sdf.index]):
+                keep_rows = [x for x in sdf.index if x.split("-")[-1].startswith("GCF")]
+                sdf = sdf.loc[keep_rows]
+            # if there was a value in sdf > 1, print
+        else:
+            # We currently have no special rules for internal nodes. We made most of the inferences based on the leaves.
+            pass
+        return sdf
+
+    def _parental_probability_log(self, count,
+                                  prob_eP_xAeB,
+                                  prob_eP_xAxB):
+        """
+        Returns the logarithm of the probability.
+        """
+        if count == 0:
+            return np.log(prob_eP_xAxB)
+        if count == 1:
+            return np.log(prob_eP_xAeB)
+        else:
+            base_probability_log = np.log(1 - prob_eP_xAeB)
+            return np.log1p(-np.exp(count * base_probability_log))
+
+    def _count_values_ge_1(self, column):
+        """
+        Counts the number of values greater than or equal to 1 in a column.
+        """
+        return (column >= 1).sum()
+
+    def _determine_parental_ALG_PresAbs(self, pdf, sdf,
+                                        prob_eP_xAeB = 0.99999,
+                                        prob_eP_xAxB = 0.00001):
+        """
+        This is a helper method for self.percolate().
+          - It uses only the tempdf.
+          - It modifies a dataframe provided for the parent.
+          - the default probabilities are coded into the parameters
+
+        The input parameters are:
+          - pdf - the parental df that we will be modifying
+          - sdf - the dataframe of the sibling nodes
+          - prob_eP_xAeB = 0.99999
+          - prob_eP_eAeB = 0.99999
+          - prob_eP_xAxB = 0.00001
+        """
+        # for each of the ALGs, check the condition and update the pDF
+        # just get the sum of the columns
+        ALGtemp = sdf[self.ALGcols]
+        probabilities_log = ALGtemp.apply(lambda col: self._parental_probability_log(
+                                          self._count_values_ge_1(col), prob_eP_xAeB, prob_eP_xAxB))
+        # generate random numbers between 0 and 1. If the value is less than the probability, then we set the value to 1.
+        #  Otherwise, we set the value to 0. Check it in log space.
+        results = probabilities_log.apply(lambda x: 1 if np.log(np.random.random()) < x else 0)
+        # print the results sideways, so we can see the results of the random number generation
+        # The pdf has the same colnames as results. Use the results dataframe to update these values in the pdf.
+        pdf[results.index] = results
+        return pdf
+
+    def add_taxname_to_all_nodes(self):
+        """
+        This function adds the taxname to a single node. Uses ete3.
+        """
+        # use ete3 to get the names of the taxids
+        ncbi = NCBITaxa()
+        for node in self.G.nodes():
+            self.G.nodes[node]["taxname"] = ncbi.get_taxid_translator([node])[node].replace(" ", "-")
+
+    def add_lineage_string_sample(self, lineage_string, samplename) -> int:
+        """
+        The lineage strings look like this:
+          - 1;131567;2759;33154;33208;6040;6042;1779146;1779162;6060;6061;1937956;6063
+
+        Then, there is a sample name too for the last node.
+
+        Notes:
+          - The edges from this string will be (1, 131567), (131567, 2759), (2759, 33154), etc.
+        """
+        fields = [int(x) for x in lineage_string.split(";")]
+        for i in range(len(fields)-1):
+            self.G.add_edge(fields[i], fields[i+1])
+        # add the final edge
+        self.G.add_edge(fields[-1], samplename)
+        return 0
+
+    def _build_tree_from_perspchrom(self) -> int:
+        """
+        This function takes in a per_sp_chrom_df and builds a tree from it.
+        """
+        # add each lineage string to the tree
+        for i, row in self.perspchrom.iterrows():
+            self.add_lineage_string_sample(row["taxidstring"], row["species"])
+        return 0
+
+    def _get_edges_in_clade_helper(self, node):
+        """
+        This is the recursive case for the get_edges_in_clade function.
+        """
+        # get the outgoing edges from this node.
+        out_edges = list(self.G.out_edges(node))
+        # recursive break condition - if there are no outgoing edges, then return an empty list
+        if len(out_edges) == 0:
+            return []
+        out_nodes = [x[1] for x in out_edges]
+        for thisnode in out_nodes:
+            out_edges += self._get_edges_in_clade_helper(thisnode)
+        return out_edges
+
+    def get_edges_in_clade(self, node) -> list:
+        """
+        This function takes in a node ID (clade and returns a recursive list of all
+          the outgoing edges, and the single incoming edge.
+        """
+        if not isinstance(node, int):
+            node = int(node)
+
+        # get the single incoming edge. Make sure it is a tuple
+        in_edges = list(self.G.in_edges(node))
+        if len(in_edges) > 1:
+            raise Exception("There should only be one incoming edge. We don't allow reticulate phylogenetic trees. Found {}".format(in_edges))
+
+        return in_edges + self._get_edges_in_clade_helper(node)
+
+def main():
+    # parse the args
+    args = parse_args()
+
+    # get the rbh files in the directory
+    rbh_files = list(sorted([os.path.join(args.directory, f)
+                 for f in os.listdir(args.directory)
+                 if f.endswith('.rbh')], reverse = True))
+    #rbh_files = rbh_files[:500]
+
+    # There are two files that we only need to calculate once.
+    # The locdf is the dataframe that contains the location of the ALGs on the chromosomes.
+    # The perspchrom is the dataframe that contains the presence/absence of the ALGs in the species.
+    # The perspchrom is a derivative of the locdf, and takes a while to calculate, so it is better to just
+    #  do it once and save it to a file.
+    locdf      = None
+    perspchrom = None
+    overwrite = False
+    if os.path.exists("locdf.tsv") and os.path.exists("perspchrom.tsv"):
+        # These files both exist, so we can just read them in.
+        print("Reading in the locdf and perspchrom from file.", file = sys.stderr)
+        locdf      = pd.read_csv("locdf.tsv", sep = "\t")
+        perspchrom = pd.read_csv("perspchrom.tsv", sep = "\t")
+        # if there is a '(' or ')' in the column names, then we need to convert them to tuples
+        perspchrom.columns = [tuple(eval(x)) if isinstance(x, str) and "(" in x else x for x in perspchrom.columns]
+    else:
+        # The files do not yet exist, so we need to calculate them
+        print("Calculating the locdf and perspchrom df from the input files.", file = sys.stderr)
+        locdf, perspchrom = rbh_files_to_locdf_and_perspchrom(rbh_files, args.ALG_rbh,
+                                                              args.minsig, args.ALGname)
+        # save the locdf and perspchrom to a file
+        locdf.to_csv("locdf.tsv", sep = "\t", index = False)
+        perspchrom.to_csv("perspchrom.tsv", sep = "\t", index = False)
+        overwrite = True
+
+    ## filters for testing just get the chordates. Check if ";7711;" is in the taxidstring
+    #perspchrom = perspchrom[perspchrom['taxidstring'].str.contains(';7711;')]
+
+    resultstsv = "tree1.tsv.gz"
+    resultsdf = None
+    if overwrite:
+        # now that we have the perspchrom, we should construct the tree structure
+        T = SplitLossColocTree(perspchrom)
+        print("Percolating", file = sys.stderr)
+        T.percolate()
+        print("Saving the tree to tsv", file = sys.stderr)
+        T.save_tree_to_df(resultstsv)
+        resultsdf = T.tree_df
+    elif not overwrite:
+        # if we don't want to overwrite the results (tree1.tsv)
+        # then we just read it in as a pdf
+        if os.path.exists(resultstsv):
+            resultsdf = pd.read_csv(resultstsv, sep = "\t", index_col = 0)
+        else:
+            raise IOError(f"The file {resultstsv} does not exist. We need to calculate the tree.")
+    #
+    print("Making a UMAP with matplotlib", file = sys.stderr)
+    #save_UMAP(resultsdf)
+    print("Making a UMAP with plotly", file = sys.stderr)
+    save_UMAP_plotly(resultsdf, "tree1")
+
+    sys.exit()
     # *********************************************************************************************************************
     #     ┏┓┓ ┏┓  ┳┓┳┏┓┏┓┏┓┳┓┏┓┳┏┓┳┓  ┏┓┳┓┳┓  ┏┓┳┳┏┓┳┏┓┳┓
     #     ┣┫┃ ┃┓  ┃┃┃┗┓┃┛┣ ┣┫┗┓┃┃┃┃┃  ┣┫┃┃┃┃  ┣ ┃┃┗┓┃┃┃┃┃
@@ -1025,7 +1755,6 @@ def main():
     #          dispersed on this branch. We should mark this as a loss, and record the loss.
     #      and if the ALG is is present in the sample, then this suggests that the ALG is conserved in both clades.
     #          We don't need to do anything in this case.
-    perspchrom = perspchrom.reset_index(drop=True)
     # We need to know the node for which the ALGs were inferred.
     #  Once we hit this node in the NCBI taxonomy string, we place the remaining "lost ALGs" on the branch between the previous node and this node.
     ALG_node = "1;131567;2759;33154;33208"
@@ -1041,7 +1770,6 @@ def main():
     # If the other clade's ALGs are detectable, and are not colocalized in at least 50% of the clade,
     #  then we consider that this ALG pair is not colocalized in this clade.
     min_for_noncolocalized = 0.5
-    # If the 
 
     for i, row in perspchrom.iterrows():
         # ----- ALG PRESENCE ABSENCE -----

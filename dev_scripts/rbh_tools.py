@@ -79,7 +79,6 @@ def parse_rbh(rbhfilepath) -> pd.DataFrame:
     # If we have not raised an error, then we return the dataframe
     return df
 
-
 def rbh_to_scafnum(df, samplename) -> int:
     """
     Looks in an rbh file and returns the number of scaffolds in the file.
@@ -158,3 +157,59 @@ def rbhdf_to_alglocdf(df, minsig, ALGname) -> (pd.DataFrame, str):
                         })
     splitsdf = pd.DataFrame(entries)
     return splitsdf, samplename
+
+def parse_ALG_rbh_to_colordf(rbh_file) -> pd.DataFrame:
+    """
+    Reads in an rbh file from ALGs and returns the following dataframe:
+
+     ALGname  Color     Size
+     Qb       #C72480   12
+     Qc       #DCC0F3   14
+     C2       #387FB2   18
+     Qd       #94C47F   22
+      R       #F4B93E   24
+     Qa       #78A6AF   30
+     A2       #8B4E67   41
+     B3       #FA9A26   46
+     O2       #AB5BA8   46
+     Eb       #B76BED   47
+    A1b       #C33D53   51
+     J1       #54AB53   54
+     O1       #FBD76C   55
+     J2       #E64657   66
+      P       #C33E51   78
+     B2       #1F779A   86
+      I       #3425FB   90
+     B1       #2F54E3   95
+      M       #A45530  102
+      L       #7DC29F  104
+      N       #D8BE3C  107
+     Ea       #AB7E26  115
+      K       #170B88  119
+      H       #F04C08  135
+      G       #E97B4A  138
+     C1       #B07DF4  142
+      F       #9B6870  145
+      D       #47957F  172
+    A1a       #4DB5E3  207
+
+    The dataframe will be used later to determine plotting parameters.
+    """
+    df = pd.read_csv(rbh_file, sep='\t')
+    # First make sure that there are columns called "gene_group", "color". We will only use these.
+    if not ("gene_group" in df.columns and "color" in df.columns):
+        raise IOError("The rbh file {} does not have the correct columns".format(rbh_file))
+    # just subset these columns since we only need them
+    df = df[["gene_group", "color"]]
+    sizemap = df.groupby("gene_group").size()
+    # groupby the "gene_group" column, then reconstitute with the size and the most common color for that group
+    df = df.groupby("gene_group").agg({"color": lambda x: x.value_counts().index[0]})
+    df = df.reset_index()
+    # use the sizemap to get the size of each ALG. Use the gene_group as the key to look up the value in sizemap
+    df["size"] = df["gene_group"].map(sizemap)
+    # rename the columns {"gene_group": "ALGname", "color": "Color", "size": "Size"}
+    df = df.rename(columns={"gene_group": "ALGname", "color": "Color", "size": "Size"})
+    # sort by increasing size
+    df = df.sort_values(by="Size", ascending=True)
+    df = df.reset_index(drop=True)
+    return df

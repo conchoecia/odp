@@ -12,7 +12,8 @@ import glob
 
 # import the parse_rbh_file from the plot_ALG_fusions.py script
 # this is a function that parses the RBH file into a dataframe
-from plot_ALG_fusions import parse_rbh_file
+import rbh_tools
+
 import matplotlib.pyplot as plt
 # import patches
 import matplotlib.patches as mpatches
@@ -77,14 +78,17 @@ def parse_gain_loss_string(GL_string, samplename) -> pd.DataFrame:
     for i in range(0,len(splitstring)-1, 2):
         taxid1 = int(splitstring[i])
         taxid2 = int(splitstring[i+2])
-        colocloss = splitstring[i+1]
+        colocloss = splitstring[i+1].lstrip("(").rstrip(")").split("]|[")
         # interpret the next two strings as lists
-        colocs = eval(      colocloss.lstrip("(").split("]|[")[0] + "]")
-        losses = eval("[" + colocloss.rstrip(")").split("]|[")[1]      )
+        colocs = eval(      colocloss[0] + "]")
+        losses = eval("[" + colocloss[1] + "]")
+        splits = eval("[" + colocloss[2]      )
+        print("These are splits: {}".format(splits))
         entry = {"source_taxid": taxid1,    # already an int, we cast it earlier
                  "target_taxid": taxid2,    # already an int, we cast it earlier
                  "colocalizations": colocs, # this is a list
                  "losses": losses,          # this is a list
+                 "splits": splits,          # this is a list
                  "samplename": samplename,  # this is a string
                  "sample_taxid": int(GL_string.split("-")[-1])
                  } # this is an int
@@ -822,7 +826,13 @@ def run_n_simulations_save_results(sampledfpath, algdfpath, filename,
     These TSV files can be collated later with a coloc_array object to compile a larger dataset.
     """
     sampledf = pd.read_csv(sampledfpath, sep="\t")
-    algdf = parse_rbh_file(algdfpath)
+    algdf    = rbh_tools.parse_ALG_rbh_to_colordf(algdfpath)
+
+    print("This is the sampledf")
+    print(sampledf)
+    print("This is the algdf")
+    print(algdf)
+    sys.exit()
 
     counter = 0
     c = coloc_array(abs_bin_size=abs_bin_size, frac_bin_size=frac_bin_size)
@@ -1737,7 +1747,7 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, per_sp_df, algdfpat
     T.add_taxname_to_all_nodes()
 
     # read in the algdf
-    algdf = parse_rbh_file(algdfpath)
+    algdf = rbh_tools.parse_ALG_rbh_to_colordf(algdfpath)
     algdf = algdf.sort_values(by=["Size"]).reset_index(drop=True)
 
     c = coloc_array()
@@ -1760,7 +1770,7 @@ def unit_test_coloc_array_identical():
     """
     # test if these are the same output with different random seeds. Should be exactly the same.
     sampledf = pd.read_csv(sys.argv[1], sep="\t")
-    algdf = parse_rbh_file(sys.argv[2])
+    algdf = rbh_tools.parse_ALG_rbh_to_colordf(sys.argv[2])
 
     dispersion_df, coloc_df, ALG_coloc_df = stats_df_to_loss_fusion_dfs(sampledf, algdf,
                                    obs_seed = 10,
@@ -1809,8 +1819,8 @@ def main():
     # x-axis number of chromosomes, in that species, y-axis is number of fusions leading
     # x-axis number of chromosomes, in that speciers, y-axis is the number of losses
     #  ... and some variation on that.
-    clades_of_interest = [# 6340,     # Annelida
-                          # 6447,     # Mollusca
+    clades_of_interest = [6340,     # Annelida
+                          6447,     # Mollusca
                           6606,     # Coleoidea
                           33511,    # Deuterostomia
                           33317,    # Protostomia
@@ -1847,7 +1857,7 @@ def main():
     #read_simulations_and_make_heatmaps(["testfile.tsv"], sys.argv[1], sys.argv[2], "simulations", clades_of_interest)
 
     #sampledf = pd.read_csv(sys.argv[1], sep="\t")
-    #algdf = parse_rbh_file(sys.argv[2])
+    #algdf = rbh_tools.parse_ALG_rbh_to_colordf(sys.argv[2])
     #dispersion_df, coloc_df, ALG_coloc_df  = stats_df_to_loss_fusion_dfs(
     #                                            sampledf, algdf,
     #                                            obs_seed = 1,
