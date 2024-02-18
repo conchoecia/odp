@@ -1145,20 +1145,53 @@ class SplitLossColocTree:
       -
     """
     color_dict_top = {
-                  33317:   "#F4B93E", # Protostomes
+                  33317:     "#F4B93E", # Protostomes
+                   1215728:  "#2ECAC8", # Scalidophora
+                   6231:     "#9F2ECA", # Nematodes
+                   88770:    "#BF2424", # Panarthropoda
+                    32341:   "#F93AD5", # Sophophora - these are the fruit flies
+                    41084:   "#F1890D", # Polyphaga - these are the beetles
+                    3042114: "#EBB836", # Anthophila - these are the bees
+                   2697495:  "#2432BF", # Spiralia
+                    6178:    "#24ED54", # Trematoda
+                    6447:    "#0CD6F2", # Mollusca
+                     6606:   "#F2B70C", # Coleoidea
+                    6340:    "#0CF247", # Annelida
+                   2697496:  "#7624BF", # Gnathifera
                   33511:   "#78A6AF", # Deuterostomes
+                   # Chordates
+                    # Vertebrates
+                     # Cyclostomes
+                     1476529: "#F23341", # Jawless fishes - hagfish lampreys
+                     # Gnathostomes
+                      # Cartilaginous fishes - Condrichthyes
+                       7777: "#78E576", # Cartilaginous fishes - sharks, rays, chimaeras
+                      # Bony fishes - Osteichthyes
+                       # Actinopterygii - Ray-finned fishes
+                        1338366: "#DEC06A", # Cladistia - Bichirs, Reedfish
+                        32440:   "#636E42", # Chondrostei - Sturgeons, Paddlefish
+                        # Teleost fish
+                        41665:   "#BD5812", # Neopterygii - Teleost fish, >32k living species
+                          186628:  "#CF99FF", # Characiphysae - some group of fish, including Astanyx, the blind cave fish
+                          7952:  "#4BE2BA", # Cypriniformes - these are the minnows, carps, loaches, et cetera
+                       # Sarcopterygii - Lobe-fins (fish and tetrapods)
+                        118072: "#445FCF", # Actinistia - Coelacanths
+                        7878: "#DEC06A", # Dipnoi - Lungfish
+                        # Tetrapods
+                         # Amniota
+                          9443:  "#F58E8C",   # Primates
+                          33554: "#8A0303",   # Carnivora
+                          1579337: "#2C4BD8", # Durocryptodira - turtles
+                          9263:  "#5FA4E2",   # Metatheria - marsupials
+                          9126:  "#242B7D",   # Passeriformes - more than half of all bird species
+                          8826:  "#16A75C",   # Anseriformes - waterfowl
+                          35500: "#4E4EC4",   # Pecorids - these are sheep, bovines, deer, muntjac deer, et cetera
+                         # Amphibia
+                          8342:  "#AFC73E",
                   10197:   "#54AB53", # Ctenophores
                   6040 :   "#DCC0F3", # Sponges
                   6073 :   "#387FB2", # Cnidarians
                   10226:   "#C72480", # Placozoans
-                  1215728: "#2ECAC8", # Scalidophora
-                  6231:    "#9F2ECA", # Nematodes
-                  88770:   "#BF2424", # Panarthropoda
-                  2697495: "#2432BF", # Spiralia
-                  2697496: "#7624BF", # Gnathifera
-                  6447:    "#0CD6F2", # Mollusca
-                  6606:    "#F2B70C", # Coleoidea
-                  6340:    "#0CF247", # Annelida
                   }
     def __init__(self, perspchrom) -> None:
         # initialize the bidirectional graph using networkx

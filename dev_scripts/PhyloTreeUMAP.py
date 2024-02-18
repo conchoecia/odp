@@ -25,6 +25,7 @@ Usage instructions:
 """
 
 import argparse
+from  ast import literal_eval as aliteraleval
 import bokeh           # bokeh is used to visualize and save the UMAP
 import networkx as nx
 import numpy as np
@@ -32,8 +33,8 @@ import os
 import pandas as pd
 import pickle
 import re
-from scipy.sparse import lil_matrix
-from scipy.sparse import coo_matrix
+import scipy.sparse
+from scipy.sparse import coo_matrix, lil_matrix, save_npz, load_npz
 import sys
 import time
 import umap
@@ -256,6 +257,7 @@ class PhyloTree:
         sparse_matrix = coo_matrix(( values,
                                     (row_indices, col_indices)),
                                     shape = (num_samples, num_features))
+        del concatdf
 
         sparse_matrix = sparse_matrix.tolil()
         # set the missing values of the sparse matrix to 999999999999
@@ -267,7 +269,7 @@ class PhyloTree:
         mapper = reducer.fit(sparse_matrix)
         stop = time.time()
         print("It took {} seconds to fit_transform the UMAP".format(stop - start))
-
+        del sparse_matrix
         #              ┓    •
         # ┓┏┏┳┓┏┓┏┓  ┏┓┃┏┓╋╋┓┏┓┏┓
         # ┗┻┛┗┗┗┻┣┛  ┣┛┗┗┛┗┗┗┛┗┗┫
@@ -352,6 +354,15 @@ class PhyloTree:
         plt.savefig("distances_UMAP_sparse_matplotlib.pdf")
         sys.exit()
 
+def umap_mapper_to_df(mapper, cdf):
+    """
+    This function takes a UMAP mapper and a dataframe of the distances and returns a dataframe with the UMAP coordinates.
+    """
+    # get the coordinates of the UMAP
+    df_embedding = pd.DataFrame(mapper.embedding_, columns=['UMAP1', 'UMAP2'])
+    # add those two columns to the cdf
+    return pd.concat([cdf, df_embedding], axis = 1)
+
 def rbh_to_gb(sample, rbhdf, outfile):
     """
     Converts the rbh dataframe to a groupby object. This is saved to a file for later consumption.
@@ -385,15 +396,137 @@ def rbh_to_gb(sample, rbhdf, outfile):
     # Save the result DataFrame to a tsv file
     result_df.to_csv(outfile, sep="\t", index=False, compression="gzip")
 
-def rbh_directory_to_distance_matrix(rbh_directory, ALGname):
+def NCBI_taxid_to_taxdict(ncbi, taxid):
     """
-    Takes all of the rbh files in the directory and calculates the distance matrix of all of the BCnS ALGs.
+    Takes a single NCBI taxid as input and returns a dictionary with useful information:
+
+    Input:
+      - ncbi:  The NCBITaxa object
+      - taxid: The NCBI taxid
+    Output:
+      - A dictionary with the following
+        taxid: The taxid, same as the input
+        taxname: The name of this specific taxid
+        taxname_list: A list of the taxonomy names, like ["root", "cellular organisms", "Eukaryota", "Opisthokonta"]
+        taxid_list: A list of the taxids, like [1, 131567, 2759, 33154]
+        level_1: The first level of the taxid, like "root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)"
+        ... up to level_10
+        printstring: The printstring of the taxid, like "root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)"
+    """
+    if isinstance(taxid, str):
+        # first check that the taxid is an integer
+        if not re.match(r"^[0-9]*$", taxid):
+            raise ValueError(f"There is a non-numeric character in the taxid string, {taxid}, for file {thisfile}. Exiting.")
+    elif isinstance(taxid, int):
+        pass
+    else:
+        raise ValueError(f"The taxid is not a string or an integer. It is a {type(taxid)}. Exiting.")
+
+    # safe, get the lineage
+    entry = {"taxid": taxid}
+    # for each node, make the full lineage string, in this form "Metazoa;Bilateria;Protostomes"
+    lineage = ncbi.get_lineage(taxid)
+    names   = ncbi.get_taxid_translator(lineage)
+    # make sure that the lineage and the names are not empty
+    if len(lineage) == 0:
+        raise ValueError(f"The lineage is empty for the taxid {taxid}. Exiting.")
+    if len(names) == 0:
+        raise ValueError(f"The names are empty for the taxid {taxid}. Exiting.")
+    entry["taxname"]          = names[taxid]
+    entry["taxid_list"]       = [taxid for taxid in lineage]
+    entry["taxid_list_str"]   = ";".join([str(taxid) for taxid in lineage])
+    entry["taxname_list"]     = [names[taxid] for taxid in lineage]
+    entry["taxname_list_str"] = ";".join([names[taxid] for taxid in lineage])
+
+    npl = 4 # number of taxonomic units per level
+    num_rows = 10 # what level do we want to go to
+    for i in range(1, num_rows+1):
+        thislevel = f"level_{i}"
+        j = (i-1)*npl
+        entry[thislevel] = ";".join([f" {names[taxid]} ({taxid})" for taxid in lineage[j:j+npl]])
+
+    entry["printstring"]  = ";".join([f" {names[taxid]} ({taxid})" for taxid in lineage])
+    return entry
+
+def create_directories_if_not_exist(file_path):
+    """
+    This takes an iterable of file paths or directories for which we want to safely create the directories.
+    """
+    print("requested file path: ", file_path)
+    # Split the path into directories
+    directories = file_path.split(os.sep)
+
+    # Iterate over each directory and create if it doesn't exist
+    path_so_far = ''
+    for directory in directories:
+        path_so_far = os.path.join(path_so_far, directory)
+        if not os.path.exists(path_so_far):
+            os.makedirs(path_so_far)
+
+def rbh_directory_to_distance_matrix(rbh_directory, ALGname, unannotated_color = "#3f3f7f",
+                                     outtsv = "GTUMAP/sampledf.tsv",
+                                     outputdir = "GTUMAP/distance_matrices/") -> pd.DataFrame:
+    """
+    This program does two things.
+      1. It takes all of the rbh files in the directory and calculates the distance matrix of all of the BCnS ALGs.
+        - The distance matrix is saved in a file called GTUMAP/distance_matrices/{sample}.gb.gz
+        - The columns of the distance matrix are: rbh1, rbh2, distance. See the example below
+        ```
+        rbh1                              rbh2                              distance
+        Simakov2022BCnS_genefamily_10008  Simakov2022BCnS_genefamily_1023   98045821
+        Simakov2022BCnS_genefamily_10008  Simakov2022BCnS_genefamily_10663  3425056
+        Simakov2022BCnS_genefamily_1023   Simakov2022BCnS_genefamily_10663  101470877
+        Simakov2022BCnS_genefamily_10008  Simakov2022BCnS_genefamily_10751  86114004
+        Simakov2022BCnS_genefamily_1023   Simakov2022BCnS_genefamily_10751  11931817
+        Simakov2022BCnS_genefamily_10663  Simakov2022BCnS_genefamily_10751  89539060
+        Simakov2022BCnS_genefamily_10008  Simakov2022BCnS_genefamily_10927  42360830
+        ```
+      2. It collates information from the rbh files into a sampledf.
+        - This is the dataframe with the following columns:
+          - index: The index of the dataframe is important because this will be the order of the samples in the distance matrix. Everything will be ordered by this index.
+          - sample: This is the sample name. This is the same sample information that will be in the rbh file columns, and in the distance matrix.
+          - taxid: This is the NCBI TAXid of the sample.
+          - taxname: This is the name of the taxid. For example 7777 is "Condrichthyes".
+          - taxid_list: This is a list of all the taxids in the lineage of the sample from closest to root to furthest.
+          - taxid_list_str: A string version of taxid_list joined together with ';' characters
+          - taxname_list: This is a list of all the taxnames in the lineage of the sample from closest to root to furthest. Matches the indices of taxid_list.
+          - taxname_list_str: A string version of taxname_list joined together with ';' characters
+          - level_1: Here, the level_1, level_2, et cetera are splits of the NCBI taxid for easy plotting. These go up to level_10.
+              - Some examples are:
+                ```
+                level_1: root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)
+                level_2: Metazoa (2); Eumetazoa (6072); Bilateria (33213); Protostomia (33317)
+                et cetera
+                ```
+          - printstring: This is the printstring of the taxid, like "root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)"
+          - #NOT YET annotation_method: This shows what method was used to annotate the sample, for example "BCnSSimakov2022_protmap" or "NCBI/Existing"
+          - genome_size: This is the size of the genome in base pairs.
+          - #NOT YET gc_content: This is the GC content of the genome. This is expressed as a value from 0 to 1.
+          - number_of_chromosomes: The haploid number of chromosomes that this species has.
+          - rbh_filepath: The filepath, as provided, of the rbh file that was used to generate this information.
+          - rbh_filepath_abs: The filepath, resolved, of the rbh file that was used to generate this information.
+          - rbh_filename: The filename of the rbh file that was used to generate this information.
+          - dis_filepath: The filepath, as provided, of the distance .gb.gz file that was generated.
+          - dis_filepath_abs: The filepath, resolved, of the distance .gb.gz file that was generated.
+          - dis_filename: The filename of the gb.gz file that was generated.
+
+      The input:
+       - rbh_directory: The directory that contains the RBH files. These RBH files are from odp.
+       - ALGname: The name of the ALG that we are looking at. This is required to help us parse the columns of the rbh files.
+       - outputdir
+
+      The output:
+        - One file per sample in this format:
+          `GTUMAP/distance_matrices/{sample}.gb.gz`
+        - One file called `GTUMAP/sampledf.tsv` that contains the sampledf.
+        - Returns the sampledf as a pandas dataframe.
+
     Saves all of them in a directory called results. They
     """
-    # make sure the results directory exists
-    # if the directory doesn't exist yet, make it
-    if not os.path.exists("results"):
-        os.makedirs("results")
+    # safely create the required output directories.
+    create_directories_if_not_exist(outtsv)
+    create_directories_if_not_exist(outputdir)
+
 
     # get the rbh files in the directory
     rbh_files = list(sorted([os.path.join(rbh_directory, f)
@@ -408,9 +541,9 @@ def rbh_directory_to_distance_matrix(rbh_directory, ALGname):
         if not re.match(r"^[0-9]*$", str(taxid)):
             raise ValueError(f"There is a non-numeric character in the taxid string for file {rbhfile}. Exiting.")
 
-    taxid_to_taxidstring = taxids_to_taxidstringdict(
-        [int(os.path.basename(x).split('-')[1]) for x in rbh_files])
-#
+    # the entries dict will contain the sample information before concatenating to a new df.
+    entries = []
+    ncbi = NCBITaxa() # set this up, as we will use this tool once for each sample
     # print the rbh files
     for i in range(len(rbh_files)):
         print("\r   Parsing the rbh file: {}/{}   ".format(i+1, len(rbh_files)), end="", file = sys.stdout)
@@ -423,7 +556,7 @@ def rbh_directory_to_distance_matrix(rbh_directory, ALGname):
         if not re.match(r"^[0-9]*$", str(taxid)):
             raise ValueError("There is a non-numeric character in the taxid string")
         taxid = int(taxid)
-        taxidstring = taxid_to_taxidstring[taxid]
+
         df = parse_rbh(rbhfile)
         # make sure that ALG "_scaf", "_gene", and "_pos" are in the columns.
         for col in ["_scaf", "_gene", "_pos"]:
@@ -436,10 +569,47 @@ def rbh_directory_to_distance_matrix(rbh_directory, ALGname):
         # check that the second field when splitting on '-' is an integer
         if not re.match( r"^[0-9]*$", thissample.split("-")[1] ):
             raise ValueError( f"There is a non-numeric character in the taxid string for the sample {thissample} when split with '-'. The file was {rbhfile} Exiting." )
-        gb_filepath = f"results/{thissample}.gb.gz"
+        gb_filepath = os.path.join(outputdir, f"{thissample}.gb.gz")
         if not os.path.exists(gb_filepath):
             rbh_to_gb(thissample, df, gb_filepath)
+
+        # now we add the remaining necessary information to the entries dict
+        taxid_dict = {"sample": thissample}
+        # add all the outputs of NCBITaxa to the taxid_dict
+        taxid_dict.update(NCBI_taxid_to_taxdict(ncbi, taxid))
+        # now we need to add the genome size, number of chromosomes, and the filename
+        # The genome size is the maximum value of each of the summed {thissample}_pos columns when grouped by {thissample}_scaf
+        taxid_dict["genome_size"] = df.groupby(f"{thissample}_scaf").max().sum()[f"{thissample}_pos"]
+        # The number of chromosomes is the number of unique {thissample}_scaf values
+        taxid_dict["number_of_chromosomes"] = df[f"{thissample}_scaf"].nunique()
+        taxid_dict["rbh_filepath"] = rbhfile
+        taxid_dict["rbh_filepath_abs"] = os.path.abspath(rbhfile)
+        taxid_dict["rbh_filename"] = os.path.basename(rbhfile)
+        taxid_dict["dis_filepath"] = gb_filepath
+        taxid_dict["dis_filepath_abs"] = os.path.abspath(gb_filepath)
+        taxid_dict["dis_filename"] = os.path.basename(gb_filepath)
+        taxid_dict["color"] = unannotated_color
+        # now see if we should update the color further
+        for thistaxid in taxid_dict["taxid_list"][::-1]:
+            if int(thistaxid) in SplitLossColocTree.color_dict_top:
+                taxid_dict["color"] = SplitLossColocTree.color_dict_top[thistaxid]
+                break
+        entries.append(taxid_dict)
+
+    # Now we add the color information to each row.
+    # At this point, we are not factoring in information about internal nodes,
+    # so we can add the colors given the annotations
+
+    # make a dataframe from the entries dict. Save it as a tsv to the outtsv file
+    sampledf = pd.DataFrame(entries)
+    # sort by the taxid_list_str column, reset index
+    sampledf = sampledf.sort_values(by = "taxid_list_str").reset_index(drop = True)
+    # move the color column to right after the sample column
+    sampledf = sampledf[["sample", "color"] + [col for col in sampledf.columns if col not in ["sample", "color"]]]
+    sampledf.to_csv(outtsv, sep = "\t", index = True)
+    print()
     print("Done parsing the rbh files")
+    return sampledf
 
 def parse_args():
     """
@@ -450,6 +620,7 @@ def parse_args():
                        Otherwise, try to load the existing files. This is not required.
       -a --ALGname   : The name of the ALG that we are looking at. This is required.
       -r --rbhfile   : The ALG rbh file. This is required, as we will use this information later.
+      -c --cladestoplot : This is a list of the clades that we want to plot. This is not required. Use comma-separated values.
     """
     parser = argparse.ArgumentParser(description='This program takes in a list of RBH files. It constructs a phylogenetic tree with those files, and then uses UMAP to visualize the tree based on the distance of ALG ortholog pairs from each other.')
     parser.add_argument('-d', '--directory',
@@ -464,16 +635,173 @@ def parse_args():
     parser.add_argument('-r', '--rbhfile', type=str,
                         required = True,
                         help='The ALG rbh file. This is required, as we will use this information later.')
+    parser.add_argument('-c', '--cladestoplot', type=str, default = "33208,6605", # the default is Metazoa and Cephalopoda
+                        help='This is a list of the clades that we want to plot. This is not required. Use comma-separated values.')
     args = parser.parse_args()
 
     # check that the directory exists
     if not os.path.exists(args.directory):
         raise IOError(f"The directory {args.directory} does not exist. Exiting.")
+    # go through clades to plot, split on commas, check that everything can be parsed as an int, and reassign to args
+    fields = args.cladestoplot.split(",")
+    for thisfield in fields:
+        if not re.match(r"^[0-9]*$", thisfield):
+            raise ValueError(f"The field {thisfield} is not a number. Exiting.")
+    args.cladestoplot = [int(x) for x in fields]
+
     return args
 
+def umap_mapper_to_bokeh(mapper, sampledf, outhtml, plot_title = "UMAP"):
+    """
+    This takes a UMAP mapper and a sampledf and returns a bokeh plot.
+    """
+    if not outhtml.endswith(".html"):
+        raise ValueError(f"The output file {outhtml} does not end with '.html'. Exiting.")
+
+    #              ┓    •
+    # ┓┏┏┳┓┏┓┏┓  ┏┓┃┏┓╋╋┓┏┓┏┓
+    # ┗┻┛┗┗┗┻┣┛  ┣┛┗┗┛┗┗┗┛┗┗┫
+    #        ┛   ┛          ┛
+    hover_data = pd.DataFrame({
+                               "label":   sampledf["sample"],
+                               "taxname": sampledf["taxname"],
+                               "color":   sampledf["color"]
+                               })
+    # get all the level columns from the sampledf
+    level_cols = [x for x in sampledf.columns if "level_" in x]
+    # replace the missing values with the string ""
+    sampledf[level_cols] = sampledf[level_cols].fillna("")
+    for thiscol in level_cols:
+        hover_data[thiscol] = sampledf[thiscol]
+
+    color_dict = {i: sampledf["color"][i] for i in sampledf.index}
+
+    plot = umap.plot.interactive(mapper,
+                                 color_key = color_dict,
+                                 labels = sampledf["sample"],
+                                 hover_data = hover_data,
+                                 point_size = 4
+                                 )
+    # add a title to the plot
+    plot.title.text = plot_title
+    # output to an HTML file
+    bokeh.io.output_file(outhtml)
+    # Save the plot to an HTML file
+    bokeh.io.save(plot)
+
+def filter_sample_df_by_clades(sampledf, taxids_to_keep) -> pd.DataFrame:
+    """
+    This takes, as input, a sampledf and a list of taxids to keep. It returns a filtered sampledf.
+    """
+    # There is a column in the sample df called taxid_list.
+    # This is a list of all the taxids in the lineage of the sample from closest to root to furthest.
+    # Check to see if any of the taxid_to_keep are in the taxid_list. Return a df of the rows that match.
+    return sampledf[sampledf["taxid_list"].apply(lambda x: any([y in taxids_to_keep for y in aliteraleval(x)]))]
+
+def ALGrbh_to_algcomboix(rbhfile) -> dict:
+    """
+    Returns a dictionary of the unique ALG combinations to an index.
+    """
+    df = parse_rbh(rbhfile)
+    alg_combo_to_ix = {tuple(sorted(x)): i
+                            for i, x in enumerate(list(combinations(
+                                df["rbh"], 2)))}
+    return alg_combo_to_ix
+
+def construct_lil_matrix_from_sampledf(sampledf, alg_combo_to_ix) -> lil_matrix:
+    """
+    This takes a sampledf, and a directory of distance matrices, and returns a lil matrix.
+    We return a lil matrix because it is a sparse representation of the matrix.
+
+    rbh1                              rbh2                              distance
+    Simakov2022BCnS_genefamily_12988  Simakov2022BCnS_genefamily_6122   10885675
+    Simakov2022BCnS_genefamily_12988  Simakov2022BCnS_genefamily_7201   10538458
+    Simakov2022BCnS_genefamily_6122   Simakov2022BCnS_genefamily_7201   347217
+    Simakov2022BCnS_genefamily_12988  Simakov2022BCnS_genefamily_7465   8881006
+    Simakov2022BCnS_genefamily_6122   Simakov2022BCnS_genefamily_7465   2004669
+    Simakov2022BCnS_genefamily_7201   Simakov2022BCnS_genefamily_7465   1657452
+
+    The way this works is that we take in the sampledf, reads in the distance matrices as pandas dataframes,
+        and then constructs a lil matrix from the distance matrices. Just use the file path from the sampledf.
+    """
+    # check if the max index is greater than the length of the sampledf -1
+    if max(sampledf.index) > len(sampledf) - 1:
+        raise ValueError(f"The maximum index of the sampledf is greater than the length of the sampledf. Exiting.")
+    # This is annoying to create this temporary data structure, but it helps us pinpoint broken distance matrix .gb.gz files.
+    tempdfs = []
+    for i, row in sampledf.iterrows():
+        thisfile = row["dis_filepath_abs"]
+        try:
+            tempdfs.append(pd.read_csv(thisfile, sep = "\t", compression = "gzip"))
+            # add a column with the index of the sampledf
+            tempdfs[-1]["row_indices"] = i
+        except:
+            raise IOError(f"The file {thisfile} could not be read in with pandas. There probably was something wrong wth the compression. Try deleteing this file. It will be regenerated. Exiting.")
+    concatdf = pd.concat(tempdfs)
+    start = time.time()
+    concatdf["pair"] = concatdf.apply(lambda x: (x["rbh1"], x["rbh2"]), axis = 1)
+    stop = time.time()
+    print ("It took {} seconds to add the pair column with apply".format(stop - start))
+    start = time.time()
+    concatdf["col_indices"] = concatdf["pair"].map(alg_combo_to_ix)
+    stop = time.time()
+    print("It took {} seconds to add the col_indices column with map".format(stop - start))
+
+    #values       = np.array(concatdf["distance"]   )
+    #row_indices  = np.array(concatdf["row_indices"])
+    #col_indices  = np.array(concatdf["col_indices"])
+    #num_features = len(alg_combo_to_ix)
+    #num_samples  = len(sampledf)
+    #sparse_matrix = coo_matrix(( values,
+    #                            (row_indices, col_indices)),
+    #                            shape = (num_samples, num_features))
+    sparse_matrix = coo_matrix(( concatdf["distance"],
+                                (concatdf["row_indices"], concatdf["col_indices"])),
+                                shape = (len(sampledf), len(alg_combo_to_ix)))
+    del concatdf
+    sparse_matrix = sparse_matrix.tolil()
+    return sparse_matrix
+
 def main():
+    """
+    This program interprets many RBH files, and handles the way that they are visualized.
+
+    Steps:
+      1. Generate a sampledf from the RBH files. This dataframe contains important information.
+        - Columns:
+          - index: The index of the dataframe is important because this will be the order of the samples in the distance matrix. Everything will be ordered by this index.
+          - sample: This is the sample name. This is the same sample information that will be in the rbh file columns, and in the distance matrix.
+          - color: This is the color of the sample. This is based on a custom annotation from plot_ALG_fusions_v3.py
+          - taxid: This is the NCBI TAXid of the sample.
+          - taxname: This is the name of the taxid. For example 7777 is "Condrichthyes".
+          - taxid_list: This is a list of all the taxids in the lineage of the sample from closest to root to furthest.
+          - taxid_list_str: A string version of taxid_list joined together with ';' characters
+          - taxname_list: This is a list of all the taxnames in the lineage of the sample from closest to root to furthest. Matches the indices of taxid_list.
+          - taxname_list_str: A string version of taxname_list joined together with ';' characters
+          - level_1: Here, the level_1, level_2, et cetera are splits of the NCBI taxid for easy plotting. These go up to level_10.
+              - Some examples are:
+                ```
+                level_1: root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)
+                level_2: Metazoa (2); Eumetazoa (6072); Bilateria (33213); Protostomia (33317)
+                et cetera
+                ```
+          - printstring: This is the printstring of the taxid, like "root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)"
+          - #NOT YET annotation_method: This shows what method was used to annotate the sample, for example "BCnSSimakov2022_protmap" or "NCBI/Existing"
+          - genome_size: This is the size of the genome in base pairs.
+          - #NOT YET gc_content: This is the GC content of the genome. This is expressed as a value from 0 to 1.
+          - number_of_chromosomes: The haploid number of chromosomes that this species has.
+          - filepath: The filepath, as provided, of the rbh file that was used to generate this information.
+          - filepath_abs: The filepath, resolved, of the rbh file that was used to generate this information.
+          - filename: The filename of the rbh file that was used to generate this information.
+      2. Read in the RBH files and convert them to distance matrix files
+      (Steps 1 and 2 are combined in the function rbh_directory_to_distance_matrix)
+      3. Generate the LIL matrix of the data. Save this to disk.
+      4. Generate UMAP projections of the data. In this step we use different parameters to test how they affect the UMAP.
+      5. Visualize the data with plotly, bokeh, and matplotlib. For these plots, also generate QC plots.
+    """
     args = parse_args()
 
+    results_base_directory = "GTUMAP"
     # ┏┓┓ ┏┓  ┏┓┏┓┏┓┏┓┳┏┓┏┓  •  ┏
     # ┣┫┃ ┃┓━━┗┓┃┃┣ ┃ ┃┣ ┗┓  ┓┏┓╋┏┓
     # ┛┗┗┛┗┛  ┗┛┣┛┗┛┗┛┻┗┛┗┛  ┗┛┗┛┗┛
@@ -481,52 +809,134 @@ def main():
                  for f in os.listdir(args.directory)
                  if f.endswith('.rbh')], reverse = True))
     # Generate the distance matrices. This is the part that saves the .gb.gz files.
-    print("generating the distance matrices")
-    rbh_directory_to_distance_matrix(args.directory, args.ALGname)
-    # If we didn't have any errors, then we know that all the taxids here will be correct
-    taxid_to_taxidstring = taxids_to_taxidstringdict(
-        [int(os.path.basename(x).split('-')[1]) for x in rbh_files])
+    outtsv = f"{results_base_directory}/sampledf.tsv"
+    outputdir = f"{results_base_directory}/distance_matrices/"
+    sampledf = None
+    if not os.path.exists(outtsv):
+        print("generating the distance matrices")
+        sampledf = rbh_directory_to_distance_matrix(args.directory, args.ALGname, outtsv = outtsv, outputdir = outputdir)
+    else:
+        print("The sampledf file already exists. Not overwriting it. Instead, we will read it in.")
+        print("If you would rather overwrite it, delete it in the file system and run this program again.")
+        sampledf = pd.read_csv(outtsv, sep = "\t", index_col = 0)
 
-    # ┏┓┓   ┓           •   ┏┳┓       ┏  ┏┓┓ ┏┓  ┳┓┳┓┓┏  ┏•┓
-    # ┃┃┣┓┓┏┃┏┓┏┓┏┓┏┓┏┓╋┓┏   ┃ ┏┓┏┓┏┓ ┃  ┣┫┃ ┃┓  ┣┫┣┫┣┫  ╋┓┃┏┓
-    # ┣┛┛┗┗┫┗┗┛┗┫┗ ┛┗┗ ┗┗┗   ┻ ┛ ┗ ┗  ┛  ┛┗┗┛┗┛  ┛┗┻┛┛┗  ┛┗┗┗
-    #      ┛    ┛
-    # construct our dataframe
-    T = PhyloTree()
-    # Add in the rbh information
-    T.ingest_ALG_rbh(args.ALGname, args.rbhfile)
-    # for all the files in the results directory, we will add the distances to the PhyloTree
-    #for thisfile in [x for x in os.listdir("results") if x.endswith(".gb.gz")][:100]:
-    counter = 0
-    # This part uses 16.5GB of memory for 3600 files
-    gbgzfiles = [x for x in os.listdir("results") if x.endswith(".gb.gz")]
-    # check that for every .gz.gz file, the second things is an integer
-    for thisfile in gbgzfiles:
-        thissample = thisfile.replace(".gb.gz", "")
-        taxid = thissample.split("-")[1]
-        if not re.match(r"^[0-9]*$", taxid):
-            raise ValueError(f"There is a non-numeric character in the taxid string, {taxid}, for file {thisfile}. Exiting.")
-        if int(taxid) not in taxid_to_taxidstring:
-            raise ValueError(f"The taxid {taxid} is not in the taxid_to_taxidstring dictionary. The file was {thisfile}. Exiting.")
-    # Process the .gb.gz files and add them to the graph
-    for thisfile in gbgzfiles:
-        print(f"\r    Adding the file {counter}/{len(gbgzfiles)}", end="", file = sys.stdout)
-        thissample = thisfile.replace(".gb.gz", "")
-        taxid = int(thissample.split("-")[1])
-        try:
-            distdf = pd.read_csv(f"results/{thisfile}", sep = "\t", compression = "gzip")
-        except:
-            raise IOError(f"The file {thisfile} could not be read in with pandas. There probably was something wrong wth the compression. Try deleteing this file. It will be regenerated. Exiting.")
-        T.add_lineage_string_sample_distances(taxid_to_taxidstring[taxid],
-                                              thissample, args.ALGname,
-                                              distdf)
-        counter += 1
+    # Regardless of what we do, we will need to calculate the rbh combo to index dictionary
+    alg_combo_to_ix = ALGrbh_to_algcomboix(args.rbhfile)
+    outfile = f"{results_base_directory}/combo_to_index.txt"
+    # save the dictionary pairs
+    with open(outfile, "w") as f:
+        for key, value in alg_combo_to_ix.items():
+            f.write(f"{key}\t{value}\n")
 
-    print()
-    print("Done adding the files")
-    T.merge_sampledistances_to_locdf()
-    print("done")
-    #print(T.G)
+    ncbi = NCBITaxa()
+    # Now we must construct a lil matrix from the distance matrices. This takes up significant disk space.
+    # We now parse through different sets of species and parameters to see how the UMAP is affected.
+    # Usage notes:
+    # For about 100 samples for molluscs, took up about 29Gb virtual memory and about 8Gb of RAM.
+    for thissp in args.cladestoplot:
+        thiscladename = ncbi.get_taxid_translator([thissp])[thissp]
+        sample_outfix = f"{thiscladename}_{thissp}"
+        sampleoutdir = f"{results_base_directory}/analyses/{sample_outfix}"
+        # safely make the dirs for the output files
+        create_directories_if_not_exist(sampleoutdir)
+        print(f"We are making a plot for this NCBI taxid: {thissp}")
+
+
+        # LIL FILE
+        print(f"  - Constructing the LIL matrix")
+        samplecdf1 = f"{sampleoutdir}/{sample_outfix}.sampledf.tsv"
+        samplecdf2 = f"{sampleoutdir}/{sample_outfix}.sampledf.matrixindices.tsv"
+        samplelil = f"{sampleoutdir}/{sample_outfix}.lil.npz"
+        cdf = filter_sample_df_by_clades(sampledf, [thissp])
+        # Save the cdf as a tsv
+        cdf.to_csv(samplecdf1, sep = "\t", index = True)
+        # reset the indices, because that is what we need for the lil matrix
+        cdf = cdf.reset_index(drop = True)
+        cdf.to_csv(samplecdf2, sep = "\t", index = True)
+        # now get the lil matrix
+        lil = construct_lil_matrix_from_sampledf(cdf, alg_combo_to_ix)
+
+        # UMAP section
+        for missing in ["small", "large"]:
+            if missing == "large":
+                # we have to flip the values of the lil matrix
+                lil.data[lil.data == 0] = 999999999999
+            for n in [2, 5, 10, 20]: # this is the number of neighbors
+                for min_dist in [0.0, 0.05, 0.1]:
+                    # We need a unique set of files for each of these
+                    print(f"Making a UMAP for this NCBI taxid: {thissp}")
+                    if len(cdf) > n: # we have this condition for smaller datasets
+                        # First check if the UMAP exists
+                        UMAPdf    = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.df"
+                        UMAPbokeh = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.bokeh.html"
+                        UMAPfit = None
+                        if os.path.exists(UMAPbokeh):
+                            print(f"    FOUND - UMAP with {missing} missing vals, with n_neighbors = {n}, and min_dist = {min_dist}")
+                        else:
+                            try:
+                                print(f"    PLOTTING - UMAP with {missing} missing vals, with n_neighbors = {n}, and min_dist = {min_dist}")
+                                reducer = umap.UMAP(low_memory=True, n_neighbors = n, min_dist = min_dist)
+                                start = time.time()
+                                mapper = reducer.fit(lil)
+                                stop = time.time()
+                                print("   - It took {} seconds to fit_transform the UMAP".format(stop - start))
+                                # save the UMAP as a bokeh plot
+                                umap_mapper_to_bokeh(mapper, cdf, UMAPbokeh,
+                                    plot_title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
+                                umap_df = umap_mapper_to_df(mapper, cdf)
+                                umap_df.to_csv(UMAPdf, sep = "\t", index = True)
+                            except UserWarning as e:
+                                # Catch the specific warning about graph not being fully connected
+                                if "Graph is not fully connected" in str(e):
+                                    print("    Warning: Graph is not fully connected. Can't run UMAP with these parameters.")
+                                    # we check for file UMAPbokeh, so write this message to it
+                                    with open(UMAPbokeh, "w") as f:
+                                        f.write("The graph is not fully connected. Can't run UMAP with these parameters.")
+                                else:
+                                    # If it's a different warning, re-raise it
+                                    raise e
+
+
+    ## ┏┓┓   ┓           •   ┏┳┓       ┏  ┏┓┓ ┏┓  ┳┓┳┓┓┏  ┏•┓
+    ## ┃┃┣┓┓┏┃┏┓┏┓┏┓┏┓┏┓╋┓┏   ┃ ┏┓┏┓┏┓ ┃  ┣┫┃ ┃┓  ┣┫┣┫┣┫  ╋┓┃┏┓
+    ## ┣┛┛┗┗┫┗┗┛┗┫┗ ┛┗┗ ┗┗┗   ┻ ┛ ┗ ┗  ┛  ┛┗┗┛┗┛  ┛┗┻┛┛┗  ┛┗┗┗
+    ##      ┛    ┛
+    ## construct our dataframe
+    #T = PhyloTree()
+    ## Add in the rbh information
+    #T.ingest_ALG_rbh(args.ALGname, args.rbhfile)
+    ## for all the files in the results directory, we will add the distances to the PhyloTree
+    ##for thisfile in [x for x in os.listdir("results") if x.endswith(".gb.gz")][:100]:
+    #counter = 0
+    ## This part uses 16.5GB of memory for 3600 files
+    #gbgzfiles = [x for x in os.listdir("results") if x.endswith(".gb.gz")]
+    ## check that for every .gz.gz file, the second things is an integer
+    #for thisfile in gbgzfiles:
+    #    thissample = thisfile.replace(".gb.gz", "")
+    #    taxid = thissample.split("-")[1]
+    #    if not re.match(r"^[0-9]*$", taxid):
+    #        raise ValueError(f"There is a non-numeric character in the taxid string, {taxid}, for file {thisfile}. Exiting.")
+    #    if int(taxid) not in taxid_to_taxidstring:
+    #        raise ValueError(f"The taxid {taxid} is not in the taxid_to_taxidstring dictionary. The file was {thisfile}. Exiting.")
+    ## Process the .gb.gz files and add them to the graph
+    #for thisfile in gbgzfiles:
+    #    print(f"\r    Adding the file {counter}/{len(gbgzfiles)}", end="", file = sys.stdout)
+    #    thissample = thisfile.replace(".gb.gz", "")
+    #    taxid = int(thissample.split("-")[1])
+    #    try:
+    #        distdf = pd.read_csv(f"results/{thisfile}", sep = "\t", compression = "gzip")
+    #    except:
+    #        raise IOError(f"The file {thisfile} could not be read in with pandas. There probably was something wrong wth the compression. Try deleteing this file. It will be regenerated. Exiting.")
+    #    T.add_lineage_string_sample_distances(taxid_to_taxidstring[taxid],
+    #                                          thissample, args.ALGname,
+    #                                          distdf)
+    #    counter += 1
+
+    #print()
+    #print("Done adding the files")
+    #T.merge_sampledistances_to_locdf()
+    #print("done")
+    ##print(T.G)
 
 if __name__ == "__main__":
     main()
