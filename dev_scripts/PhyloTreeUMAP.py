@@ -41,6 +41,7 @@ import umap
 import umap.plot
 import warnings
 warnings.filterwarnings("ignore", message="Graph is not fully connected", category=UserWarning)
+warnings.filterwarnings("ignore", message="Hammer edge bundling is expensive for large graphs!")
 
 # stuff for taxonomy
 from ete3 import NCBITaxa,Tree
@@ -354,12 +355,72 @@ class PhyloTree:
         plt.savefig("distances_UMAP_sparse_matplotlib.pdf")
         sys.exit()
 
+def umap_mapper_to_QC_plots(mapper, outfile, title = "UMAP Connectivity"):
+    """
+    This makes all the QC plots that the UMAP program can make.
+    """
+    umap.plot.diagnostic(mapper, diagnostic_type='pca')
+    # add the title to the plot
+    ax.set_title(title)
+    # save the plot to a file
+    # if the output type is a raster, change the output resolution to 600 dpi
+    raster_formats = [".png", ".jpg", ".jpeg", ".tiff", ".tif"]
+    if any([outfile.endswith(x) for x in raster_formats]):
+        plt.savefig(outfile, dpi = 900)
+    else:
+        plt.savefig(outfile)
+    plt.savefig(outfile)
+
+def umap_mapper_to_connectivity(mapper, outfile, bundled = False, title = "UMAP Connectivity"):
+    """
+    This makes connectivity plots of the UMAP to visualize the data.
+    """
+    if bundled:
+        # ignore the UserWarning: Hammer edge bundling is expensive for large graphs!
+        ax = umap.plot.connectivity(mapper, show_points = True, edge_bundling='hammer')
+    else:
+        ax = umap.plot.connectivity(mapper, show_points = True)
+    # add the title to the plot
+    ax.set_title(title)
+    # save the plot to a file
+    # if the output type is a raster, change the output resolution to 600 dpi
+    raster_formats = [".png", ".jpg", ".jpeg", ".tiff", ".tif"]
+    if any([outfile.endswith(x) for x in raster_formats]):
+        plt.savefig(outfile, dpi = 900)
+    else:
+        plt.savefig(outfile)
+    plt.savefig(outfile)
+
 def umap_mapper_to_df(mapper, cdf):
     """
     This function takes a UMAP mapper and a dataframe of the distances and returns a dataframe with the UMAP coordinates.
     """
     # get the coordinates of the UMAP
     df_embedding = pd.DataFrame(mapper.embedding_, columns=['UMAP1', 'UMAP2'])
+    # This is all for debugging
+    #print(dir(mapper))
+    #print("This is densmap")
+    #print(mapper.densmap)
+    #print("This is the embedding")
+    #print(mapper.embedding_)
+    #print("This is the fit")
+    #print(mapper.fit)
+    #print("This is the fit_transform")
+    #print(mapper.fit_transform)
+    #print("This is knn_dists")
+    #print(mapper.knn_dists)
+    #print("THis is local_connectivity")
+    #print(mapper.local_connectivity)
+    #print("This is output metric")
+    #print(mapper.output_metric)
+    #print("This is precomputed_knn")
+    #print(mapper.precomputed_knn)
+    #print("This is random_state")
+    #print(mapper.random_state)
+    #print("This is repulsion_strength")
+    #print(mapper.repulsion_strength)
+    #print("This is tqdm_kwds")
+    #print(mapper.tqdm_kwds)
     # add those two columns to the cdf
     return pd.concat([cdf, df_embedding], axis = 1)
 
@@ -621,6 +682,7 @@ def parse_args():
       -a --ALGname   : The name of the ALG that we are looking at. This is required.
       -r --rbhfile   : The ALG rbh file. This is required, as we will use this information later.
       -c --cladestoplot : This is a list of the clades that we want to plot. This is not required. Use comma-separated values.
+      -q --qualitycontrol : If this is set, then we will run the quality control on the distance matrices. This is not required.
     """
     parser = argparse.ArgumentParser(description='This program takes in a list of RBH files. It constructs a phylogenetic tree with those files, and then uses UMAP to visualize the tree based on the distance of ALG ortholog pairs from each other.')
     parser.add_argument('-d', '--directory',
@@ -637,6 +699,8 @@ def parse_args():
                         help='The ALG rbh file. This is required, as we will use this information later.')
     parser.add_argument('-c', '--cladestoplot', type=str, default = "33208,6605", # the default is Metazoa and Cephalopoda
                         help='This is a list of the clades that we want to plot. This is not required. Use comma-separated values.')
+    parser.add_argument('-q', '--qualitycontrol', action='store_true',
+                        help='If this is set, then we will generate quality control plots of the data. This is not required.')
     args = parser.parse_args()
 
     # check that the directory exists
@@ -708,7 +772,7 @@ def ALGrbh_to_algcomboix(rbhfile) -> dict:
                                 df["rbh"], 2)))}
     return alg_combo_to_ix
 
-def construct_lil_matrix_from_sampledf(sampledf, alg_combo_to_ix) -> lil_matrix:
+def construct_lil_matrix_from_sampledf(sampledf, alg_combo_to_ix, print_prefix = "") -> lil_matrix:
     """
     This takes a sampledf, and a directory of distance matrices, and returns a lil matrix.
     We return a lil matrix because it is a sparse representation of the matrix.
@@ -735,26 +799,21 @@ def construct_lil_matrix_from_sampledf(sampledf, alg_combo_to_ix) -> lil_matrix:
             tempdfs.append(pd.read_csv(thisfile, sep = "\t", compression = "gzip"))
             # add a column with the index of the sampledf
             tempdfs[-1]["row_indices"] = i
+            # assert that all of the values of rbh1 are less than the values of rbh2
+            assert all(tempdfs[-1]["rbh1"] < tempdfs[-1]["rbh2"])
         except:
             raise IOError(f"The file {thisfile} could not be read in with pandas. There probably was something wrong wth the compression. Try deleteing this file. It will be regenerated. Exiting.")
     concatdf = pd.concat(tempdfs)
     start = time.time()
+    # I require that all of the input
     concatdf["pair"] = concatdf.apply(lambda x: (x["rbh1"], x["rbh2"]), axis = 1)
     stop = time.time()
-    print ("It took {} seconds to add the pair column with apply".format(stop - start))
+    print ("{}It took {} seconds to add the pair column with apply".format(print_prefix, stop - start))
     start = time.time()
     concatdf["col_indices"] = concatdf["pair"].map(alg_combo_to_ix)
     stop = time.time()
-    print("It took {} seconds to add the col_indices column with map".format(stop - start))
+    print("{}It took {} seconds to add the col_indices column with map".format(print_prefix, stop - start))
 
-    #values       = np.array(concatdf["distance"]   )
-    #row_indices  = np.array(concatdf["row_indices"])
-    #col_indices  = np.array(concatdf["col_indices"])
-    #num_features = len(alg_combo_to_ix)
-    #num_samples  = len(sampledf)
-    #sparse_matrix = coo_matrix(( values,
-    #                            (row_indices, col_indices)),
-    #                            shape = (num_samples, num_features))
     sparse_matrix = coo_matrix(( concatdf["distance"],
                                 (concatdf["row_indices"], concatdf["col_indices"])),
                                 shape = (len(sampledf), len(alg_combo_to_ix)))
@@ -820,9 +879,11 @@ def main():
         print("If you would rather overwrite it, delete it in the file system and run this program again.")
         sampledf = pd.read_csv(outtsv, sep = "\t", index_col = 0)
 
-    # Regardless of what we do, we will need to calculate the rbh combo to index dictionary
-    alg_combo_to_ix = ALGrbh_to_algcomboix(args.rbhfile)
+    # We will need to calculate the rbh combo to index dictionary.
+    # DO NOT bother reading in the existing file. It takes 5x longer
+    #  to read in the file than it does to generate it.
     outfile = f"{results_base_directory}/combo_to_index.txt"
+    alg_combo_to_ix = ALGrbh_to_algcomboix(args.rbhfile)
     # save the dictionary pairs
     with open(outfile, "w") as f:
         for key, value in alg_combo_to_ix.items():
@@ -843,10 +904,13 @@ def main():
 
 
         # LIL FILE
+        # This whole thing could be sped up for repeated runs if I allowed the LIL matrix to be saved to disk.
+        # Right now it is not saved to disk, because it is a large file.
+        # This wouldn't be such a big deal if I compressed the output. I need to optimize this to make
+        #  sure that I understand the inputs for constructing the LIL matrix object, though.
         print(f"  - Constructing the LIL matrix")
         samplecdf1 = f"{sampleoutdir}/{sample_outfix}.sampledf.tsv"
         samplecdf2 = f"{sampleoutdir}/{sample_outfix}.sampledf.matrixindices.tsv"
-        samplelil = f"{sampleoutdir}/{sample_outfix}.lil.npz"
         cdf = filter_sample_df_by_clades(sampledf, [thissp])
         # Save the cdf as a tsv
         cdf.to_csv(samplecdf1, sep = "\t", index = True)
@@ -854,21 +918,25 @@ def main():
         cdf = cdf.reset_index(drop = True)
         cdf.to_csv(samplecdf2, sep = "\t", index = True)
         # now get the lil matrix
-        lil = construct_lil_matrix_from_sampledf(cdf, alg_combo_to_ix)
+        lil = construct_lil_matrix_from_sampledf(cdf, alg_combo_to_ix, print_prefix = "  - ")
 
         # UMAP section
+        # Levels for plotting text:
+        # We are making a plot for this NCBI taxid: 33208
+        #  - Constructing the LIL matrix for {sample_outfix}
         for missing in ["small", "large"]:
             if missing == "large":
                 # we have to flip the values of the lil matrix
                 lil.data[lil.data == 0] = 999999999999
-            for n in [2, 5, 10, 20]: # this is the number of neighbors
-                for min_dist in [0.0, 0.05, 0.1]:
+            for n in [2, 5, 10, 20, 50, 100, 250]: # this is the number of neighbors
+                for min_dist in [0.0, 0.1, 0.2, 0.5, 0.75, 0.9]:
                     # We need a unique set of files for each of these
-                    print(f"Making a UMAP for this NCBI taxid: {thissp}")
+                    if len(cdf) <= n:
+                        print(f"    The number of samples, {len(cdf)}, is less than the number of neighbors, {n}. Skipping.")
                     if len(cdf) > n: # we have this condition for smaller datasets
                         # First check if the UMAP exists
-                        UMAPdf    = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.df"
-                        UMAPbokeh = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.bokeh.html"
+                        UMAPdf           = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.df"
+                        UMAPbokeh        = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.bokeh.html"
                         UMAPfit = None
                         if os.path.exists(UMAPbokeh):
                             print(f"    FOUND - UMAP with {missing} missing vals, with n_neighbors = {n}, and min_dist = {min_dist}")
@@ -885,6 +953,26 @@ def main():
                                     plot_title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
                                 umap_df = umap_mapper_to_df(mapper, cdf)
                                 umap_df.to_csv(UMAPdf, sep = "\t", index = True)
+                                # save the connectivity figure
+                                if args.qualitycontrol:
+                                    UMAPconnectivity = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.connectivity.jpeg"
+                                    UMAPconnectivit2 = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.connectivity2.jpeg"
+                                    try:
+                                        umap_mapper_to_connectivity(mapper, UMAPconnectivity,
+                                                                    title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
+                                    except:
+                                        print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivity}")
+                                    try:
+                                        umap_mapper_to_connectivity(mapper, UMAPconnectivit2, bundled = True,
+                                                                    title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
+                                    except:
+                                        print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivit2}")
+                                    #QCplot = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.QC.jpeg"
+                                    ##try:
+                                    #umap_mapper_to_QC_plots(mapper, QCplot,
+                                    #                title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
+                                    ##except:
+                                    ##    print(f"    Warning: failed to make the QC plot for {QCplot}.")
                             except UserWarning as e:
                                 # Catch the specific warning about graph not being fully connected
                                 if "Graph is not fully connected" in str(e):
