@@ -863,6 +863,7 @@ def umap_mapper_to_bokeh(mapper, sampledf, outhtml, plot_title = "UMAP"):
     sampledf[level_cols] = sampledf[level_cols].fillna("")
     for thiscol in level_cols:
         hover_data[thiscol] = sampledf[thiscol]
+    hover_data = hover_data.fillna("")
 
     color_dict = {i: sampledf["color"][i] for i in sampledf.index}
 
@@ -870,6 +871,7 @@ def umap_mapper_to_bokeh(mapper, sampledf, outhtml, plot_title = "UMAP"):
                                  color_key = color_dict,
                                  labels = sampledf["sample"],
                                  hover_data = hover_data,
+                                 tools=[],
                                  point_size = 4
                                  )
     # add a title to the plot
@@ -879,14 +881,16 @@ def umap_mapper_to_bokeh(mapper, sampledf, outhtml, plot_title = "UMAP"):
     # Save the plot to an HTML file
     bokeh.io.save(plot)
 
-def filter_sample_df_by_clades(sampledf, taxids_to_keep) -> pd.DataFrame:
+def filter_sample_df_by_clades(sampledf, taxids_to_keep, taxids_to_remove) -> pd.DataFrame:
     """
     This takes, as input, a sampledf and a list of taxids to keep. It returns a filtered sampledf.
     """
     # There is a column in the sample df called taxid_list.
     # This is a list of all the taxids in the lineage of the sample from closest to root to furthest.
     # Check to see if any of the taxid_to_keep are in the taxid_list. Return a df of the rows that match.
-    return sampledf[sampledf["taxid_list"].apply(lambda x: any([y in taxids_to_keep for y in aliteraleval(x)]))]
+    sampledf = sampledf[sampledf["taxid_list"].apply(lambda x: any([y in taxids_to_keep for y in aliteraleval(x)]))]
+    # We now remove the taxids that we know we don't want to keep.
+    return sampledf[sampledf["taxid_list"].apply(lambda x: not any([y in taxids_to_remove for y in aliteraleval(x)]))]
 
 def ALGrbh_to_algcomboix(rbhfile) -> dict:
     """
@@ -1040,6 +1044,36 @@ def rbh_to_samplename(rbhfile, ALGname) -> str:
     # I haven't makde a unit test. Not working on ssh. Oh well.
     return filename
 
+def plot_topoumap_from_files(sampledffile, ALGcomboixfile, coofile,
+                             outdir, sample, smalllargeNaN, n_neighbors, min_dist,
+                             taxids_to_keep, taxids_to_remove):
+    """
+    This function makes a UMAP plot where the points are inverted.
+    The points for this are the distances between the pairs.
+    The colors are the colors of the taxids.
+    """
+    # make sure that taxids_to_keep and taxids_to_remove are lists
+    if not type(taxids_to_keep) == list:
+        raise ValueError(f"The taxids_to_keep {taxids_to_keep} is not a list. Exiting.")
+    if not type(taxids_to_remove) == list:
+        raise ValueError(f"The taxids_to_remove {taxids_to_remove} is not a list. Exiting.")
+
+    # make sure that everything in taxids_to_keep and taxids_to_remove are integers
+    for entry in taxids_to_keep + taxids_to_remove:
+        if not re.match(r"^[0-9]*$", str(entry)):
+            raise ValueError(f"The taxid {entry} is not an integer. Exiting.")
+
+    cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
+    cdf2 = filter_sample_df_by_clades(cdf, taxids_to_keep, taxids_to_remove)
+    # Get a list of the indices that are in cdf that are not in cdf2.
+    ixnotin = [x for x in cdf.index if x not in cdf2.index]
+    # These are the indices that we want to remove from the lil matrix.
+    lil = load_npz(coofile).tolil()
+    # we are removing the row indices that are not in cdf2
+    lil = lil[[x for x in range(lil.shape[0]) if x not in ixnotin]]
+
+
+
 def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
                          outdir, sample, smalllargeNaN, n_neighbors, min_dist):
     """
@@ -1077,14 +1111,14 @@ def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
     # In every case, we must produce a .df file and a .bokeh.html file
     UMAPdf    = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.df"
     UMAPbokeh = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.bokeh.html"
-    if len(cdf) <= n:
-        print(f"    The number of samples, {len(cdf)}, is less than the number of neighbors, {n}. Skipping.")
+    if len(cdf) <= n_neighbors:
+        print(f"    The number of samples, {len(cdf)}, is less than the number of neighbors, {n_neighbors}. Skipping.")
         # write to empty UMAPdf and UMAPbokeh files
         with open(UMAPdf, "w") as f:
             f.write("")
         with open(UMAPbokeh, "w") as f:
             f.write("")
-    elif len(cdf) > n: # we have this condition for smaller datasets
+    elif len(cdf) > n_neighbors: # we have this condition for smaller datasets
         try:
             print(f"    PLOTTING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
             reducer = umap.UMAP(low_memory=True, n_neighbors = n_neighbors, min_dist = min_dist)
@@ -1094,7 +1128,7 @@ def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
             print("   - It took {} seconds to fit_transform the UMAP".format(stop - start))
             # save the UMAP as a bokeh plot
             umap_mapper_to_bokeh(mapper, cdf, UMAPbokeh,
-                plot_title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
+                plot_title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
             umap_df = umap_mapper_to_df(mapper, cdf)
             umap_df.to_csv(UMAPdf, sep = "\t", index = True)
             # save the connectivity figure

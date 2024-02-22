@@ -12,7 +12,10 @@ from PhyloTreeUMAP import (algcomboix_file_to_dict,
                            rbh_to_distance_gbgz,
                            ALGrbh_to_algcomboix,
                            plot_umap_from_files,
+                           plot_topoumap_from_files,
                            sampleToRbhFileDict_to_sample_matrix)
+
+from ete3 import NCBITaxa,Tree
 import os
 import pandas as pd
 from scipy.sparse import coo_matrix, lil_matrix, save_npz, load_npz
@@ -38,6 +41,29 @@ if not "ALG_rbh_file" in config:
 if not os.path.exists(config["rbh_directory"]):
     raise ValueError(f"rbh_directory {config['rbh_directory']} does not exist")
 
+# check that there are some NCBI taxids to plot in the config file
+if "taxids" not in config:
+    config["taxids"] = [
+                         [[33213],[]]
+                        ]
+# Come up with the taxid analyses. Each entry will have a string indicating what is in it and what is not.
+# Bilateria_33213_without_None if we want to plot all bilateria, and want to remove specific things
+# Bilateria_33213_without_33317_7652 if we want to plot all bilateria, but we don't want to plot the protostomes or lytechinus
+# Bilateria_33213_without_33317_7652 if we want to plot all bilateria, but we don't want to plot the protostomes or lytechinus
+analyses = {}
+ncbi = NCBITaxa()
+for entry in config["taxids"]:
+    # get the clade name to make reading easier
+    clade = ncbi.get_taxid_translator([entry[0][0]])[entry[0][0]]
+    # make sure that the length of the 0th entry is at least length 1
+    if len(entry[0]) == 0:
+        raise IOError("There must be at least one taxid in the first entry of the taxids list.")
+    analysis_name = clade + "_" + "_".join([str(x) for x in entry[0]]) + "_without_"
+    analysis_name += "_".join([str(x) for x in entry[1]]) if len(entry[1]) > 0 else "None"
+    analyses[analysis_name] = entry
+config["taxids"] = analyses
+print(config["taxids"])
+
 config["rbh_directory"] = os.path.abspath(config["rbh_directory"])
 
 config["rbh_files"] = list(sorted([os.path.join(config["rbh_directory"], f)
@@ -53,15 +79,22 @@ if results_base_directory.endswith("/"):
 
 rule all:
     input:
-        expand(results_base_directory + "/AllSamples/AllSamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
+        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
                 n = [5, 10, 20, 50, 100, 250],
                 m = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0],
                 sizeNaN = ["small", "large"]),
-        expand(results_base_directory + "/AllSamples/AllSamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
+        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
                 sample = config["sample_to_rbh_file"].keys(),
                 n = [5, 10, 20, 50, 100, 250],
                 m = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0],
                 sizeNaN = ["small", "large"]),
+
+        expand(results_base_directory + "/subchrom/{taxid}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
+                n = [50],
+                m = [0.5],
+                taxid = [33213],
+                sizeNaN = ["small"]),
+
         #expand(results_base_directory + "/distance_matrices/{sample}.gb.gz",
         #                      sample = config["sample_to_rbh_file"].keys()),
         #results_base_directory + "/combo_to_index.txt",
@@ -179,15 +212,38 @@ rule plot_umap_of_files:
         combotoindex = results_base_directory + "/combo_to_index.txt",
         coo    = results_base_directory + "/allsamples.coo.npz"
     output:
-        df   = results_base_directory + "/AllSamples/AllSamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
-        html = results_base_directory + "/AllSamples/AllSamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html"
+        df   = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
+        html = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html"
     threads: 1
     params:
-        outdir = results_base_directory + "/all_species",
-    retries: 5
+        outdir = results_base_directory + "/allsamples",
+    #retries: 0
     resources:
         mem_mb = coo_get_mem_mb,
         runtime = 60
     run:
+        #print(f"These are the wildcards: {wildcards}")
         plot_umap_from_files(input.sampletsv, input.combotoindex, input.coo,
-                             params.outdir, wildcards.sample, wildcards.sizeNaN, wildcards.n, wildcards.m)
+                             params.outdir, "allsamples",
+                             wildcards.sizeNaN, int(wildcards.n), float(wildcards.m))
+
+rule plot_subchrom_umap:
+    input:
+        sampletsv    = results_base_directory + "/sampledf.tsv",
+        combotoindex = results_base_directory + "/combo_to_index.txt",
+        coo    = results_base_directory + "/allsamples.coo.npz"
+    output:
+        df   = results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
+        #html = results_base_directory + "/subchrom/{taxid}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.bokeh.html"
+    threads: 1
+    params:
+        outdir = results_base_directory + "/allsamples",
+    #retries: 0
+    resources:
+        mem_mb = coo_get_mem_mb,
+        runtime = 60
+    run:
+        plot_topoumap_from_files(input.sampletsv, input.combotoindex, input.coo,
+                                 params.outdir, wildcards.taxid,
+                                 smalllargeNaN, n_neighbors, min_dist,
+                                 wildcards.taxid)
