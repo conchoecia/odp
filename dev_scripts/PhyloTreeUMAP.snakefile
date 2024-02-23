@@ -12,7 +12,8 @@ from PhyloTreeUMAP import (algcomboix_file_to_dict,
                            rbh_to_distance_gbgz,
                            ALGrbh_to_algcomboix,
                            plot_umap_from_files,
-                           plot_topoumap_from_files,
+                           topoumap_genmatrix,
+                           topoumap_plotumap,
                            sampleToRbhFileDict_to_sample_matrix)
 
 from ete3 import NCBITaxa,Tree
@@ -43,8 +44,21 @@ if not os.path.exists(config["rbh_directory"]):
 
 # check that there are some NCBI taxids to plot in the config file
 if "taxids" not in config:
-    config["taxids"] = [
-                         [[33213],[]]
+    # 33317 is protostomes
+    # 33213 is bilateria
+    config["taxids"] = [ [[10197],[]],      # ctenophores
+                         [[6040], [60882]], # porifera minus Hexactinellida
+                         [[6073], []],      # cnidaria
+                         [[6340], [42113]], # annelida minus clitellata
+                         [[42113], []],     # clitellata
+                         [[6447], [6606]],  # mollusca minus coleoida
+                         [[6606], []],      # coleoida
+                         [[50557], []],     # insecta
+                         [[61985], []],     # myriapoda
+                         [[6231], []],      # nematoda
+                         [[7586], []],      # echinodermata
+                         [[7742], []],      # Vertebrata
+                         #[[33317],[]]
                         ]
 # Come up with the taxid analyses. Each entry will have a string indicating what is in it and what is not.
 # Bilateria_33213_without_None if we want to plot all bilateria, and want to remove specific things
@@ -79,20 +93,21 @@ if results_base_directory.endswith("/"):
 
 rule all:
     input:
-        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
-                n = [5, 10, 20, 50, 100, 250],
-                m = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0],
-                sizeNaN = ["small", "large"]),
-        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
-                sample = config["sample_to_rbh_file"].keys(),
-                n = [5, 10, 20, 50, 100, 250],
-                m = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0],
-                sizeNaN = ["small", "large"]),
-
-        expand(results_base_directory + "/subchrom/{taxid}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
+        #expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
+        #        n = [5, 10, 20, 50, 100, 250],
+        #        m = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0],
+        #        sizeNaN = ["small", "large"]),
+        #expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
+        #        sample = config["sample_to_rbh_file"].keys(),
+        #        n = [5, 10, 20, 50, 100, 250],
+        #        m = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0],
+        #        sizeNaN = ["small", "large"]),
+        #expand(results_base_directory + "/subchrom/{taxanalysis}.coo.npz",
+        #        taxanalysis = config["taxids"]),
+        expand(results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
                 n = [50],
                 m = [0.5],
-                taxid = [33213],
+                taxanalysis = config["taxids"],
                 sizeNaN = ["small"]),
 
         #expand(results_base_directory + "/distance_matrices/{sample}.gb.gz",
@@ -217,7 +232,7 @@ rule plot_umap_of_files:
     threads: 1
     params:
         outdir = results_base_directory + "/allsamples",
-    #retries: 0
+    retries: 5
     resources:
         mem_mb = coo_get_mem_mb,
         runtime = 60
@@ -227,23 +242,43 @@ rule plot_umap_of_files:
                              params.outdir, "allsamples",
                              wildcards.sizeNaN, int(wildcards.n), float(wildcards.m))
 
-rule plot_subchrom_umap:
+rule gen_subchrom_coo_matrix:
     input:
         sampletsv    = results_base_directory + "/sampledf.tsv",
         combotoindex = results_base_directory + "/combo_to_index.txt",
-        coo    = results_base_directory + "/allsamples.coo.npz"
+        coo    = results_base_directory + "/allsamples.coo.npz",
+        ALGrbh = config["ALG_rbh_file"]
     output:
-        df   = results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
-        #html = results_base_directory + "/subchrom/{taxid}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.bokeh.html"
+        coo = results_base_directory + "/subchrom/{taxanalysis}.coo.npz"
     threads: 1
     params:
         outdir = results_base_directory + "/allsamples",
-    #retries: 0
+        taxids_to_keep    = lambda wildcards: config["taxids"][wildcards.taxanalysis][0],
+        taxids_to_remove  = lambda wildcards: config["taxids"][wildcards.taxanalysis][1]
+    retries: 5
     resources:
         mem_mb = coo_get_mem_mb,
         runtime = 60
     run:
-        plot_topoumap_from_files(input.sampletsv, input.combotoindex, input.coo,
-                                 params.outdir, wildcards.taxid,
-                                 smalllargeNaN, n_neighbors, min_dist,
-                                 wildcards.taxid)
+        topoumap_genmatrix(input.sampletsv, input.combotoindex, input.coo, input.ALGrbh,
+                           wildcards.taxanalysis, params.taxids_to_keep, params.taxids_to_remove,
+                           output.coo)
+
+rule gen_subchrom_umap:
+    input:
+        sampletsv    = results_base_directory + "/sampledf.tsv",
+        coo = results_base_directory + "/subchrom/{taxanalysis}.coo.npz",
+        ALGrbh = config["ALG_rbh_file"]
+    output:
+        df     = results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
+        html   = results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.bokeh.html"
+    params:
+        outdir = results_base_directory + "/subchrom",
+    retries: 5
+    threads: 1
+    resources:
+        mem_mb = coo_get_mem_mb,
+        runtime = 60
+    run:
+        topoumap_plotumap(wildcards.taxanalysis, input.sampletsv, input.ALGrbh, input.coo,
+                          params.outdir, wildcards.sizeNaN, int(wildcards.n), float(wildcards.m))

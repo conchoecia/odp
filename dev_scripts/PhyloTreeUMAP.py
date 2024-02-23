@@ -29,12 +29,13 @@ from  ast import literal_eval as aliteraleval
 import bokeh           # bokeh is used to visualize and save the UMAP
 import networkx as nx
 import numpy as np
+np.set_printoptions(linewidth=np.inf)
 import os
 import pandas as pd
 import pickle
 import re
 import scipy.sparse
-from scipy.sparse import coo_matrix, lil_matrix, save_npz, load_npz
+from scipy.sparse import coo_matrix, lil_matrix, save_npz, load_npz, csr_matrix
 import sys
 import time
 import umap
@@ -397,31 +398,6 @@ def umap_mapper_to_df(mapper, cdf):
     """
     # get the coordinates of the UMAP
     df_embedding = pd.DataFrame(mapper.embedding_, columns=['UMAP1', 'UMAP2'])
-    # This is all for debugging
-    #print(dir(mapper))
-    #print("This is densmap")
-    #print(mapper.densmap)
-    #print("This is the embedding")
-    #print(mapper.embedding_)
-    #print("This is the fit")
-    #print(mapper.fit)
-    #print("This is the fit_transform")
-    #print(mapper.fit_transform)
-    #print("This is knn_dists")
-    #print(mapper.knn_dists)
-    #print("THis is local_connectivity")
-    #print(mapper.local_connectivity)
-    #print("This is output metric")
-    #print(mapper.output_metric)
-    #print("This is precomputed_knn")
-    #print(mapper.precomputed_knn)
-    #print("This is random_state")
-    #print(mapper.random_state)
-    #print("This is repulsion_strength")
-    #print(mapper.repulsion_strength)
-    #print("This is tqdm_kwds")
-    #print(mapper.tqdm_kwds)
-    # add those two columns to the cdf
     return pd.concat([cdf, df_embedding], axis = 1)
 
 def rbh_to_gb(sample, rbhdf, outfile):
@@ -841,6 +817,39 @@ def parse_args():
 
     return args
 
+def umap_mapper_to_bokeh_topoumap(mapper, algrbhdf,
+                                  outhtml, plot_title = "UMAP"):
+    """
+    This takes a UMAP mapper and an ALGRBHdf and returns a bokeh plot.
+    """
+    if not outhtml.endswith(".html"):
+        raise ValueError(f"The output file {outhtml} does not end with '.html'. Exiting.")
+
+    #              ┓    •
+    # ┓┏┏┳┓┏┓┏┓  ┏┓┃┏┓╋╋┓┏┓┏┓
+    # ┗┻┛┗┗┗┻┣┛  ┣┛┗┗┛┗┗┗┛┗┗┫
+    #        ┛   ┛          ┛
+    hover_data = pd.DataFrame({
+                               "rbh_ortholog": algrbhdf["rbh"],
+                               "gene_group":   algrbhdf["gene_group"],
+                               "color":        algrbhdf["color"]
+                               })
+    color_dict = {i: algrbhdf["color"][i] for i in algrbhdf.index}
+
+    plot = umap.plot.interactive(mapper,
+                                 color_key = color_dict,
+                                 labels = algrbhdf["rbh"],
+                                 hover_data = hover_data,
+                                 tools=[],
+                                 point_size = 4
+                                 )
+    # add a title to the plot
+    plot.title.text = plot_title
+    # output to an HTML file
+    bokeh.io.output_file(outhtml)
+    # Save the plot to an HTML file
+    bokeh.io.save(plot)
+
 def umap_mapper_to_bokeh(mapper, sampledf, outhtml, plot_title = "UMAP"):
     """
     This takes a UMAP mapper and a sampledf and returns a bokeh plot.
@@ -1044,14 +1053,169 @@ def rbh_to_samplename(rbhfile, ALGname) -> str:
     # I haven't makde a unit test. Not working on ssh. Oh well.
     return filename
 
-def plot_topoumap_from_files(sampledffile, ALGcomboixfile, coofile,
-                             outdir, sample, smalllargeNaN, n_neighbors, min_dist,
-                             taxids_to_keep, taxids_to_remove):
+def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
+                       sample, taxids_to_keep, taxids_to_remove, outcoofile):
     """
     This function makes a UMAP plot where the points are inverted.
     The points for this are the distances between the pairs.
     The colors are the colors of the taxids.
     """
+    # make sure that the outcoofile ends with .npz
+    if not outcoofile.endswith(".npz"):
+        raise ValueError(f"The outcoofile {outcoofile} does not end with '.npz'. Exiting.")
+
+    class adjacency_dag:
+        def __init__(self):
+            self.dag = {}
+            self.gad = {} # the inverse graph
+            self.root = None
+        def determine_root(self):
+            """The node that does not have a parent is the root."""
+            all_nodes = set(self.dag.keys())
+            all_children = set([x for y in self.dag.values() for x in y.keys()])
+            self.root = list(all_nodes - all_children)[0]
+        def add_edge(self, node1, node2, weight):
+            """Add one edge and weight to the graph."""
+            if node1 not in self.dag:
+                self.dag[node1] = {}
+            self.dag[node1][node2] = weight
+        def add_taxid_list(self, sample, taxid_list, weights):
+            """Adds all the edges, with weights, to the graph."""
+            for i in range(len(taxid_list) - 1):
+                self.add_edge(taxid_list[i], taxid_list[i+1], weights[i])
+            # now we add the last node to the sample.
+            self.add_edge(taxid_list[-1], sample, 1)
+            # if the sample is not in the graph, we add it empty
+            if sample not in self.dag:
+                self.dag[sample] = {}
+        def longest_path_from_node(self, node, memo={}):
+            # If we have already computed the longest path from this node, return it from memoization
+            if node in memo:
+                return memo[node]
+            # Base case: If the node has no outgoing edges, the longest path is just itself
+            if not self.dag[node]:
+                memo[node] = [node]
+                return memo[node]
+            # Initialize variable to store the longest path
+            longest_path = None
+            # Iterate through the outgoing edges of the current node
+            for neighbor, _ in self.dag[node].items():
+                # Recursively find the longest path starting from the neighbor node
+                path = self.longest_path_from_node(neighbor, memo)
+
+                # If the path starting from this neighbor is longer than the current longest path, update it
+                if longest_path is None or len(path) > len(longest_path):
+                    longest_path = path
+
+            # Extend the longest path with the current node
+            memo[node] = [node] + longest_path
+            return memo[node]
+        def normalize_branch_lengths(self):
+            """This normalizes the branch lengths so that the total distance from the root to the leaves is 1."""
+            self.determine_root()
+            print("The root is: ", self.root)
+            self._determine_branch_length(self.root, 1.0)
+
+        def _determine_branch_length(self, node, remaining_length):
+            """The recursive method to come up with the path lengths"""
+            if len(self.dag[node]) == 0:
+                # We're at the tip. There are no edge lengths to modify
+                return
+            else:
+                longest_taxidlist = self.longest_path_from_node(node)
+                longest_path = len(longest_taxidlist) - 1
+                elength = remaining_length/longest_path
+
+                # there are some children to modify
+                for thischild in self.dag[node]:
+                    #if the child is a tip, give it the remaining length. There is nothing else to do.
+                    if len(self.dag[thischild]) == 0:
+                        self.dag[node][thischild] = remaining_length
+                    else:
+                        # otherwise, give it the edge length
+                        self.dag[node][thischild] = elength
+                        # determine the edge lengths for this child
+                        self._determine_branch_length(thischild, remaining_length - elength)
+        def print_all_path_sums(self):
+            """Performs a depth first search and prints the sum of the edge lengths from the root to the tip."""
+            self.determine_root()
+            self._path_sum_to_node(self.root, 0)
+        def _path_sum_to_node(self, node, pathsum):
+            """This is the recursive method to determine the path sum to a node."""
+            if len(self.dag[node]) == 0:
+                return print(f"The path sum from the root to {node} is {pathsum}")
+            else:
+                for child in self.dag[node]:
+                    self._path_sum_to_node(child, pathsum + self.dag[node][child])
+        def generate_newick(self) -> str:
+            """This generates a newick string from the DAG."""
+            self.determine_root()
+            return self._gen_newick_helper(self.root)
+        def _gen_newick_helper(self, node) -> str:
+            """This is the recursive helper function to generate the newick string."""
+            # Base case: If the node is a tip (no outgoing edges), return its name
+            if not self.dag[node]:
+                return node
+            # Recursively generate Newick strings for the child nodes
+            children_newick = []
+            for child, weight in self.dag[node].items():
+                child_newick = self._gen_newick_helper(child)
+                children_newick.append(f"{child_newick}:{weight:.6f}")
+            # Construct the Newick string for the current node
+            newick_string = f"({','.join(children_newick)}){node}"
+            return newick_string
+        def gen_gad(self):
+            """This generates the inverse graph."""
+            for node in self.dag:
+                for child in self.dag[node]:
+                    if child not in self.gad:
+                        self.gad[child] = {}
+                    self.gad[child][node] = self.dag[node][child]
+        def return_distances(self)->dict:
+            """This uses an inverse of the graph to return the distances between all nodes."""
+            self.gen_gad()
+            # get the tips
+            tips = [x for x in self.dag if len(self.dag[x]) == 0]
+
+            def dfs_gad(node)->list:
+                # we can do a smple recursive case since we know the path to root is straightforward
+                if node == self.root:
+                    return [node]
+                else:
+                    return [node] + dfs_gad(list(self.gad[node].keys())[0])
+            def dfs_sum_until_node(node, taxidlist) -> float:
+                # this is the recursive method that gets the sum until there is a node match
+                if node in taxidlist:
+                    return 0
+                else:
+                    childnode = list(self.gad[node].keys())[0]
+                    dist      = self.gad[node][childnode]
+                    return dist + dfs_sum_until_node(childnode, taxidlist)
+            distances = {}
+            for i in range(len(tips)):
+                i_to_root = dfs_gad(tips[i])
+                for j in range(len(tips)):
+                    distances[(tips[i], tips[j])] = dfs_sum_until_node(tips[j], i_to_root)
+            return distances
+        def tip_list_to_distance_matrix(self, tip_list, normalize = False):
+            """This takes a list of tips and returns a distance matrix."""
+            # if the type of the tip_list is not a list, raise an error
+            if not type(tip_list) == list:
+                raise ValueError(f"The tip_list {tip_list} is not a list. Exiting.")
+
+            distances = self.return_distances()
+
+            # make a numpy matrix of size len(tip_list) x len(tip_list)
+            # initialize with zeros, assign values to the matrix, and return
+                # Step 2: Compute phylogenetic distance matrix
+            phylo_distance_matrix = np.zeros((len(tip_list), len(tip_list)))
+            for i in range(len(tip_list)):
+                for j in range(len(tip_list)):
+                    phylo_distance_matrix[i, j] = distances[(tip_list[i], tip_list[j])]
+            if normalize:
+                phylo_distance_matrix = phylo_distance_matrix / phylo_distance_matrix.max()
+            return phylo_distance_matrix
+
     # make sure that taxids_to_keep and taxids_to_remove are lists
     if not type(taxids_to_keep) == list:
         raise ValueError(f"The taxids_to_keep {taxids_to_keep} is not a list. Exiting.")
@@ -1065,22 +1229,150 @@ def plot_topoumap_from_files(sampledffile, ALGcomboixfile, coofile,
 
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
     cdf2 = filter_sample_df_by_clades(cdf, taxids_to_keep, taxids_to_remove)
+    print(cdf2)
+    DAG = adjacency_dag()
+    for i, row in cdf2.iterrows():
+        taxidlist = aliteraleval(row["taxid_list"])
+        sample = row["sample"]
+        DAG.add_taxid_list(sample, taxidlist, [1]*len(taxidlist))
+    DAG.normalize_branch_lengths()
+    DAG.print_all_path_sums()
+    phylo_distance_matrix = DAG.tip_list_to_distance_matrix(list(cdf2["sample"]), normalize = True)
+
+    # Step 1: Normalize the distance matrix
+    normalized_distance_matrix = phylo_distance_matrix / phylo_distance_matrix.max()
+    print(normalized_distance_matrix)
+
     # Get a list of the indices that are in cdf that are not in cdf2.
     ixnotin = [x for x in cdf.index if x not in cdf2.index]
     # These are the indices that we want to remove from the lil matrix.
     lil = load_npz(coofile).tolil()
     # we are removing the row indices that are not in cdf2
     lil = lil[[x for x in range(lil.shape[0]) if x not in ixnotin]]
+    # now convert to a csr matrix for multiplication
+    matrix = lil.tocsr()
+    print("The shape of the matrix is ", matrix.shape)
 
+    # Step 2: Compute the total distance for each sample
+    total_distances = np.sum(normalized_distance_matrix, axis=1)
+    print("This is total_distances: \n", total_distances)
+
+    # Step 3: Compute the weights for each sample
+    weights = total_distances / np.sum(total_distances)
+    print("shape of weights is ", weights.shape)
+
+    # The final thing I want is a vector of length matrix.shape[1] that is the weighted averages of the matrix.
+    weighted_averages = matrix.T.dot(weights)
+    print("The shape of the weighted averages is ", weighted_averages.shape)
+    print(weighted_averages)
+
+    # now we construct the matrix of distances
+    # read in the rbhfile as a dataframe
+    rbhdf = parse_rbh(rbhfile)
+    rbhalg_to_ix = dict(zip(rbhdf["rbh"], range(len(rbhdf))))
+    # load in the alg_combo_to_ix dict
+    algcomboix = algcomboix_file_to_dict(ALGcomboixfile)
+    # ensure that all the values of the algcomboix_file_to_dict are unique
+    unique_values = set(algcomboix.values())
+    if not len(unique_values) == len(algcomboix):
+        raise ValueError(f"The values of the algcomboix_file_to_dict are not unique. Exiting.")
+    # Now that we are sure that all the values are unique, we can flip the dictionary.
+    # We need to flip the dictionary so that we can get the index of the ALG combination from the ALGcomboixfile
+    ix_to_algcombo = {v: (rbhalg_to_ix[k[0]], rbhalg_to_ix[k[1]])
+                      for k, v in algcomboix.items()}
+    # generate a len(rbhdf) x len(algcomboix) matrix of zeros
+    plotmatrix = np.zeros((len(rbhdf), len(rbhdf)))
+    # iterate through the indices of weighted_averages and assign the values to the matrix
+    for i in range(len(weighted_averages)):
+        v1, v2 = ix_to_algcombo[i]
+        plotmatrix[v1, v2] = weighted_averages[i]
+    # make the matrix symmetric
+    plotmatrix = plotmatrix + plotmatrix.T
+    print(plotmatrix)
+    # convert to a sparse matrix, coo
+    resultscoo = coo_matrix(plotmatrix)
+    # save the resulting coo file
+    save_npz(outcoofile, resultscoo)
+
+def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
+                      outdir, smalllargeNaN, n_neighbors, min_dist):
+    """
+    This all-in-one plotting method makes UMAPs for the locus distance ALGs
+        constructed by averaging across multiple species.
+    Specifically, this is used for plotting the one-dot-one-locus UMAP plots.
+    """
+    # read in the sample dataframe. We will need this later
+    cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
+    # read in the algrbh as a pandasdf
+    algrbhdf = parse_rbh(algrbhfile)
+    lil = load_npz(coofile).tolil()
+
+    # check that the largest row index of the lil matrix is less than the largest index of cdf - 1
+    if (lil.shape[0] != len(algrbhdf)) and (lil.shape[1] != len(algrbhdf)):
+        raise ValueError(f"The largest row index of the lil matrix, {lil.shape[0]}, is greater than the largest index of cdf, {max(cdf.index)}. Exiting.")
+    if n_neighbors >= len(algrbhdf):
+        raise ValueError(f"The number of samples, {len(cdf)}, is less than the number of neighbors, {n_neighbors}. Exiting.")
+    # If we pass these checks, we should be fine
+
+    # check that the smalllargeNaN is either small or large
+    if smalllargeNaN not in ["small", "large"]:
+        raise ValueError(f"The smalllargeNaN {smalllargeNaN} is not 'small' or 'large'. Exiting.")
+    if smalllargeNaN == "large":
+        # we have to flip the values of the lil matrix
+        lil.data[lil.data == 0] = 999999999999
+    # check that min_dist is between 0 and 1
+    if min_dist < 0 or min_dist > 1:
+        raise IOError(f"The min_dist {min_dist} is not between 0 and 1. Exiting.")
+
+    # We need a unique set of files for each of these
+    # In every case, we must produce a .df file and a .bokeh.html file
+    UMAPdf    = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.subchrom.df"
+    UMAPbokeh = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.subchrom.bokeh.html"
+    try:
+        print(f"    PLOTTING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
+        reducer = umap.UMAP(low_memory=True, n_neighbors = n_neighbors, min_dist = min_dist)
+        start = time.time()
+        mapper = reducer.fit(lil)
+        stop = time.time()
+        print("   - It took {} seconds to fit_transform the UMAP".format(stop - start))
+        # save the UMAP as a bokeh plot
+        umap_mapper_to_bokeh_topoumap(mapper, algrbhdf, UMAPbokeh,
+          plot_title = f"Topo UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
+        umap_df = umap_mapper_to_df(mapper, algrbhdf)
+        umap_df.to_csv(UMAPdf, sep = "\t", index = True)
+        # save the connectivity figure
+        UMAPconnectivity = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.subchrom.connectivity.jpeg"
+        UMAPconnectivit2 = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.subchrom.connectivity2.jpeg"
+        try:
+            umap_mapper_to_connectivity(mapper, UMAPconnectivity,
+                                        title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
+        except:
+            print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivity}")
+        try:
+            umap_mapper_to_connectivity(mapper, UMAPconnectivit2, bundled = True,
+                                        title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
+        except:
+            print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivit2}")
+    except UserWarning as e:
+        # Catch the specific warning about graph not being fully connected
+        if "Graph is not fully connected" in str(e):
+            print("    Warning: Graph is not fully connected. Can't run UMAP with these parameters.")
+            # we check for file UMAPbokeh, so write this message to it
+            with open(UMAPbokeh, "w") as f:
+                f.write("The graph is not fully connected. Can't run UMAP with these parameters.")
+            # write an empty .df file
+            with open(UMAPdf, "w") as f:
+                f.write("")
+        else:
+            # If it's a different warning, re-raise it
+            raise e
 
 
 def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
                          outdir, sample, smalllargeNaN, n_neighbors, min_dist):
     """
     This is an all-in-one plotting method to make UMAP plots from the files.
-
-    Later, I could add a feature to plot a specific clade if I remove the entries from the lil matrix that are
-     not the samples that we want.
+    Specifically, this is used for plotting the one-dot-one-genome UMAP plots.
     """
     # read in the sample dataframe. We will need this later
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
