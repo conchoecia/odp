@@ -387,7 +387,7 @@ def umap_mapper_to_connectivity(mapper, outfile, bundled = False, title = "UMAP 
     # if the output type is a raster, change the output resolution to 600 dpi
     raster_formats = [".png", ".jpg", ".jpeg", ".tiff", ".tif"]
     if any([outfile.endswith(x) for x in raster_formats]):
-        plt.savefig(outfile, dpi = 900)
+        plt.savefig(outfile, dpi = 1200)
     else:
         plt.savefig(outfile)
     plt.savefig(outfile)
@@ -836,11 +836,12 @@ def umap_mapper_to_bokeh_topoumap(mapper, algrbhdf,
                                })
     color_dict = {i: algrbhdf["color"][i] for i in algrbhdf.index}
 
+
     plot = umap.plot.interactive(mapper,
                                  color_key = color_dict,
-                                 labels = algrbhdf["rbh"],
+                                 labels = algrbhdf["rbh"], # TODO this needs to be changd to a list comprehension
                                  hover_data = hover_data,
-                                 tools=[],
+                                 tools=[], # this needs to be deleted, or else the zoom tool will not work.
                                  point_size = 4
                                  )
     # add a title to the plot
@@ -878,9 +879,9 @@ def umap_mapper_to_bokeh(mapper, sampledf, outhtml, plot_title = "UMAP"):
 
     plot = umap.plot.interactive(mapper,
                                  color_key = color_dict,
-                                 labels = sampledf["sample"],
+                                 labels = sampledf["sample"], # TODO this needs to be changd to a list comprehension
                                  hover_data = hover_data,
-                                 tools=[],
+                                 tools=[], # this needs to be deleted, or else the zoom tool will not work.
                                  point_size = 4
                                  )
     # add a title to the plot
@@ -1202,6 +1203,7 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
             # if the type of the tip_list is not a list, raise an error
             if not type(tip_list) == list:
                 raise ValueError(f"The tip_list {tip_list} is not a list. Exiting.")
+            print("The tip_list is: ", tip_list)
 
             distances = self.return_distances()
 
@@ -1348,11 +1350,11 @@ def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
                                         title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
         except:
             print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivity}")
-        try:
-            umap_mapper_to_connectivity(mapper, UMAPconnectivit2, bundled = True,
-                                        title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
-        except:
-            print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivit2}")
+        #try:
+        #    umap_mapper_to_connectivity(mapper, UMAPconnectivit2, bundled = True,
+        #                                title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
+        #except:
+        #    print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivit2}")
     except UserWarning as e:
         # Catch the specific warning about graph not being fully connected
         if "Graph is not fully connected" in str(e):

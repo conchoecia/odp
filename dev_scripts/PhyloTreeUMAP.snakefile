@@ -54,7 +54,7 @@ if "taxids" not in config:
                          [[6447], [6606]],  # mollusca minus coleoida
                          [[6606], []],      # coleoida
                          [[50557], []],     # insecta
-                         [[61985], []],     # myriapoda
+                         #[[61985], []],     # myriapoda
                          [[6231], []],      # nematoda
                          [[7586], []],      # echinodermata
                          [[7742], []],      # Vertebrata
@@ -105,8 +105,8 @@ rule all:
         #expand(results_base_directory + "/subchrom/{taxanalysis}.coo.npz",
         #        taxanalysis = config["taxids"]),
         expand(results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
-                n = [50],
-                m = [0.5],
+                n = [5, 10, 15, 50],
+                m = [0.0, 0.01, 0.1, 0.2, 0.5],
                 taxanalysis = config["taxids"],
                 sizeNaN = ["small"]),
 
@@ -242,12 +242,12 @@ rule plot_umap_of_files:
                              params.outdir, "allsamples",
                              wildcards.sizeNaN, int(wildcards.n), float(wildcards.m))
 
-rule gen_subchrom_coo_matrix:
+rule SCCOO:
     input:
         sampletsv    = results_base_directory + "/sampledf.tsv",
         combotoindex = results_base_directory + "/combo_to_index.txt",
-        coo    = results_base_directory + "/allsamples.coo.npz",
-        ALGrbh = config["ALG_rbh_file"]
+        coo          = results_base_directory + "/allsamples.coo.npz",
+        ALGrbh       = config["ALG_rbh_file"]
     output:
         coo = results_base_directory + "/subchrom/{taxanalysis}.coo.npz"
     threads: 1
@@ -264,7 +264,7 @@ rule gen_subchrom_coo_matrix:
                            wildcards.taxanalysis, params.taxids_to_keep, params.taxids_to_remove,
                            output.coo)
 
-rule gen_subchrom_umap:
+rule SuChUMAP:
     input:
         sampletsv    = results_base_directory + "/sampledf.tsv",
         coo = results_base_directory + "/subchrom/{taxanalysis}.coo.npz",
@@ -278,7 +278,7 @@ rule gen_subchrom_umap:
     threads: 1
     resources:
         mem_mb = coo_get_mem_mb,
-        runtime = 60
+        runtime = 120
     run:
         topoumap_plotumap(wildcards.taxanalysis, input.sampletsv, input.ALGrbh, input.coo,
                           params.outdir, wildcards.sizeNaN, int(wildcards.n), float(wildcards.m))
