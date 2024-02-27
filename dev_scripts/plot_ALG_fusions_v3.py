@@ -1176,7 +1176,7 @@ class SplitLossColocTree:
                           7952:  "#4BE2BA", # Cypriniformes - these are the minnows, carps, loaches, et cetera
                        # Sarcopterygii - Lobe-fins (fish and tetrapods)
                         118072: "#445FCF", # Actinistia - Coelacanths
-                        7878: "#DEC06A", # Dipnoi - Lungfish
+                        7878: "#DEBA97", # Dipnoi - Lungfish
                         # Tetrapods
                          # Amniota
                           9443:  "#F58E8C",   # Primates

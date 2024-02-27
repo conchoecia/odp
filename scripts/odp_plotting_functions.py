@@ -7,7 +7,7 @@ import matplotlib
 def format_matplotlib():
     """format the fonts and print options for the plots"""
     font = {'family' : 'sans-serif',
-            #'sans-serif' : 'Helvetica', # removing this after finding that many users don't have Helvetica installed. :( https://github.com/conchoecia/odp/issues/34
+            'sans-serif' : 'DejaVu Sans', # removing this after finding that many users don't have Helvetica installed. :( https://github.com/conchoecia/odp/issues/34
             'weight' : 'normal',
             'size'   : 12}
 

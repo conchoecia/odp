@@ -12,6 +12,7 @@ from PhyloTreeUMAP import (algcomboix_file_to_dict,
                            rbh_to_distance_gbgz,
                            ALGrbh_to_algcomboix,
                            plot_umap_from_files,
+                           plot_umap_pdf,
                            topoumap_genmatrix,
                            topoumap_plotumap,
                            sampleToRbhFileDict_to_sample_matrix)
@@ -93,28 +94,28 @@ if results_base_directory.endswith("/"):
 
 rule all:
     input:
-        #expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
-        #        n = [5, 10, 20, 50, 100, 250],
-        #        m = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0],
-        #        sizeNaN = ["small", "large"]),
-        #expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
-        #        sample = config["sample_to_rbh_file"].keys(),
-        #        n = [5, 10, 20, 50, 100, 250],
-        #        m = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0],
-        #        sizeNaN = ["small", "large"]),
-        #expand(results_base_directory + "/subchrom/{taxanalysis}.coo.npz",
-        #        taxanalysis = config["taxids"]),
+        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
+                n = [5, 10, 20, 50, 100, 250],
+                m = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0],
+                sizeNaN = ["small", "large"]),
+        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
+                sample = config["sample_to_rbh_file"].keys(),
+                n = [5, 10, 20, 50, 100, 250],
+                m = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0],
+                sizeNaN = ["small", "large"]),
+        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.pdf",
+                n = [5, 10, 20, 50, 100, 250],
+                m = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0],
+                sizeNaN = ["small", "large"]),
+        expand(results_base_directory + "/subchrom/{taxanalysis}.coo.npz",
+                taxanalysis = config["taxids"]),
         expand(results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
                 n = [5, 10, 15, 50],
                 m = [0.0, 0.01, 0.1, 0.2, 0.5],
                 taxanalysis = config["taxids"],
                 sizeNaN = ["small"]),
-
-        #expand(results_base_directory + "/distance_matrices/{sample}.gb.gz",
-        #                      sample = config["sample_to_rbh_file"].keys()),
         #results_base_directory + "/combo_to_index.txt",
         #results_base_directory + "/sampledf.tsv",
-
 
 def generic_get_mem_mb(wildcards, attempt):
     """
@@ -241,6 +242,18 @@ rule plot_umap_of_files:
         plot_umap_from_files(input.sampletsv, input.combotoindex, input.coo,
                              params.outdir, "allsamples",
                              wildcards.sizeNaN, int(wildcards.n), float(wildcards.m))
+
+rule pdfallsamp:
+    input:
+        df = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df"
+    output:
+        pdf = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.pdf"
+    threads: 1
+    resources:
+        mem_mb = 250,
+        runtime = 2
+    run:
+        plot_umap_pdf(input.df, output.pdf, "Allsamples", wildcards.sizeNaN, wildcards.n, wildcards.m)
 
 rule SCCOO:
     input:

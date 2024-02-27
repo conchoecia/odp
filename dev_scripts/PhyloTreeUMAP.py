@@ -50,6 +50,12 @@ from ete3 import NCBITaxa,Tree
 # matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+# ODP-specific imports
+thisfile_path = os.path.dirname(os.path.realpath(__file__))
+scripts_path = os.path.join(thisfile_path, "../scripts")
+sys.path.insert(1, scripts_path)
+import odp_plotting_functions as odp_plot
+
 
 from plot_ALG_fusions_v3 import assign_colors_to_nodes, SplitLossColocTree, hex_to_rgb, rgb_255_float_to_hex
 
@@ -1322,6 +1328,7 @@ def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
     if smalllargeNaN == "large":
         # we have to flip the values of the lil matrix
         lil.data[lil.data == 0] = 999999999999
+        #
     # check that min_dist is between 0 and 1
     if min_dist < 0 or min_dist > 1:
         raise IOError(f"The min_dist {min_dist} is not between 0 and 1. Exiting.")
@@ -1369,6 +1376,48 @@ def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
             # If it's a different warning, re-raise it
             raise e
 
+def plot_umap_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, min_dist):
+    """
+    Makes a UMAP plot from a .df file. Each row will have the samples, the UMAP coordinates,
+    and the colors.
+
+    Arguments:
+      - outpdf - the path to which we will save the pdf file with the UMAP plot.
+      - the sample    - This will be included in the text of the plot.
+      - smalllargeNaN - This will be included in the text of the plot.
+      - n_neighbors   - This will be included in the text of the plot.
+      - min_dist      - This will be included in the text of the plot.
+    """
+    odp_plot.format_matplotlib()
+    warnings.filterwarnings("ignore", message=".*findfont.*")
+    # load in the df filepath
+    df_embedding = pd.read_csv(sampledfumapfile, sep = "\t", index_col = 0)
+    print(df_embedding)
+    # make a matplotlib plot of the UMAP with the df_embedding, and the color_dict from SplitLossColocTree as the legend
+    # make a figure that is 5x5 inches
+    fig = plt.subplots(figsize=(5, 5))
+    # scatter the UMAP1 and UMAP2 columns of the df_embedding
+    scatter = plt.scatter(df_embedding["UMAP1"], df_embedding["UMAP2"], c = df_embedding["color"])
+    # get the name of the ncbi taxid from the SplitLossColocTree color_dict
+    ncbi = NCBITaxa()
+
+    legend_dict = {}
+    for key in SplitLossColocTree.color_dict_top:
+        taxid = int(key)
+        taxname = ncbi.get_taxid_translator([taxid])[taxid]
+        legend_dict[taxname] = SplitLossColocTree.color_dict_top[key]
+    print("This is the legend dict")
+    print(legend_dict)
+    legend_patches = [mpatches.Patch(color=color, label=label)
+                      for label, color in legend_dict.items()]
+    # add the entries to the legend
+    legend = plt.legend(handles=legend_patches, loc="upper right", bbox_to_anchor=(1.8, 1.5))
+    # compose the title from the other arguments
+    title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
+    plt.title(title)
+    plt.subplots_adjust(right=1.0)
+    # save the figure as a pdf
+    plt.savefig(outpdf)
 
 def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
                          outdir, sample, smalllargeNaN, n_neighbors, min_dist):
@@ -1614,48 +1663,6 @@ def main():
                                 else:
                                     # If it's a different warning, re-raise it
                                     raise e
-
-
-    ## ┏┓┓   ┓           •   ┏┳┓       ┏  ┏┓┓ ┏┓  ┳┓┳┓┓┏  ┏•┓
-    ## ┃┃┣┓┓┏┃┏┓┏┓┏┓┏┓┏┓╋┓┏   ┃ ┏┓┏┓┏┓ ┃  ┣┫┃ ┃┓  ┣┫┣┫┣┫  ╋┓┃┏┓
-    ## ┣┛┛┗┗┫┗┗┛┗┫┗ ┛┗┗ ┗┗┗   ┻ ┛ ┗ ┗  ┛  ┛┗┗┛┗┛  ┛┗┻┛┛┗  ┛┗┗┗
-    ##      ┛    ┛
-    ## construct our dataframe
-    #T = PhyloTree()
-    ## Add in the rbh information
-    #T.ingest_ALG_rbh(args.ALGname, args.rbhfile)
-    ## for all the files in the results directory, we will add the distances to the PhyloTree
-    ##for thisfile in [x for x in os.listdir("results") if x.endswith(".gb.gz")][:100]:
-    #counter = 0
-    ## This part uses 16.5GB of memory for 3600 files
-    #gbgzfiles = [x for x in os.listdir("results") if x.endswith(".gb.gz")]
-    ## check that for every .gz.gz file, the second things is an integer
-    #for thisfile in gbgzfiles:
-    #    thissample = thisfile.replace(".gb.gz", "")
-    #    taxid = thissample.split("-")[1]
-    #    if not re.match(r"^[0-9]*$", taxid):
-    #        raise ValueError(f"There is a non-numeric character in the taxid string, {taxid}, for file {thisfile}. Exiting.")
-    #    if int(taxid) not in taxid_to_taxidstring:
-    #        raise ValueError(f"The taxid {taxid} is not in the taxid_to_taxidstring dictionary. The file was {thisfile}. Exiting.")
-    ## Process the .gb.gz files and add them to the graph
-    #for thisfile in gbgzfiles:
-    #    print(f"\r    Adding the file {counter}/{len(gbgzfiles)}", end="", file = sys.stdout)
-    #    thissample = thisfile.replace(".gb.gz", "")
-    #    taxid = int(thissample.split("-")[1])
-    #    try:
-    #        distdf = pd.read_csv(f"results/{thisfile}", sep = "\t", compression = "gzip")
-    #    except:
-    #        raise IOError(f"The file {thisfile} could not be read in with pandas. There probably was something wrong wth the compression. Try deleteing this file. It will be regenerated. Exiting.")
-    #    T.add_lineage_string_sample_distances(taxid_to_taxidstring[taxid],
-    #                                          thissample, args.ALGname,
-    #                                          distdf)
-    #    counter += 1
-
-    #print()
-    #print("Done adding the files")
-    #T.merge_sampledistances_to_locdf()
-    #print("done")
-    ##print(T.G)
 
 if __name__ == "__main__":
     main()
