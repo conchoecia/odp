@@ -431,6 +431,9 @@ rule generate_assembled_config_entry:
             raise ValueError("You cannot have a | character in the genus, species, taxid, or assembly accession.")
         # We currently cannot have "_" characters in the species name because of problems it causes downstream with snakemake.
         spstring = "{}{}-{}-{}".format(genus, species, taxid, assemAnn)
+        # If there are more than 3 '-' characters in the string, then we have a problem.
+        if spstring.count("-") > 3:
+            raise ValueError("There are too many '-' characters in the string: {}".format(spstring))
         h = "  "
         s = ""
         s += h + "{}:\n".format(spstring)

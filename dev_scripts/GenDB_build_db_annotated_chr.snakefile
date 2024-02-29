@@ -299,7 +299,7 @@ rule generate_assembled_config_entry:
         assemAnn = wildcards.assemAnn
 
         # now we strip unwanted characters from the genus, species name, and assembly accession
-        strip_these_chars = [" ", "_", "-"]
+        strip_these_chars = [" ", "_", "-",]
         for char in strip_these_chars:
             genus = genus.replace(char, "")
             species = species.replace(char, "")
@@ -310,6 +310,9 @@ rule generate_assembled_config_entry:
             raise ValueError("You cannot have a | character in the genus, species, taxid, or assembly accession.")
         # We currently cannot have "_" characters in the species name because of problems it causes downstream with snakemake.
         spstring = "{}{}-{}-{}".format(genus, species, taxid, assemAnn)
+        # if there are more than three '-' characters in the string, then we have a problem.
+        if spstring.count("-") > 3:
+            raise ValueError("There are too many '-' characters in the string: {}".format(spstring))
         h = "  "
         s = ""
         s += h + "{}:\n".format(spstring)
