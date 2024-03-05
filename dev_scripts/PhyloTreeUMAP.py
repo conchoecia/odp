@@ -1260,6 +1260,7 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
     # now convert to a csr matrix for multiplication
     matrix = lil.tocsr()
     print("The shape of the matrix is ", matrix.shape)
+    # TODO - implement other weighting methods
 
     # Step 2: Compute the total distance for each sample
     total_distances = np.sum(normalized_distance_matrix, axis=1)
@@ -1390,14 +1391,28 @@ def plot_umap_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, 
     """
     odp_plot.format_matplotlib()
     warnings.filterwarnings("ignore", message=".*findfont.*")
+
+    figfontsize = 6
+
+    # try to read the csv. If it doesn't work, just make an empty pdf
+    try:
+        df_embedding = pd.read_csv(sampledfumapfile, sep = "\t", index_col = 0)
+    except:
+        # make an empty pdf
+        fig = plt.subplots(figsize=(5, 5))
+        # Add the text "Not able to make this plot, no data"
+        plt.text(0.5, 0.5, "Not able to make this plot, no data", horizontalalignment='center', verticalalignment='center')
+        # make sure that the plot is tight
+        plt.tight_layout()
+        plt.savefig(outpdf)
+        return
     # load in the df filepath
     df_embedding = pd.read_csv(sampledfumapfile, sep = "\t", index_col = 0)
-    print(df_embedding)
     # make a matplotlib plot of the UMAP with the df_embedding, and the color_dict from SplitLossColocTree as the legend
     # make a figure that is 5x5 inches
     fig = plt.subplots(figsize=(5, 5))
     # scatter the UMAP1 and UMAP2 columns of the df_embedding
-    scatter = plt.scatter(df_embedding["UMAP1"], df_embedding["UMAP2"], c = df_embedding["color"])
+    scatter = plt.scatter(df_embedding["UMAP1"], df_embedding["UMAP2"], c = df_embedding["color"], lw = 0, s = 3)
     # get the name of the ncbi taxid from the SplitLossColocTree color_dict
     ncbi = NCBITaxa()
 
@@ -1411,13 +1426,19 @@ def plot_umap_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, 
     legend_patches = [mpatches.Patch(color=color, label=label)
                       for label, color in legend_dict.items()]
     # add the entries to the legend
-    legend = plt.legend(handles=legend_patches, loc="upper right", bbox_to_anchor=(1.8, 1.5))
+    legend = plt.legend(handles=legend_patches, loc="upper right", bbox_to_anchor=(1.8, 1.5), fontsize = figfontsize)
     # compose the title from the other arguments
     title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
-    plt.title(title)
-    plt.subplots_adjust(right=1.0)
+    plt.title(title, fontsize = figfontsize)
+    # Turn off the ticks
+    plt.tick_params(axis='both', which='both', bottom=False,
+                    top=False, left=False, right=False,
+                    labelbottom=False, labelleft=False)
+    plt.subplots_adjust(right=0.95)
+    # adjust the plot so that we can see to the right
+
     # save the figure as a pdf
-    plt.savefig(outpdf)
+    plt.savefig(outpdf, bbox_inches='tight')
 
 def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
                          outdir, sample, smalllargeNaN, n_neighbors, min_dist):
