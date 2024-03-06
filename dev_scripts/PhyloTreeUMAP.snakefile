@@ -13,6 +13,8 @@ from PhyloTreeUMAP import (algcomboix_file_to_dict,
                            ALGrbh_to_algcomboix,
                            plot_umap_from_files,
                            plot_umap_pdf,
+                           taxids_to_analyses,
+                           taxids_of_interest_to_analyses,
                            topoumap_genmatrix,
                            topoumap_plotumap,
                            sampleToRbhFileDict_to_sample_matrix)
@@ -23,7 +25,6 @@ import os
 import sys
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
 
-from ete3 import NCBITaxa,Tree
 import os
 import pandas as pd
 from scipy.sparse import coo_matrix, lil_matrix, save_npz, load_npz
@@ -49,42 +50,12 @@ if not "ALG_rbh_file" in config:
 if not os.path.exists(config["rbh_directory"]):
     raise ValueError(f"rbh_directory {config['rbh_directory']} does not exist")
 
+
 # check that there are some NCBI taxids to plot in the config file
-if "taxids" not in config:
-    # 33317 is protostomes
-    # 33213 is bilateria
-    config["taxids"] = [ [[10197], []],      # ctenophores
-                         [[6040],  [60882]], # porifera minus Hexactinellida
-                         [[6073],  []],      # cnidaria
-                         [[6340],  [42113]], # annelida minus clitellata
-                         [[42113], []],     # clitellata
-                         [[6447],  [6606]],  # mollusca minus coleoida
-                         [[6606],  []],      # coleoida
-                         [[50557], []],     # insecta
-                         [[32341], []],     # Sophophora - subset of drosophilids
-                         #[[61985], []],     # myriapoda
-                         [[6231],  []],      # nematoda
-                         [[7586],  []],      # echinodermata
-                         [[7742],  []],      # Vertebrata
-                         #[[33317],[]]
-                        ]
-# Come up with the taxid analyses. Each entry will have a string indicating what is in it and what is not.
-# Bilateria_33213_without_None if we want to plot all bilateria, and want to remove specific things
-# Bilateria_33213_without_33317_7652 if we want to plot all bilateria, but we don't want to plot the protostomes or lytechinus
-# Bilateria_33213_without_33317_7652 if we want to plot all bilateria, but we don't want to plot the protostomes or lytechinus
-analyses = {}
-ncbi = NCBITaxa()
-for entry in config["taxids"]:
-    # get the clade name to make reading easier
-    clade = ncbi.get_taxid_translator([entry[0][0]])[entry[0][0]].replace(" ", "").replace("-", "").replace(".", "")
-    # make sure that the length of the 0th entry is at least length 1
-    if len(entry[0]) == 0:
-        raise IOError("There must be at least one taxid in the first entry of the taxids list.")
-    analysis_name = clade + "_" + "_".join([str(x) for x in entry[0]]) + "_without_"
-    analysis_name += "_".join([str(x) for x in entry[1]]) if len(entry[1]) > 0 else "None"
-    analyses[analysis_name] = entry
-config["taxids"] = analyses
-print(config["taxids"])
+if "taxids" in config:
+    config["taxids"] = taxids_to_analyses(config["taxids"])
+else:
+    config["taxids"] = taxids_of_interest_to_analyses()
 
 config["rbh_directory"] = os.path.abspath(config["rbh_directory"])
 
@@ -99,8 +70,8 @@ results_base_directory = "GTUMAP"
 if results_base_directory.endswith("/"):
     results_base_directory = results_base_directory[:-1]
 
-odog_n    = [10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 250]
-odog_m    = [0.0, 0.1, 0.2, 0.5, 0.65, 0.75, 0.9, 1.0]
+odog_n    = [10, 15, 20, 35, 50, 75, 100, 150, 250]
+odog_m    = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
 odog_size = ["small"]
 
 odol_n    = [5, 10, 15, 50]

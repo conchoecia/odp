@@ -27,12 +27,12 @@ Usage instructions:
 import argparse
 from  ast import literal_eval as aliteraleval
 import bokeh           # bokeh is used to visualize and save the UMAP
+from ete3 import NCBITaxa,Tree
 import networkx as nx
 import numpy as np
 np.set_printoptions(linewidth=np.inf)
 import os
 import pandas as pd
-import pickle
 import re
 import scipy.sparse
 from scipy.sparse import coo_matrix, lil_matrix, save_npz, load_npz, csr_matrix
@@ -64,6 +64,51 @@ from rbh_tools import parse_rbh
 from plot_ALG_fusions_v2 import taxids_to_taxidstringdict
 
 from itertools import combinations
+
+def taxids_to_analyses(taxids):
+    """
+    Takes a taxid list and turns it into a dictionary of analyses
+    """
+    # Come up with the taxid analyses. Each entry will have a string indicating what is in it and what is not.
+    # Bilateria_33213_without_None if we want to plot all bilateria, and want to remove specific things
+    # Bilateria_33213_without_33317_7652 if we want to plot all bilateria, but we don't want to plot the protostomes or lytechinus
+    # Bilateria_33213_without_33317_7652 if we want to plot all bilateria, but we don't want to plot the protostomes or lytechinus
+    analyses = {}
+    ncbi = NCBITaxa()
+    for entry in taxids:
+        # get the clade name to make reading easier
+        clade = ncbi.get_taxid_translator([entry[0][0]])[entry[0][0]].replace(" ", "").replace("-", "").replace(".", "")
+        # make sure that the length of the 0th entry is at least length 1
+        if len(entry[0]) == 0:
+            raise IOError("There must be at least one taxid in the first entry of the taxids list.")
+        analysis_name = clade + "_" + "_".join([str(x) for x in entry[0]]) + "_without_"
+        analysis_name += "_".join([str(x) for x in entry[1]]) if len(entry[1]) > 0 else "None"
+        analyses[analysis_name] = entry
+    return analyses
+
+def taxids_of_interest_to_analyses():
+    """
+    These clades of interest are used in other parts of the script,
+    so turn this into a function for later use
+    """
+    # 33317 is protostomes
+    # 33213 is bilateria
+    taxids = [ [[10197], []],      # ctenophores
+               [[6040],  [60882]], # porifera minus Hexactinellida
+               [[6073],  []],      # cnidaria
+               [[6340],  [42113]], # annelida minus clitellata
+               [[42113], []],      # clitellata
+               [[6447],  [6606]],  # mollusca minus coleoida
+               [[6606],  []],      # coleoida
+               [[50557], []],      # insecta
+               [[32341], []],      # Sophophora - subset of drosophilids
+               #[[61985], []],     # myriapoda
+               [[6231],  []],      # nematoda
+               [[7586],  []],      # echinodermata
+               [[7742],  []],      # Vertebrata
+               #[[33317],[]]
+              ]
+    return taxids_to_analyses(taxids)
 
 class PhyloTree:
     """
