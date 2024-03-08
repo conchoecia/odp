@@ -50,7 +50,6 @@ if not "ALG_rbh_file" in config:
 if not os.path.exists(config["rbh_directory"]):
     raise ValueError(f"rbh_directory {config['rbh_directory']} does not exist")
 
-
 # check that there are some NCBI taxids to plot in the config file
 if "taxids" in config:
     config["taxids"] = taxids_to_analyses(config["taxids"])
@@ -82,8 +81,10 @@ rule all:
         #    ┓  ┓
         # ┏┓┏┫┏┓┃ - One-Dot-One-Locus plots
         # ┗┛┗┻┗┛┗   Each dot represents a single locus, and the data vector is the distance to all other loci
-        #
+        # These two sets of files are generated during the rule odolGenCoo and the function topoumap_genmatrix()
         expand(results_base_directory + "/subchrom/{taxanalysis}.coo.npz",
+                taxanalysis = config["taxids"]),
+        expand(results_base_directory + "/subchrom/{taxanalysis}.sampledf.tsv",
                 taxanalysis = config["taxids"]),
         expand(results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.pdf",
                 n = odol_n,
@@ -147,7 +148,6 @@ def pdf_get_mem_mb(wildcards, attempt):
                   }
     return attemptdict[attempt]
 
-
 rule samples_and_gzipped:
     input:
         rbh_file = lambda wildcards: config["sample_to_rbh_file"][wildcards.sample]
@@ -210,8 +210,7 @@ def coo_get_mem_mb(wildcards, attempt):
                    3: 50000,
                    4: 100000,
                    5: 200000,
-                   6: 300000,
-                  }
+                   6: 300000 }
     return attemptdict[attempt]
 
 def coo_get_runtime(wildcards, attempt):
@@ -223,10 +222,8 @@ def coo_get_runtime(wildcards, attempt):
                    3: 150,
                    4: 180,
                    5: 210,
-                   6: 240,
-                  }
+                   6: 240 }
     return attemptdict[attempt]
-
 
 #    ┓
 # ┏┓┏┫┏┓┏┓ - One-Dot-One-Genome plots
@@ -326,7 +323,8 @@ rule odolGenCoo:
         coo          = results_base_directory + "/allsamples.coo.npz",
         ALGrbh       = config["ALG_rbh_file"]
     output:
-        coo = results_base_directory + "/subchrom/{taxanalysis}.coo.npz"
+        coo      = results_base_directory + "/subchrom/{taxanalysis}.coo.npz",
+        sampledf = results_base_directory + "/subchrom/{taxanalysis}.sampledf.tsv"
     threads: 1
     params:
         outdir = results_base_directory + "/allsamples",
@@ -339,7 +337,7 @@ rule odolGenCoo:
     run:
         topoumap_genmatrix(input.sampletsv, input.combotoindex, input.coo, input.ALGrbh,
                            wildcards.taxanalysis, params.taxids_to_keep, params.taxids_to_remove,
-                           output.coo)
+                           output.coo, output.sampledf)
 
 rule odolPlotUMAP:
     input:

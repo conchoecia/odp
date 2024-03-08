@@ -885,6 +885,7 @@ def umap_mapper_to_bokeh_topoumap(mapper, algrbhdf,
                                "gene_group":   algrbhdf["gene_group"],
                                "color":        algrbhdf["color"]
                                })
+    # if the values in 
     color_dict = {i: algrbhdf["color"][i] for i in algrbhdf.index}
 
 
@@ -1106,15 +1107,24 @@ def rbh_to_samplename(rbhfile, ALGname) -> str:
     return filename
 
 def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
-                       sample, taxids_to_keep, taxids_to_remove, outcoofile):
+                       sample, taxids_to_keep, taxids_to_remove,
+                       outcoofile, outsampledf):
     """
     This function makes a UMAP plot where the points are inverted.
     The points for this are the distances between the pairs.
     The colors are the colors of the taxids.
+
+    Output:
+      - Saves the coo matrix to a .coo.npz file.
+      -
     """
     # make sure that the outcoofile ends with .npz
     if not outcoofile.endswith(".npz"):
         raise ValueError(f"The outcoofile {outcoofile} does not end with '.npz'. Exiting.")
+
+    # make sure that the outsampledf ends with .tsv or .df
+    if not (outsampledf.endswith(".tsv") or outsampledf.endswith(".df")):
+        raise ValueError(f"The outsampledf {outsampledf} does not end with '.tsv' or '.df'. Exiting.")
 
     class adjacency_dag:
         def __init__(self):
@@ -1282,6 +1292,8 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
 
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
     cdf2 = filter_sample_df_by_clades(cdf, taxids_to_keep, taxids_to_remove)
+    # save this to outsampledf, keeping the index
+    cdf2.to_csv(outsampledf, sep = "\t", index = True)
     print(cdf2)
     DAG = adjacency_dag()
     for i, row in cdf2.iterrows():
@@ -1355,6 +1367,12 @@ def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
         constructed by averaging across multiple species.
     Specifically, this is used for plotting the one-dot-one-locus UMAP plots.
     """
+    # check that the types are correct
+    if type(n_neighbors) not in [int, float]:
+        raise ValueError(f"The n_neighbors {n_neighbors} is not of type int or float. Exiting.")
+    if type(min_dist) not in [float]:
+        raise ValueError(f"The min_dist {min_dist} is not of type float. Exiting.")
+
     # read in the sample dataframe. We will need this later
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
     # read in the algrbh as a pandasdf

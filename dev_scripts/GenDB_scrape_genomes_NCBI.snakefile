@@ -30,12 +30,6 @@ import os
 import pandas as pd
 from datetime import datetime
 
-
-import yaml
-import time
-
-from Newick_to_common_ancestors import yaml_file_legal as yaml_file_legal
-
 # import fasta parser from dependencies
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
 bin_path = os.path.join(snakefile_path, "../bin")
