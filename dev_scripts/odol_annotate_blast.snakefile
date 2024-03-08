@@ -24,6 +24,7 @@ Usage instructions:
 # plotting stuff
 import bokeh
 # needs to be umap v0.5.5 or later
+import matplotlib.pyplot as plt
 import umap
 import umap.plot
 import time
@@ -153,7 +154,14 @@ rule all:
                 analysis = analysis_to_samples.keys(),
                 ALG = config["targetALGs"],
                 n = odol_n,
+                m = odol_m),
+        expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.pdf",
+                query = config["blast_files"],
+                analysis = analysis_to_samples.keys(),
+                ALG = config["targetALGs"],
+                n = odol_n,
                 m = odol_m)
+
 
 rule install_diamond:
     output:
@@ -560,8 +568,9 @@ rule annotate_blastresults:
     Right now we don't do anything where we weight the point size phylogenetically.
     """
     input:
-        UMAPdf   = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.df",
-        blastp   = basedir + "/blast_concat/{query}/{analysis}.concat.filt.blastp",
+        UMAPdf     = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.df",
+        algrbhfile = config["ALG_rbh_file"],
+        blastp     = basedir + "/blast_concat/{query}/{analysis}.concat.filt.blastp",
     output:
         UMAPdf   = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.df",
     threads: 1
@@ -595,16 +604,71 @@ rule annotate_blastresults:
 
         # groupby the qseqid column
         gb = blastp.groupby("qseqid")
+        newcols = {}
         for name, group in gb:
             # add the number of times that this index appears in this group
-            UMAPdf[f"PLOTGENE_{name}"] = UMAPdf["index"].apply(lambda x: group[group["closest_ALG"] == x].shape[0])
+            newcols[f"PLOTGENE_{name}"] = UMAPdf["index"].apply(lambda x: group[group["closest_ALG"] == x].shape[0])
+        # add the new columns to the UMAPdf
+        newcolsdf = pd.DataFrame(newcols)
+        UMAPdf = pd.concat([UMAPdf, newcolsdf], axis = 1)
         # sum up all the counts across all query genes
         UMAPdf["plotgene_SUM"] = UMAPdf[[x for x in UMAPdf.columns if "PLOTGENE_" in x]].sum(axis = 1)
+
+        algrbhdf = parse_rbh(input.algrbhfile)
+        UMAPdf["color"] = [algrbhdf[algrbhdf["rbh"] == x]["color"].values[0] for x in UMAPdf.index]
+
         # remove the "index" column
         UMAPdf = UMAPdf.drop("index", axis = 1)
-        print(UMAPdf)
-        sys.exit()
-        # print the df where plotgene_SUM is greater than zero
-        # save the df where plotgene_SUM is greater than zero
-        tempdf = UMAPdf[UMAPdf["plotgene_SUM"] > 0]
-        tempdf.to_csv(output.UMAPdf, sep = "\t", index = True)
+        print(list(UMAPdf.columns))
+        # add a color column
+        UMAPdf.to_csv(output.UMAPdf, sep = "\t", index = True)
+
+rule plot_clade_blast:
+    input:
+        UMAPdf   = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.df",
+    output:
+        UMAPdf   = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.pdf"
+    threads: 1
+    resources:
+        mem_mb = tophit_get_mem_mb,
+        runtime = 1
+    run:
+        #         ┓   ┓•┓
+        # ┏┳┓┏┓╋┏┓┃┏┓╋┃┓┣┓
+        # ┛┗┗┗┻┗┣┛┗┗┛┗┗┗┗┛
+        #       ┛
+        dot = 3
+        bigger_dot = 4
+        df_embedding = pd.read_csv(input.UMAPdf, sep = "\t", index_col = 0)
+        # make a matplotlib plot of the UMAP with the df_embedding, and the color_dict from SplitLossColocTree as the legend
+        # make a figure that is 5x5 inches
+        fig = plt.figure(figsize=(2,2))
+        # scatter the UMAP1 and UMAP2 columns of the df_embedding
+        plt.scatter(df_embedding["UMAP1"], df_embedding["UMAP2"], c = df_embedding["color"], s = dot)
+        subdf = df_embedding[df_embedding["plotgene_SUM"] > 0]
+        plt.scatter(subdf["UMAP1"], subdf["UMAP2"], c = "#5AFF00", s = [dot + (dot*bigger_dot*(x/subdf["plotgene_SUM"].max())) for x in subdf["plotgene_SUM"]], alpha = 0.25)
+        ## make a legend with the color_dict from SplitLossColocTree
+        #nbci = NCBITaxa()
+        ## get the name of the ncbi taxid from the SplitLossColocTree color_dict
+        #legend_dict = {}
+        #for key in SplitLossColocTree.color_dict_top:
+        #    taxid = int(key)
+        #    taxname = nbci.get_taxid_translator([taxid])[taxid]
+        #    legend_dict[taxname] = SplitLossColocTree.color_dict_top[key]
+        #print("This is the legend dict")
+        #print(legend_dict)
+        #legend_patches = [mpatches.Patch(color=color, label=label)
+        #                  for label, color in legend_dict.items()]
+        ## add the entries to the legend
+        #fig = plt.legend(handles=legend_patches, loc="upper right")
+        # turn off the axis ticks
+        for ax in fig.axes:
+            ax.set_xticks([])
+            ax.set_yticks([])
+        # set the title based on the input
+        plt.title(f"UMAP of {wildcards.analysis}, ALG {wildcards.ALG},\nwith {wildcards.query} blast results,\nmin_dist {wildcards.m}, n_neighbors {wildcards.n}",
+                   fontsize = 3)
+        # save the figure
+        plt.savefig(output.UMAPdf)
+
+
