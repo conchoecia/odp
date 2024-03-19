@@ -1108,7 +1108,8 @@ def rbh_to_samplename(rbhfile, ALGname) -> str:
 
 def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
                        sample, taxids_to_keep, taxids_to_remove,
-                       outcoofile, outsampledf):
+                       outcoofile, outsampledf, missing_values,
+                       method = "phylogenetic", missing_value_as = 9999999999):
     """
     This function makes a UMAP plot where the points are inverted.
     The points for this are the distances between the pairs.
@@ -1117,6 +1118,22 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
     Output:
       - Saves the coo matrix to a .coo.npz file.
       -
+    Options for method:
+      - "phylogenetic": This is the default. This uses the patristic distances of the phylogenetic
+                         tree to calculate the distances between the samples. For example, if Clade A
+                         has 1 sample and Clade B has 10 samples, then the 1 sample in Clade A would
+                         contribute 0.5, and each of the 10 samples in clade B would contribute 0.05.
+      - "mean":         The values of all of the samples are simply averaged. This means that each sample
+                         has an equivalent contribution.
+    Options for missing_values:
+      - "small" : This means that the missing values are encoded as 0.0. Things that are actually next to
+                   each other may also be 0.0, so these two very different things could end up with similar
+                   values in the matrix. This results in the values being dragged to the middle of the UMAPs
+                   if they tend to jump around between all the genomes.
+      - "large" : This means that the missing values are encoded as the variable `missing_value_as`. This is
+                   by default 9,999,999,999. This is a very large number, and there are likely no genomes that
+                   have two genes that distance apart from each other. When we average values of very large things,
+                   this will also likely cause the values to drift to the middle of the UMAPs, but this is untested.
     """
     # make sure that the outcoofile ends with .npz
     if not outcoofile.endswith(".npz"):
@@ -1126,7 +1143,48 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
     if not (outsampledf.endswith(".tsv") or outsampledf.endswith(".df")):
         raise ValueError(f"The outsampledf {outsampledf} does not end with '.tsv' or '.df'. Exiting.")
 
+    # make sure that method is either "phylogenetic" or "mean"
+    if not method in ["phylogenetic", "mean"]:
+        raise ValueError(f"The method {method} is not in ['phylogenetic', 'mean']. Exiting.")
+
+    # make sure that missing_values is either "small" or "large"
+    # These change how the missing values are handled. If two things do not occur on the same chromosome,
+    #  then we have to figure out how to encode that into the matrix.
+    if not missing_values in ["small", "large"]:
+        raise ValueError(f"The missing_values {missing_values} is not in ['small', 'large']. Exiting.")
+
+    #make sure missing_value_as is an integer
+    if type(missing_value_as) != int:
+        raise ValueError(f"The missing_value_as {missing_value_as} is not of type int. Exiting.")
+
     class adjacency_dag:
+        """
+        Class: adjacency_dag
+        Description:
+          - The point of this class is to create a directed acyclic graph (DAG) from the phylogenetic tree.
+          - The DAG will be used to calculate the phylogenetic weighting of each species.
+        Usage Example:
+          - Lines with `#` are comments to descibe what will happen in the next lines
+          - Other lines are just python code.
+          ```
+          #The class is first initialized with no arguments.
+          DAG = adjacency_dag()
+          # We have samples, each of which has a taxid list of ints, like [1, 131567, 2759, 33154...]
+          # We also have a list of weights, like [1, 1, 1, 1...]
+          # The list of weights is the same length of the taxid list.
+          # The weight at index i is the weight from taxid_list[i] to taxid_list[i+1].
+          # The final weight is the weight from taxid_list[-1] to the sample.
+          for i, row in cdf2.iterrows():
+              taxidlist = aliteraleval(row["taxid_list"])
+              sample = row["sample"]
+              DAG.add_taxid_list(sample, taxidlist, [1]*len(taxidlist))
+          # Now we normalize the branch lengths so that the total distance from the root to the leaves is 1.
+          #  This helps later with the math of phylogenetic weighting.
+          DAG.normalize_branch_lengths()
+          # As a sanity check we print the path sums from the root to the tips.
+          DAG.print_all_path_sums()
+          ```
+        """
         def __init__(self):
             self.dag = {}
             self.gad = {} # the inverse graph
@@ -1146,7 +1204,7 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
             for i in range(len(taxid_list) - 1):
                 self.add_edge(taxid_list[i], taxid_list[i+1], weights[i])
             # now we add the last node to the sample.
-            self.add_edge(taxid_list[-1], sample, 1)
+            self.add_edge(taxid_list[-1], sample, weights[-1])
             # if the sample is not in the graph, we add it empty
             if sample not in self.dag:
                 self.dag[sample] = {}
@@ -1168,7 +1226,6 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
                 # If the path starting from this neighbor is longer than the current longest path, update it
                 if longest_path is None or len(path) > len(longest_path):
                     longest_path = path
-
             # Extend the longest path with the current node
             memo[node] = [node] + longest_path
             return memo[node]
@@ -1290,47 +1347,82 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
         if not re.match(r"^[0-9]*$", str(entry)):
             raise ValueError(f"The taxid {entry} is not an integer. Exiting.")
 
+    # These are all of the samples that we may want to filter
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
+    # Keep only the samples that are in taxids_to_keep and not in taxids_to_remove
     cdf2 = filter_sample_df_by_clades(cdf, taxids_to_keep, taxids_to_remove)
-    # save this to outsampledf, keeping the index
+    # save this to outsampledf, keeping the index. These are the samples we will continue to process
     cdf2.to_csv(outsampledf, sep = "\t", index = True)
+    print("This is the dataframe loaded for the samples")
     print(cdf2)
-    DAG = adjacency_dag()
-    for i, row in cdf2.iterrows():
-        taxidlist = aliteraleval(row["taxid_list"])
-        sample = row["sample"]
-        DAG.add_taxid_list(sample, taxidlist, [1]*len(taxidlist))
-    DAG.normalize_branch_lengths()
-    DAG.print_all_path_sums()
-    phylo_distance_matrix = DAG.tip_list_to_distance_matrix(list(cdf2["sample"]), normalize = True)
-
-    # Step 1: Normalize the distance matrix
-    normalized_distance_matrix = phylo_distance_matrix / phylo_distance_matrix.max()
-    print(normalized_distance_matrix)
 
     # Get a list of the indices that are in cdf that are not in cdf2.
     ixnotin = [x for x in cdf.index if x not in cdf2.index]
     # These are the indices that we want to remove from the lil matrix.
+    print("loading lil matrix")
     lil = load_npz(coofile).tolil()
     # we are removing the row indices that are not in cdf2
+    print("subsetting the lil matrix")
     lil = lil[[x for x in range(lil.shape[0]) if x not in ixnotin]]
     # now convert to a csr matrix for multiplication
+    print("converting to csr matrix")
     matrix = lil.tocsr()
+    del lil
+    # if the missing_values is "small", then we don't do anything. The missing values are already encoded as 0
+    if missing_values == "large":
+        # If it is "large", then we have to convert the zeros to -1 before we change to csr
+        # set the zeros to -1
+        print("setting zeros to -1")
+        matrix.data[matrix.data == 0] = -1
+        # We have to convert this to a dense matrix now. There is no way to modify the large values in a sparse matrix.
+        print("Converting to a dense matrix. RAM will increase now.")
+        # Goodbye, RAM.
+        matrix = matrix.toarray()
+        # if the missing_values is "large", then we have to convert the 0 to the missing_value_as
+        # Here we switch the representation, namely we don't have to access the data with .data now that this
+        #  is a dense matrix.
+        print(f"setting zeros to {missing_value_as}")
+        matrix[matrix == 0] = missing_value_as
+        # now we convert the -1s to 0
+        print("converting -1s to 0")
+        matrix[matrix == -1] = 0
+    elif missing_values == "small":
+        # we keep the missing values as zeros, so we can change it to a matrix without making any other changes
+        matrix = matrix.toarray()
+    print("This is the matrix after the missing values are encoded ")
     print("The shape of the matrix is ", matrix.shape)
-    # TODO - implement other weighting methods
 
-    # Step 2: Compute the total distance for each sample
-    total_distances = np.sum(normalized_distance_matrix, axis=1)
-    print("This is total_distances: \n", total_distances)
+    # Now that we have a matrix of the species for which we want to average the distances,
+    #  there are multiple possible ways to average together the data.
+    if method == "phylogenetic":
+        DAG = adjacency_dag()
+        for i, row in cdf2.iterrows():
+            taxidlist = aliteraleval(row["taxid_list"])
+            sample = row["sample"]
+            DAG.add_taxid_list(sample, taxidlist, [1]*len(taxidlist))
+        DAG.normalize_branch_lengths()
+        DAG.print_all_path_sums()
+        phylo_distance_matrix = DAG.tip_list_to_distance_matrix(list(cdf2["sample"]), normalize = True)
+        print(phylo_distance_matrix)
+        # Step 1: Normalize the distance matrix
+        normalized_distance_matrix = phylo_distance_matrix / phylo_distance_matrix.max()
+        print(normalized_distance_matrix)
 
-    # Step 3: Compute the weights for each sample
-    weights = total_distances / np.sum(total_distances)
-    print("shape of weights is ", weights.shape)
+        # Step 2: Compute the total distance for each sample
+        total_distances = np.sum(normalized_distance_matrix, axis=1)
+        print("This is total_distances: \n", total_distances)
 
-    # The final thing I want is a vector of length matrix.shape[1] that is the weighted averages of the matrix.
-    weighted_averages = matrix.T.dot(weights)
-    print("The shape of the weighted averages is ", weighted_averages.shape)
-    print(weighted_averages)
+        # Step 3: Compute the weights for each sample
+        weights = total_distances / np.sum(total_distances)
+        print("shape of weights is ", weights.shape)
+
+        # The final thing I want is a vector of length matrix.shape[1] that is the weighted averages of the matrix.
+        weighted_averages = matrix.T.dot(weights)
+        print("The shape of the weighted averages is ", weighted_averages.shape)
+        print(weighted_averages)
+    elif method == "mean":
+        # For this mode, we simply sum together all of the values, then divide by the number of samples. Samples are rows, values are columns
+        weighted_averages = matrix.mean(axis = 0)
 
     # now we construct the matrix of distances
     # read in the rbhfile as a dataframe
@@ -1351,6 +1443,7 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
     # iterate through the indices of weighted_averages and assign the values to the matrix
     for i in range(len(weighted_averages)):
         v1, v2 = ix_to_algcombo[i]
+        #print("v1, v2, i, weighted_averages[i] are ", v1, v2, i, weighted_averages[i])
         plotmatrix[v1, v2] = weighted_averages[i]
     # make the matrix symmetric
     plotmatrix = plotmatrix + plotmatrix.T
@@ -1361,11 +1454,14 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
     save_npz(outcoofile, resultscoo)
 
 def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
-                      outdir, smalllargeNaN, n_neighbors, min_dist):
+                      outdir, smalllargeNaN, n_neighbors, min_dist,
+                      outdffilepath, outbokehfilepath):
     """
     This all-in-one plotting method makes UMAPs for the locus distance ALGs
         constructed by averaging across multiple species.
     Specifically, this is used for plotting the one-dot-one-locus UMAP plots.
+
+    Outputs:
     """
     # check that the types are correct
     if type(n_neighbors) not in [int, float]:
@@ -1399,8 +1495,8 @@ def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
 
     # We need a unique set of files for each of these
     # In every case, we must produce a .df file and a .bokeh.html file
-    UMAPdf    = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.subchrom.df"
-    UMAPbokeh = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.subchrom.bokeh.html"
+    UMAPdf    = outdffilepath
+    UMAPbokeh = outbokehfilepath
     try:
         print(f"    PLOTTING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
         reducer = umap.UMAP(low_memory=True, n_neighbors = n_neighbors, min_dist = min_dist)
@@ -1414,6 +1510,7 @@ def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
         umap_df = umap_mapper_to_df(mapper, algrbhdf)
         umap_df.to_csv(UMAPdf, sep = "\t", index = True)
         # save the connectivity figure
+        # This plot needs to be moved elsewhere - the file path is not correct given the current state of things
         UMAPconnectivity = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.subchrom.connectivity.jpeg"
         UMAPconnectivit2 = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.subchrom.connectivity2.jpeg"
         try:

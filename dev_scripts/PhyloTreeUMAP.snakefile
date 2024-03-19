@@ -75,30 +75,38 @@ odog_size = ["small"]
 
 odol_n    = [5, 10, 15, 50]
 odol_m    = [0.0, 0.01, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
-odol_size = ["small"]
+odol_size = ["small", "large"]
+weighting_methods = ["phylogenetic", "mean"]
 rule all:
     input:
         #    ┓  ┓
         # ┏┓┏┫┏┓┃ - One-Dot-One-Locus plots
         # ┗┛┗┻┗┛┗   Each dot represents a single locus, and the data vector is the distance to all other loci
         # These two sets of files are generated during the rule odolGenCoo and the function topoumap_genmatrix()
-        expand(results_base_directory + "/subchrom/{taxanalysis}.coo.npz",
-                taxanalysis = config["taxids"]),
-        expand(results_base_directory + "/subchrom/{taxanalysis}.sampledf.tsv",
-                taxanalysis = config["taxids"]),
-        expand(results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.pdf",
+        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.coo.npz",
+                taxanalysis = config["taxids"],
+                weighting = weighting_methods,
+                sizeNaN = odol_size),
+        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.sampledf.tsv",
+                taxanalysis = config["taxids"],
+                weighting = weighting_methods,
+                sizeNaN = odol_size),
+        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.pdf",
                 n = odol_n,
                 m = odol_m,
                 taxanalysis = config["taxids"],
-                sizeNaN = odol_size),
-        expand(results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
+                sizeNaN = odol_size,
+                weighting = weighting_methods),
+        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
                 n = odol_n,
                 m = odol_m,
                 taxanalysis = config["taxids"],
-                sizeNaN = odol_size),
-        expand(results_base_directory + "/subchrom/{taxanalysis}.missing_{sizeNaN}.paramsweep.pdf",
+                sizeNaN = odol_size,
+                weighting = weighting_methods),
+        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.paramsweep.pdf",
                 taxanalysis = config["taxids"],
-                sizeNaN = odol_size),
+                sizeNaN = odol_size,
+                weighting = weighting_methods),
         #    ┓
         # ┏┓┏┫┏┓┏┓ - One-Dot-One-Genome plots
         # ┗┛┗┻┗┛┗┫   Each dot represents a single genome, and the data vector is the distance pairs
@@ -210,7 +218,8 @@ def coo_get_mem_mb(wildcards, attempt):
                    3: 50000,
                    4: 100000,
                    5: 200000,
-                   6: 300000 }
+                   6: 300000,
+                   7: 400000}
     return attemptdict[attempt]
 
 def coo_get_runtime(wildcards, attempt):
@@ -222,7 +231,8 @@ def coo_get_runtime(wildcards, attempt):
                    3: 150,
                    4: 180,
                    5: 210,
-                   6: 240 }
+                   6: 240,
+                   7: 270}
     return attemptdict[attempt]
 
 #    ┓
@@ -231,6 +241,11 @@ def coo_get_runtime(wildcards, attempt):
 #        ┛
 rule odogCooGen:
     """
+    This generates a coo matrix of the distance matrices for all genomes.
+      Each row is a genome, and each column is the distance between every locus pair.
+      There is no pre-processing performed on the distance matrices. These are the raw
+      distances between every locus pair.
+
     This takes up a lot of RAM and time. For 3600 genomes, it took:
         CPU Efficiency: 97.32% of 01:57:32 core-walltime
         Job Wall-clock time: 01:57:32
@@ -323,8 +338,8 @@ rule odolGenCoo:
         coo          = results_base_directory + "/allsamples.coo.npz",
         ALGrbh       = config["ALG_rbh_file"]
     output:
-        coo      = results_base_directory + "/subchrom/{taxanalysis}.coo.npz",
-        sampledf = results_base_directory + "/subchrom/{taxanalysis}.sampledf.tsv"
+        coo      = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.coo.npz",
+        sampledf = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.sampledf.tsv"
     threads: 1
     params:
         outdir = results_base_directory + "/allsamples",
@@ -337,16 +352,19 @@ rule odolGenCoo:
     run:
         topoumap_genmatrix(input.sampletsv, input.combotoindex, input.coo, input.ALGrbh,
                            wildcards.taxanalysis, params.taxids_to_keep, params.taxids_to_remove,
-                           output.coo, output.sampledf)
+                           output.coo, output.sampledf,
+                           wildcards.sizeNaN,
+                           method = wildcards.weighting,
+                           missing_value_as = 9999999999)
 
 rule odolPlotUMAP:
     input:
         sampletsv    = results_base_directory + "/sampledf.tsv",
-        coo = results_base_directory + "/subchrom/{taxanalysis}.coo.npz",
+        coo = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.coo.npz",
         ALGrbh = config["ALG_rbh_file"]
     output:
-        df     = results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
-        html   = results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.bokeh.html"
+        df     = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
+        html   = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.bokeh.html"
     params:
         outdir = results_base_directory + "/subchrom",
     retries: 5
@@ -356,13 +374,14 @@ rule odolPlotUMAP:
         runtime = 120
     run:
         topoumap_plotumap(wildcards.taxanalysis, input.sampletsv, input.ALGrbh, input.coo,
-                          params.outdir, wildcards.sizeNaN, int(wildcards.n), float(wildcards.m))
+                          params.outdir, wildcards.sizeNaN, int(wildcards.n), float(wildcards.m),
+                          output.df, output.html)
 
 rule odolPlotPdf:
     input:
-        df  = results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
+        df  = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
     output:
-        pdf = results_base_directory + "/subchrom/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.pdf"
+        pdf = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.pdf"
     threads: 1
     retries: 4
     resources:
@@ -376,12 +395,12 @@ rule odolSweep:
     Makes a pdf of the parameter sweep of the clade-specific UMAP plots.
     """
     input:
-        dfs = expand(results_base_directory + "/subchrom/{{taxanalysis}}.neighbors_{n}.mind_{m}.missing_{{sizeNaN}}.subchrom.df",
+        dfs = expand(results_base_directory + "/subchrom/{{weighting}}/missing_{{sizeNaN}}/{{taxanalysis}}.method_{{weighting}}.neighbors_{n}.mind_{m}.missing_{{sizeNaN}}.subchrom.df",
                       n = odol_n,
                       m = odol_m),
         plotdfs = os.path.join(snakefile_path, "PhyloTreeUMAP_plotdfs.py")
     output:
-        pdf = results_base_directory + "/subchrom/{taxanalysis}.missing_{sizeNaN}.paramsweep.pdf"
+        pdf = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.paramsweep.pdf"
     threads: 1
     retries: 4
     resources:
