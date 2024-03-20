@@ -73,9 +73,9 @@ odog_n    = [10, 15, 20, 35, 50, 75, 100, 150, 250]
 odog_m    = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
 odog_size = ["small"]
 
-odol_n    = [5, 10, 15, 50]
+odol_n    = [5, 15, 50]
 odol_m    = [0.0, 0.01, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
-odol_size = ["small", "large"]
+odol_size = ["large"]
 weighting_methods = ["phylogenetic", "mean"]
 rule all:
     input:
@@ -357,6 +357,30 @@ rule odolGenCoo:
                            method = wildcards.weighting,
                            missing_value_as = 9999999999)
 
+def odol_plot_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for the script depends on the size of the input genome.
+    """
+    attemptdict = {1: 30000,
+                   2: 50000,
+                   3: 100000,
+                   4: 200000,
+                   5: 300000,
+                   6: 400000}
+    return attemptdict[attempt]
+
+def odol_plot_get_runtime(wildcards, attempt):
+    """
+    The amount of RAM needed for the script depends on the size of the input genome.
+    """
+    attemptdict = {1: 120,
+                   2: 150,
+                   3: 180,
+                   4: 210,
+                   5: 240,
+                   6: 270}
+    return attemptdict[attempt]
+
 rule odolPlotUMAP:
     input:
         sampletsv    = results_base_directory + "/sampledf.tsv",
@@ -364,18 +388,19 @@ rule odolPlotUMAP:
         ALGrbh = config["ALG_rbh_file"]
     output:
         df     = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
-        html   = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.bokeh.html"
+        html   = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.bokeh.html",
+        jpeg   = results_base_directory + "/subchrom/{weighting}/mixxing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.connectivity.jpeg"
     params:
         outdir = results_base_directory + "/subchrom",
     retries: 5
     threads: 1
     resources:
-        mem_mb = coo_get_mem_mb,
-        runtime = 120
+        mem_mb = odol_plot_get_mem_mb,
+        runtime = odol_plot_get_runtime
     run:
         topoumap_plotumap(wildcards.taxanalysis, input.sampletsv, input.ALGrbh, input.coo,
                           params.outdir, wildcards.sizeNaN, int(wildcards.n), float(wildcards.m),
-                          output.df, output.html)
+                          output.df, output.html, output.jpeg)
 
 rule odolPlotPdf:
     input:

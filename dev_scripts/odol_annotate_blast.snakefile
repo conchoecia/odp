@@ -21,12 +21,16 @@ Usage instructions:
   - None currently
 """
 
+# import the combinations
+from itertools import product
 # plotting stuff
 import bokeh
 # needs to be umap v0.5.5 or later
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import umap
 import umap.plot
+import random
 import time
 
 from ast import literal_eval
@@ -48,8 +52,6 @@ from PhyloTreeUMAP import (algcomboix_file_to_dict,
                            topoumap_genmatrix,
                            topoumap_plotumap,
                            sampleToRbhFileDict_to_sample_matrix)
-
-
 
 # ODP-specific imports
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
@@ -98,18 +100,33 @@ else:
     if not isinstance(config["blast_split_first_colon"], bool):
         raise ValueError("blast_split_first_colon must be a boolean")
 
+# We need to define config["species_of_interest"] in case we want to make any plots for single species.
+# We probably don't want to make thousands of pdfs of all the clusters to look at, so just do this for some species we care about at the moment.
+# For now, do this by defining the species of interest in the config file.
+# If the "species_of_interest" is not in the config file, then we initialize it as empty.
+if "species_of_interest" not in config:
+    config["species_of_interest"] = []
+
 # Make an analysis_to_sampledf and analysis_to_coo dictionary.
 #  - The keys are the analysis names.
 #  - The values are the filepath to the sampledf file.
-coo_files = [x for x in os.listdir(config["subchrom_directory"]) if x.endswith(".coo.npz")]
-analysis_to_coo = {x.replace(".coo.npz", ""): os.path.join(config["subchrom_directory"], x) for x in coo_files}
+coo_files            = [x for x in os.listdir(config["subchrom_directory"]) if x.endswith(".coo.npz")]
+analysis_to_coo      = {x.replace(".coo.npz", ""): os.path.join(config["subchrom_directory"], x) for x in coo_files}
 analysis_to_sampledf = {k: os.path.join(config["subchrom_directory"], f"{k}.sampledf.tsv") for k in analysis_to_coo.keys()}
+
 # Load in all of the dfs and make an analysis_to_samples dictionary.
 #  - The keys are the analysis names.
 #  - The values are lists of sample names that belong in that analysis
 analysis_to_samples = {k: list(pd.read_csv(v, sep="\t", index_col=0)["sample"])
                        for k, v in analysis_to_sampledf.items()}
 unique_samples = list(set([x for y in analysis_to_samples.values() for x in y]))
+sample_to_analysis = {}
+for thisanalysis in analysis_to_samples:
+    for thissample in analysis_to_samples[thisanalysis]:
+        sample_to_analysis[thissample] = thisanalysis
+
+for k in analysis_to_sampledf:
+    print(f"{k}: {len(analysis_to_samples[k])} genomes")
 
 # Check RBH files for each sample
 if "rbh_directory" not in config:
@@ -123,15 +140,31 @@ sample_to_rbh_file = {x.split("_")[1]: os.path.join(config["rbh_directory"], x) 
 if not all([x in sample_to_rbh_file for x in unique_samples]):
     raise ValueError("Not all of the unique_samples are in the rbh_directory")
 
+#print(analysis_to_samples)
+#print(sample_to_analysis)
 
-odol_n = [15]
-odol_m = [0.01]
+odol_n = [2, 3, 4, 5, 10, 15]
+odol_m = [0.0, 0.001, 0.01]
+
+# we need to make a list of target files, because expand doesn't have the ability for us
+# to subset the analyses we need for plotting the one-analysis-one-query-one-sample plots
+file_targets = []
+for thissp in config["species_of_interest"]:
+    if thissp in sample_to_analysis:
+        thisanalysis = sample_to_analysis[thissp]
+        # Now we have handled the species, and the analysis that needs to be plotted.
+        # We need to get all the unique combinations of the odol_n, odol_m, ALG, and query
+        for n, m, ALG, query in product(odol_n, odol_m, config["targetALGs"], config["blast_files"]):
+            f = basedir + f"/ALG_reimbedding/one_analysis_one_species_one_query/{thisanalysis}.{thissp}.{query}.{ALG}.neighbors_{n}.mind_{m}.missing_large.subchrom.pdf"
+            file_targets.append(f)
+
+wildcard_constraints:
+    analysis = "[A-Za-z0-9_]+",
+    query    = "[A-Za-z0-9]+" ,
+    ALG      = "[A-Za-z0-9_]+",
 
 rule all:
     input:
-        #expand(basedir + "/blast_filt/{query}/{sample}_results.filt.blastp",
-        #        sample = unique_samples,
-        #        query = config["blast_files"])
         expand(basedir + "/blast_concat/{query}/{analysis}.concat.filt.blastp",
                 query = config["blast_files"],
                 analysis = analysis_to_samples.keys()),
@@ -160,8 +193,9 @@ rule all:
                 analysis = analysis_to_samples.keys(),
                 ALG = config["targetALGs"],
                 n = odol_n,
-                m = odol_m)
-
+                m = odol_m),
+        # file_targets contains the one-analysis-one-query-one-sample plots
+        file_targets
 
 rule install_diamond:
     output:
@@ -293,7 +327,7 @@ rule top_hit:
         sample_chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"]
     output:
         blastp  = basedir + "/blast_filt/{query}/{sample}_results.filt.blastp"
-    retries: 0
+    retries: 6
     threads: 1
     resources:
         mem_mb = tophit_get_mem_mb,
@@ -414,6 +448,7 @@ rule filtCOO:
     resources:
         mem_mb = tophit_get_mem_mb,
         runtime = 1
+    retries: 6
     run:
         # readh in the alg rbh dataframe
         algrbhdf = parse_rbh(input.alg_rbh_file)
@@ -541,6 +576,18 @@ def tsvgz_plotumap(sample, sampledffile, algrbhfile, tsvgz,
             # If it's a different warning, re-raise it
             raise e
 
+def reimbedding_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed could change.
+    """
+    attemptdict = {1: 2000,
+                   2: 4000,
+                   3: 8000,
+                   4: 16000,
+                   5: 32000,
+                   6: 64000}
+    return attemptdict[attempt]
+
 rule ALG_reimbedding:
     input:
         tsvgz      = basedir + "/filt_coo/{analysis}_{ALG}.matrix.filt.tsv.gz",
@@ -554,10 +601,11 @@ rule ALG_reimbedding:
         analysis = lambda wildcards: wildcards.analysis,
         n        = lambda wildcards: int(wildcards.n),
         m        = lambda wildcards: float(wildcards.m)
+    retries: 6
     threads: 1
     resources:
-        mem_mb = tophit_get_mem_mb,
-        runtime = 1
+        mem_mb = reimbedding_get_mem_mb,
+        runtime = 10
     run:
         tsvgz_plotumap(params.analysis, input.sampledf, input.algrbhfile, input.tsvgz,
                        params.outdir, "large", params.n, params.m)
@@ -572,74 +620,106 @@ rule annotate_blastresults:
         algrbhfile = config["ALG_rbh_file"],
         blastp     = basedir + "/blast_concat/{query}/{analysis}.concat.filt.blastp",
     output:
-        UMAPdf   = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.df",
+        UMAPdf   = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.df"
+    retries: 6
     threads: 1
     resources:
         mem_mb = tophit_get_mem_mb,
-        runtime = 1
+        runtime = 2
     run:
-        # read in the df file
-        UMAPdf = pd.read_csv(input.UMAPdf, sep = "\t", index_col = 0)
-        UMAPdf["index"] = UMAPdf.index
-        # read in the blastp results as a pandas df
-        blastp = pd.read_csv(input.blastp, sep = "\t", header = None)
-        # make columns
-        blastp.columns = ["sample", "qseqid","sseqid","pident","length","mismatch","gapopen","qstart","qend","sstart","send","evalue","bitscore", "scaf_of_nearest_ALG", "nearest_ALG", "position_of_nearest_ALG", "dist_to_nearest_ALG"]
-        blastp["closest_ALG"] = None
-        blastp["closest_ALG_dist"] = None
-        blastp["closest_ALG_position"] = None
-        # get the blastp rows with nearest_ALG values in the UMAPdf.index
-        for i, row in blastp.iterrows():
-            nearest_list = literal_eval(row["nearest_ALG"])
-            for j in range(len(nearest_list)):
-                if nearest_list[j] in UMAPdf.index:
-                    nearest_pos = literal_eval(row["position_of_nearest_ALG"])[j]
-                    nearest_dist = literal_eval(row["dist_to_nearest_ALG"])[j]
-                    blastp.at[i, "closest_ALG"]          = nearest_list[j]
-                    blastp.at[i, "closest_ALG_dist"]     = nearest_dist
-                    blastp.at[i, "closest_ALG_position"] = nearest_pos
-                    break
-        # remove rows where closest_ALG is None
-        blastp = blastp[blastp["closest_ALG"].notnull()]
+        # if the input UMAPdf is empty, write an empty df
+        if os.stat(input.UMAPdf).st_size == 0:
+            with open(output.UMAPdf, "w") as f:
+                f.write("")
+        else:
+            # read in the df file
+            UMAPdf = pd.read_csv(input.UMAPdf, sep = "\t", index_col = 0)
+            UMAPdf["index"] = UMAPdf.index
+            # read in the blastp results as a pandas df
+            # If the file is empty, write an empty file to the output
+            if os.stat(input.blastp).st_size == 0:
+                with open(output.UMAPdf, "w") as f:
+                    f.write("")
+            else:
+                # There are blast results, which likely means that the genome had an annotation and we didn't give it an Ersatz annotation with BCnS ALGs.
+                # Keep going.
+                blastp = pd.read_csv(input.blastp, sep = "\t", header = None)
+                # make columns
+                blastp.columns = ["sample", "qseqid","sseqid","pident","length","mismatch","gapopen","qstart","qend","sstart","send","evalue","bitscore", "scaf_of_nearest_ALG", "nearest_ALG", "position_of_nearest_ALG", "dist_to_nearest_ALG"]
+                blastp["closest_ALG"] = None
+                blastp["closest_ALG_dist"] = None
+                blastp["closest_ALG_position"] = None
+                # get the blastp rows with nearest_ALG values in the UMAPdf.index
+                for i, row in blastp.iterrows():
+                    nearest_list = literal_eval(row["nearest_ALG"])
+                    for j in range(len(nearest_list)):
+                        if nearest_list[j] in UMAPdf.index:
+                            nearest_pos = literal_eval(row["position_of_nearest_ALG"])[j]
+                            nearest_dist = literal_eval(row["dist_to_nearest_ALG"])[j]
+                            blastp.at[i, "closest_ALG"]          = nearest_list[j]
+                            blastp.at[i, "closest_ALG_dist"]     = nearest_dist
+                            blastp.at[i, "closest_ALG_position"] = nearest_pos
+                            break
+                # remove rows where closest_ALG is None
+                blastp = blastp[blastp["closest_ALG"].notnull()]
 
-        # groupby the qseqid column
-        gb = blastp.groupby("qseqid")
-        newcols = {}
-        for name, group in gb:
-            # add the number of times that this index appears in this group
-            newcols[f"PLOTGENE_{name}"] = UMAPdf["index"].apply(lambda x: group[group["closest_ALG"] == x].shape[0])
-        # add the new columns to the UMAPdf
-        newcolsdf = pd.DataFrame(newcols)
-        UMAPdf = pd.concat([UMAPdf, newcolsdf], axis = 1)
-        # sum up all the counts across all query genes
-        UMAPdf["plotgene_SUM"] = UMAPdf[[x for x in UMAPdf.columns if "PLOTGENE_" in x]].sum(axis = 1)
+                # groupby the qseqid column
+                gb = blastp.groupby("qseqid")
+                newcols = {}
+                for name, group in gb:
+                    # add the number of times that this index appears in this group
+                    newcols[f"PLOTGENE_{name}"] = UMAPdf["index"].apply(lambda x: group[group["closest_ALG"] == x].shape[0])
+                # add the new columns to the UMAPdf
+                newcolsdf = pd.DataFrame(newcols)
+                UMAPdf = pd.concat([UMAPdf, newcolsdf], axis = 1)
+                # sum up all the counts across all query genes
+                UMAPdf["plotgene_SUM"] = UMAPdf[[x for x in UMAPdf.columns if "PLOTGENE_" in x]].sum(axis = 1)
 
-        algrbhdf = parse_rbh(input.algrbhfile)
-        UMAPdf["color"] = [algrbhdf[algrbhdf["rbh"] == x]["color"].values[0] for x in UMAPdf.index]
+                algrbhdf = parse_rbh(input.algrbhfile)
+                UMAPdf["color"] = [algrbhdf[algrbhdf["rbh"] == x]["color"].values[0] for x in UMAPdf.index]
 
-        # remove the "index" column
-        UMAPdf = UMAPdf.drop("index", axis = 1)
-        print(list(UMAPdf.columns))
-        # add a color column
-        UMAPdf.to_csv(output.UMAPdf, sep = "\t", index = True)
+                # remove the "index" column
+                UMAPdf = UMAPdf.drop("index", axis = 1)
+                print(list(UMAPdf.columns))
+                # add a color column
+                UMAPdf.to_csv(output.UMAPdf, sep = "\t", index = True)
+                # A joke for you
+                # Why did the chicken cross the road?
+                # To get to the other side where the programmer was coding a virtual chicken-crossing algorithm in Python!
+                #   - Attribution: Chat-GPT v3.5, Monday March 11 5:55PM
 
-rule plot_clade_blast:
-    input:
-        UMAPdf   = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.df",
-    output:
-        UMAPdf   = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.pdf"
-    threads: 1
-    resources:
-        mem_mb = tophit_get_mem_mb,
-        runtime = 1
-    run:
-        #         ┓   ┓•┓
-        # ┏┳┓┏┓╋┏┓┃┏┓╋┃┓┣┓
-        # ┛┗┗┗┻┗┣┛┗┗┛┗┗┗┗┛
-        #       ┛
+def umapdf_to_pdf(UMAPdf, analysis, ALG, n, m, query, outputPDF, species = None):
+    """
+    This function takes a dataframe as input and makes a UMAP
+    """
+    #         ┓   ┓•┓
+    # ┏┳┓┏┓╋┏┓┃┏┓╋┃┓┣┓
+    # ┛┗┗┗┻┗┣┛┗┗┛┗┗┗┗┛
+    #       ┛
+    # If the UMAPdf is empty, write a plot telling the user that the input df was empty, so we couldn't plot anything
+    if os.stat(UMAPdf).st_size == 0:
+        # make a 2in x 2in plot telling the user the message
+        fig = plt.figure(figsize=(2,2))
+        plt.text(0.5, 0.5, "The input df was empty, so we couldn't plot anything", fontsize = 3)
+        # make another line telling the user which file, exactly, was empty
+        plt.text(0.5, 0.4, f"The input file was {UMAPdf}", fontsize = 3)
+        # turn off the axis ticks
+        for ax in fig.axes:
+            ax.set_xticks([])
+            ax.set_yticks([])
+        # turn off the axes
+        plt.axis('off')
+        try:
+            # make the plot tight to not cut off the text
+            plt.tight_layout()
+        except:
+            pass
+        # save the figure
+        plt.savefig(outputPDF)
+    else:
         dot = 3
         bigger_dot = 4
-        df_embedding = pd.read_csv(input.UMAPdf, sep = "\t", index_col = 0)
+        df_embedding = pd.read_csv(UMAPdf, sep = "\t", index_col = 0)
         # make a matplotlib plot of the UMAP with the df_embedding, and the color_dict from SplitLossColocTree as the legend
         # make a figure that is 5x5 inches
         fig = plt.figure(figsize=(2,2))
@@ -666,9 +746,335 @@ rule plot_clade_blast:
             ax.set_xticks([])
             ax.set_yticks([])
         # set the title based on the input
-        plt.title(f"UMAP of {wildcards.analysis}, ALG {wildcards.ALG},\nwith {wildcards.query} blast results,\nmin_dist {wildcards.m}, n_neighbors {wildcards.n}",
+        plt.title(f"UMAP of {analysis}, ALG {ALG},\nwith {query} blast results,\nmin_dist {m}, n_neighbors {n}",
                    fontsize = 3)
         # save the figure
-        plt.savefig(output.UMAPdf)
+        plt.savefig(outputPDF)
 
+rule plot_clade_blast:
+    input:
+        UMAPdf   = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.df",
+    output:
+        outPDF   = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.pdf"
+    retries: 6
+    threads: 1
+    resources:
+        mem_mb = tophit_get_mem_mb,
+        runtime = 1
+    run:
+        umapdf_to_pdf(input.UMAPdf, wildcards.analysis, wildcards.ALG, wildcards.n, wildcards.m, wildcards.query, output.outPDF)
 
+def umapdf_one_species_one_query(UMAPdf, blastp, analysis, ALG, n, m, query, outputPDF, species = None):
+    """
+    This function takes a dataframe as input and makes a UMAP
+        basedir + "/blast_filt/{query}/{sample}_results.filt.blastp",
+        UMAPdf     = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.df",
+        algrbhfile = config["ALG_rbh_file"],
+
+    """
+    if species == None:
+        raise IOError("Please use this function with a species. The inputs are different from the other function and this plots something in the context of one species. Exiting")
+    #         ┓   ┓•┓
+    # ┏┳┓┏┓╋┏┓┃┏┓╋┃┓┣┓
+    # ┛┗┗┗┻┗┣┛┗┗┛┗┗┗┗┛
+    #       ┛
+    UMAPempty   = False
+    BLASTPempty = False
+    if os.stat(UMAPdf).st_size == 0:
+        UMAPempty = True
+    if os.stat(blastp).st_size == 0:
+        BLASTPempty = True
+    if UMAPempty or BLASTPempty:
+        # make a 2in x 2in plot telling the user the message
+        fig = plt.figure(figsize=(2,2))
+        if UMAPempty and BLASTPempty:
+            plt.text(0.5, 0.5, "The input df and the blastp file were empty, so we couldn't plot anything", fontsize = 3)
+        elif UMAPempty and not BLASTPempty:
+            plt.text(0.5, 0.5, "The input df was empty, so we couldn't plot anything", fontsize = 3)
+        elif not UMAPempty and BLASTPempty:
+            plt.text(0.5, 0.5, "The blastp file was empty, so we couldn't plot anything", fontsize = 3)
+        plt.text(0.5, 0.5, "The input df was empty, so we couldn't plot anything", fontsize = 3)
+        # make another line telling the user which file, exactly, was empty
+        plt.text(0.5, 0.4, f"The input file was {UMAPdf}", fontsize = 3)
+        # turn off the axis ticks
+        for ax in fig.axes:
+            ax.set_xticks([])
+            ax.set_yticks([])
+        # turn off the axes
+        plt.axis('off')
+        try:
+            # make the plot tight to not cut off the text
+            plt.tight_layout()
+        except:
+            pass
+        # save the figure
+        plt.savefig(outputPDF)
+    else:
+        dot = 3
+        bigger_dot = 4
+        # The embedding in this case only has the UMAP1 and UMAP2 columns.
+        # We need later to go through the blast results to figure out which dots to annotate
+        df_embedding = pd.read_csv(UMAPdf, sep = "\t", index_col = 0)
+        print(df_embedding)
+        # make a matplotlib plot of the UMAP with the df_embedding, and the color_dict from SplitLossColocTree as the legend
+        # make a figure that is 5x5 inches
+        fig, ax = plt.subplots(figsize=(2, 2))
+        # scatter the UMAP1 and UMAP2 columns of the df_embedding
+        ax.scatter(df_embedding["UMAP1"], df_embedding["UMAP2"], c = df_embedding["color"], s = dot)
+        # now we read in the filtered blast results for this species
+        blastp = pd.read_csv(blastp, sep = "\t", header = None)
+        blastp.columns = ["qseqid","sseqid","pident","length","mismatch","gapopen","qstart","qend","sstart","send","evalue","bitscore", "scaf_of_nearest_ALG", "nearest_ALG", "position_of_nearest_ALG", "dist_to_nearest_ALG"]
+        blastp["closest_ALG"] = None
+        blastp["closest_ALG_dist"] = None
+        blastp["closest_ALG_position"] = None
+        # get the blastp rows with nearest_ALG values in the UMAPdf.index
+        for i, row in blastp.iterrows():
+            nearest_list = literal_eval(row["nearest_ALG"])
+            for j in range(len(nearest_list)):
+                if nearest_list[j] in df_embedding.index:
+                    nearest_pos = literal_eval(row["position_of_nearest_ALG"])[j]
+                    nearest_dist = literal_eval(row["dist_to_nearest_ALG"])[j]
+                    blastp.at[i, "closest_ALG"]          = nearest_list[j]
+                    blastp.at[i, "closest_ALG_dist"]     = nearest_dist
+                    blastp.at[i, "closest_ALG_position"] = nearest_pos
+                    break
+        # remove rows where closest_ALG is None
+        blastp = blastp[blastp["closest_ALG"].notnull()]
+
+        # In many cases, the closest ALG is going to be the same for many of the blastp hits, so we should group these together
+        gb = blastp.groupby("closest_ALG")
+        # Go through each group, and color that dot in the UMAP
+        legend_patches = []
+        for thisALG, group in gb:
+            # generate a random color for this dot
+            thiscolor = "#" + ''.join([random.choice('0123456789ABCDEF') for j in range(6)])
+            # label is all of the qseqids that are in this group
+            label = ", ".join(group["qseqid"].values)
+            legend_patches.append( mpatches.Patch(color=thiscolor, label=label))
+            # x is the location of this ALG in the UMAPdf
+            x = df_embedding.loc[thisALG, "UMAP1"]
+            y = df_embedding.loc[thisALG, "UMAP2"]
+            ax.scatter(x, y, c = thiscolor, s = dot, alpha = 1)
+
+        # add the entries to the legend
+        ax.legend(handles=legend_patches, loc="upper right", fontsize = 3)
+        # Remove the frame from the legend
+        ax.get_legend().set_frame_on(False)
+        # turn off the axis ticks
+        ax.set_xticks([])
+        ax.set_yticks([])
+        # set the title based on the input
+        ax.set_title(f"UMAP of {analysis}, ALG {ALG},\ngenome {species} with {query} blast results,\nmin_dist {m}, n_neighbors {n}",
+                   fontsize = 3)
+        # save the figure
+        plt.savefig(outputPDF, bbox_inches='tight')
+
+rule plot_one_species_one_query:
+    """
+    The goal of this rule is to plot the UMAP of a specific ALG for a specific query.
+    The UMAP embedding is from the analysis to which the species belongs.
+    Within this plot, we assign a color to each ALG, and also make a legend to see which genes are where.
+    """
+    input:
+        UMAPdf = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.df",
+        blastp = basedir + "/blast_filt/{query}/{sample}_results.filt.blastp",
+        algrbhfile = config["ALG_rbh_file"],
+    output:
+        outPDF = basedir + "/ALG_reimbedding/one_analysis_one_species_one_query/{analysis}.{sample}.{query}.{ALG}.neighbors_{n}.mind_{m}.missing_large.subchrom.pdf"
+    threads: 1
+    resources:
+        mem_mb = tophit_get_mem_mb,
+        runtime = 1
+    run:
+        umapdf_one_species_one_query(input.UMAPdf, input.blastp, wildcards.analysis,
+                                     wildcards.ALG, wildcards.n, wildcards.m,
+                                     wildcards.query, output.outPDF, species = wildcards.sample)
+
+#def plot_paramsweep_one_species_one_query(dataframe_files, blastp):
+#    """
+#    Makes the plot for the parameter sweep plot when we provide multiple dataframes.
+#    """
+#    df_filelist = []
+#    if args.directory:
+#        # Get all the dataframes from the directory
+#        df_filelist = [x for x in os.listdir(args.directory)
+#                       if x.endswith(".df")]
+#    elif args.filelist:
+#        # Get all the dataframes from the filelist
+#        df_filelist = args.filelist.split(" ")
+#
+#    print("df_filelist is {}".format(df_filelist))
+#
+#    # There filenames are formatted like this:
+#    #   Metazoa_33208.neighbors_20.mind_0.0.missing_large.df
+#    samplename = set([os.path.basename(x).split(".neighbors_")[0] for x in df_filelist])
+#    if len(samplename) > 1:
+#        raise ValueError("More than one sample name found in the file list. We only allow one for now.")
+#    samplename = list(samplename)[0]
+#
+#    print("samplename is {}".format(samplename))
+#
+#    # get the number of neighbors
+#    num_neighbors = [os.path.basename(x).split(".neighbors_")[1].split(".")[0] for x in df_filelist]
+#    # check that everything can be cast to an int
+#    for x in num_neighbors:
+#        try:
+#            int(x)
+#        except ValueError:
+#            raise ValueError(f"Could not cast {x} to an int.")
+#    num_neighbors = [int(x) for x in num_neighbors]
+#    print("num_neighbors is {}".format(num_neighbors))
+#    # get the min_dist
+#    min_dist = [os.path.basename(x).split(".mind_")[1].split(".missing_")[0] for x in df_filelist]
+#    # check that all min_dist can be cast to a floar
+#    for x in min_dist:
+#        try:
+#            float(x)
+#        except ValueError:
+#            raise ValueError(f"Could not cast {x} to a float.")
+#    min_dist = [float(x) for x in min_dist]
+#    print("min_dist is {}".format(min_dist))
+#    # get whether it is from the small or large dataset
+#    miss_size = [os.path.basename(x).split(".missing_")[1].split(".")[0] for x in df_filelist]
+#    # make sure that there is only one value for small or large here. We can't deal with both.
+#    if len(set(miss_size)) > 1:
+#        raise ValueError("More than one size found in the file list. We only allow one for now: small or large")
+#    print("Missing size is {}".format(miss_size))
+#
+#    # collate together the html_filelist, num_neighbors, min_dist, and size
+#    df = pd.DataFrame({"dffile":        df_filelist,
+#                       "num_neighbors": num_neighbors,
+#                       "min_dist":      min_dist,
+#                       "size":          miss_size})
+#    # sort by num_neighbors and min_dist, ascending both
+#    df = df.sort_values(["num_neighbors", "min_dist"], ascending=[True, True])
+#    # groupby size and make one plot for each size
+#    gb = df.groupby("size")
+#    for name, group in gb:
+#        # make subplots.
+#        # The number of unique things in num_neighbors is the number of rows
+#        # the numer of unique things in min_dist is the number of columns
+#        num_rows = len(group["num_neighbors"].unique())
+#        num_cols = len(group["min_dist"].unique())
+#        # make a grid of squares to plot each of these on
+#        # reduce the space between all the plots
+#        # make the figure size such that all the plots are square
+#        square_size = 1.5
+#        fig, axes = plt.subplots(num_rows, num_cols,
+#                                 figsize=(num_cols*square_size, num_rows*square_size))
+#        plt.subplots_adjust(wspace=0.1, hspace=0.1)
+#
+#        # turn off all the ticks
+#        # Turn off the axes
+#        for i in range(num_rows):
+#            for j in range(num_cols):
+#                axes[i, j].set_xticks([])
+#                axes[i, j].set_yticks([])
+#                # Turn off the lines around the plot
+#                for spine in ['top', 'right', 'bottom', 'left']:
+#                    axes[i, j].spines[spine].set_visible(False)
+#
+#        # set the title as samplename and the whether it is small or large
+#        fig.suptitle(f"{samplename} {name} NaNs")
+#        # set absolute left label as the number of neighbors
+#        fig.text(0.06, 0.5, 'Number of Neighbors', va='center', rotation='vertical')
+#        fig.text(0.5, 0.92, 'Min Distance', ha='center')
+#        for i, row in enumerate(sorted(group["num_neighbors"].unique(), reverse = False)):
+#            # for the left-most plot in each row, set the ylabel as the number of neighbors
+#            axes[i, 0].set_ylabel(f"{row}", rotation=0, ha='right')
+#            for j, col in enumerate(sorted(group["min_dist"].unique(), reverse = False)):
+#                #for the top-most plot in each column, set the xlabel as the min_dist
+#                # put the xlabel on the top
+#                axes[0, j].xaxis.set_label_position('top')
+#                axes[0, j].set_xlabel(f"{col}")
+#                # get the df file for this row and column from the dffile
+#                dffile = group[(group["num_neighbors"] == row) & (group["min_dist"] == col)]["dffile"].values[0]
+#                # if the type of dffile is NoneType, then we didn't find the file
+#                if type(dffile) == type(None):
+#                    # write into the ax[i, j] that we didn't find the file
+#                    axes[i, j].text(0.5, 0.5, f"Missing file", fontsize=6, ha='center')
+#                elif type(dffile) == str:
+#                    # now we try to find the file
+#                    if os.path.exists(dffile):
+#                        # if the file is empty, then we write into the ax[i, j] that the file is empty
+#                        if os.path.getsize(dffile) == 0:
+#                            axes[i, j].text(0.5, 0.5, f"Empty file", fontsize=6, ha='center')
+#                        else:
+#                            tempdf = pd.read_csv(dffile, sep="\t", index_col=0)
+#                            # Plot the UMAP1 UMAP2 with the color column as the color.
+#                            # Make the dot size small
+#                            axes[i, j].scatter(tempdf["UMAP1"], tempdf["UMAP2"],
+#                                             s=0.5, lw = 0, alpha=0.5,
+#                                             color=list(tempdf["color"]))
+#                    else:
+#                        # The user provided the path to this file, but it doesn't exist.
+#                        # This means that the user made a mistake in writing the file name.
+#                        raise ValueError(f"The file {dffile} does not exist.")
+#                else:
+#                    raise ValueError(f"Type of dffile is not a string or NoneType. It is {type(dffile)}")
+#        # make sure that the aspect ratio for all of these is the same
+#        # Iterate over each axis and set aspect ratio to 'equal'
+#        for row in axes:
+#            for col in row:
+#                col.set_aspect('equal', adjustable='box')
+#
+#        # Now make vertical and horizontal lines to separate the plots. Make them medium gray.
+#        # The lines will be on the figure, and not in the plots.
+#        # Draw horizontal lines between rows
+#        # Get the bounding boxes of the axes including text decorations
+#
+#        # Get the bounding boxes of the axes including text decorations
+#        r = fig.canvas.get_renderer()
+#        get_bbox = lambda ax: ax.get_tightbbox(r).transformed(fig.transFigure.inverted())
+#        bbox_list = [get_bbox(ax) for ax in axes.flat]
+#
+#        # Create an empty array with the correct shape and dtype
+#        bboxes = np.empty(axes.shape, dtype=object)
+#
+#        # Fill the array with the bounding boxes
+#        for idx, bbox in np.ndenumerate(bboxes):
+#            bboxes[idx] = bbox_list[idx[0] * axes.shape[1] + idx[1]]
+#
+#        # Get the minimum and maximum extent, get the coordinate half-way between those
+#        ymax = np.array(list(map(lambda b: b.y1, bboxes.flat))).reshape(axes.shape).max(axis=1)
+#        ymin = np.array(list(map(lambda b: b.y0, bboxes.flat))).reshape(axes.shape).min(axis=1)
+#        ys = np.c_[ymax[1:], ymin[:-1]].mean(axis=1)
+#
+#        # Draw horizontal lines at those coordinates
+#        for y in ys:
+#            line = plt.Line2D([0.125, 0.9], [y, y], transform=fig.transFigure, color="#BBBBBB")
+#            fig.add_artist(line)
+#
+#        # Get the minimum and maximum extent, get the coordinate half-way between those for vertical lines
+#        xmax = np.array(list(map(lambda b: b.x1, bboxes.flat))).reshape(axes.shape).max(axis=0)
+#        xmin = np.array(list(map(lambda b: b.x0, bboxes.flat))).reshape(axes.shape).min(axis=0)
+#        xs = np.c_[xmax[1:], xmin[:-1]].mean(axis=1)
+#
+#        # Draw vertical lines at those coordinates
+#        for xi in range(len(xs)):
+#            x = xs[xi]
+#            if xi == 0:
+#                x = x + 0.0125
+#            line = plt.Line2D([x, x], [0.1, 0.875], transform=fig.transFigure, color="#BBBBBB")
+#            fig.add_artist(line)
+#
+#        # save the figure as f"{samplename}_{name}.pdf"
+#        # name is just the size, small or large
+#        print("saving the file to {}".format(args.outpdf))
+#        plt.savefig(args.outpdf)
+#        # close the figure
+#        plt.close(fig)
+#
+#rule paramsweep_one_species_one_query:
+#    """
+#    This rule is for making a plot of the different parameters that are plotted for a single species,
+#    and a single query.
+#    """
+#    input:
+#        UMAPdf = expand(basedir + "/ALG_reimbedding/{{analysis}}/{{ALG}}/{{analysis}}.neighbors_{n}.mind_{m}.missing_large.subchrom.df",
+#                n = odol_n,
+#                m = odol_m),
+#        blastp = basedir + "/blast_filt/{query}/{sample}_results.filt.blastp",
+#    output:
+#        sweep = basedir + "/ALG_reimbedding/one_analysis_one_species_one_query/sweeps/{{analysis}}.{{sample}}.{{query}}.{{ALG}}.missing_large.subchrom.sweep.pdf"
+#    output:

@@ -41,7 +41,7 @@ import time
 import umap
 import umap.plot
 import warnings
-warnings.filterwarnings("ignore", message="Graph is not fully connected", category=UserWarning)
+#warnings.filterwarnings("ignore", message="Graph is not fully connected", category=UserWarning)
 warnings.filterwarnings("ignore", message="Hammer edge bundling is expensive for large graphs!")
 
 # stuff for taxonomy
@@ -1455,7 +1455,7 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
 
 def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
                       outdir, smalllargeNaN, n_neighbors, min_dist,
-                      outdffilepath, outbokehfilepath):
+                      outdffilepath, outbokehfilepath, outjpegfilepath):
     """
     This all-in-one plotting method makes UMAPs for the locus distance ALGs
         constructed by averaging across multiple species.
@@ -1497,45 +1497,44 @@ def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
     # In every case, we must produce a .df file and a .bokeh.html file
     UMAPdf    = outdffilepath
     UMAPbokeh = outbokehfilepath
-    try:
-        print(f"    PLOTTING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
-        reducer = umap.UMAP(low_memory=True, n_neighbors = n_neighbors, min_dist = min_dist)
-        start = time.time()
+    print(f"    PLOTTING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
+    reducer = umap.UMAP(low_memory=True, n_neighbors = n_neighbors, min_dist = min_dist)
+    start = time.time()
+    disconnected = False
+    # Enter the context manager to catch warnings
+    with warnings.catch_warnings(record=True) as w:
+        # Ignore UserWarnings temporarily
+        warnings.filterwarnings("ignore", category=UserWarning)
+        # Your code that might raise the warning
         mapper = reducer.fit(lil)
-        stop = time.time()
-        print("   - It took {} seconds to fit_transform the UMAP".format(stop - start))
-        # save the UMAP as a bokeh plot
-        umap_mapper_to_bokeh_topoumap(mapper, algrbhdf, UMAPbokeh,
-          plot_title = f"Topo UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
-        umap_df = umap_mapper_to_df(mapper, algrbhdf)
-        umap_df.to_csv(UMAPdf, sep = "\t", index = True)
-        # save the connectivity figure
-        # This plot needs to be moved elsewhere - the file path is not correct given the current state of things
-        UMAPconnectivity = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.subchrom.connectivity.jpeg"
-        UMAPconnectivit2 = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.subchrom.connectivity2.jpeg"
-        try:
-            umap_mapper_to_connectivity(mapper, UMAPconnectivity,
-                                        title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
-        except:
-            print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivity}")
-        #try:
-        #    umap_mapper_to_connectivity(mapper, UMAPconnectivit2, bundled = True,
-        #                                title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
-        #except:
-        #    print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivit2}")
-    except UserWarning as e:
-        # Catch the specific warning about graph not being fully connected
-        if "Graph is not fully connected" in str(e):
-            print("    Warning: Graph is not fully connected. Can't run UMAP with these parameters.")
-            # we check for file UMAPbokeh, so write this message to it
-            with open(UMAPbokeh, "w") as f:
-                f.write("The graph is not fully connected. Can't run UMAP with these parameters.")
-            # write an empty .df file
-            with open(UMAPdf, "w") as f:
+        # Check if any warning was generated
+        if w:
+            for warning in w:
+                if issubclass(warning.category, UserWarning):
+                    disconnected = True
+                    print("Got the warning that the graph is not fully connected. This happens mostly in the case of clades with highly conserved genomes:", warning.message)
+                    # You can further process or log the warning here if needed
+    stop = time.time()
+    print("   - It took {} seconds to fit_transform the UMAP".format(stop - start))
+    # save the UMAP as a bokeh plot
+    if disconnected:
+        plot_title = f"(Disconnected) Topo UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
+    else:
+        plot_title = f"Topo UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
+    umap_mapper_to_bokeh_topoumap(mapper, algrbhdf, UMAPbokeh,
+      plot_title = plot_title)
+    umap_df = umap_mapper_to_df(mapper, algrbhdf)
+    umap_df.to_csv(UMAPdf, sep = "\t", index = True)
+    # save the connectivity figure
+    try:
+        umap_mapper_to_connectivity(mapper, outjpegfilepath,
+                                    title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
+    except:
+        # save an empty jpeg file
+        print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivity}")
+        if not os.path.exists(outjpegfilepath):
+            with open(outjpegfilepath, "w") as f:
                 f.write("")
-        else:
-            # If it's a different warning, re-raise it
-            raise e
 
 def plot_umap_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, min_dist):
     """
