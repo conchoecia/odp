@@ -1,4 +1,6 @@
 # In this document we will log changes to include with release notes.
+- v0.3.3 - Published on February 8th, 2024
+  - Uncommented some code that prevented the `step2-figures/synteny_coloredby_*/` directory from being created. The `.rbh` files in this directory are used for the rubbon plots.
 - v0.3.2 - Published on February 5th, 2024
   - Fixed a bug that caused uncompressed files to sometimes be attempted to read as zipped files.
 - v0.3.1 - Published on February 4th, 2024
