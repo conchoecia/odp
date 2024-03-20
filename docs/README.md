@@ -505,7 +505,7 @@ versions of the genomes by shuffling the gene IDs in the `.chrom` file,
 measuring whether a group of *i* or fewer genes was present, then repeating this
 measurement hundreds of millions of times.
 
-#### <a name=“gbfilter”></a>ALGs part 3 - Filter groups of orthologs
+#### <a name="gbfilter"></a>ALGs part 3 - Filter groups of orthologs
 
 The groups of reciprocal best hits, as well as the newly-calculated false
 discovery rates, are saved in the resulting `.groupby` file. This can be
@@ -522,7 +522,7 @@ on Google Drive, Apple Sheets, or Microsoft Excel.
 After removing the rows that have a less-than-significant false discovery rate,
 continue on to the next step to annotate the groups of orthologs.
 
-#### <a name=“gbannotate”></a>ALGs part 4 - Annotate groups of orthologs
+#### <a name="gbannotate"></a>ALGs part 4 - Annotate groups of orthologs
 
 At this stage the resulting rows are groups of orthologous genes that are
 present on the same set of chromosomes in the species under consideration, and
@@ -533,7 +533,7 @@ It is useful at this stage to assign names to each of the rows in the `group` co
 
 It is not necessary that each row has its own unique group ID. However, doing so will help plot mixing in downstream analyses.
 
-#### <a name=“gbmerge”></a>ALGs part 5 - Merge `.groupby`/`.rbh` files
+#### <a name="gbmerge"></a>ALGs part 5 - Merge `.groupby`/`.rbh` files
 
 In this section let’s consider a few species to compare:
   - Unicellular (+colonial multicellular) outgroups of animals:
@@ -558,7 +558,7 @@ Each ortholog (row) in the resulting `.rbh` file will have a gene for each anima
 
 The notation we use to refer to an `.rbh` file created by merging other `.rbh` files uses parentheses to note the species that may have missing data, and unmodified text to note the species that will always have a gene for each ortholog. The analysis discussed above is notated as `(CFR-COW-MBR)-HCA-EMU-RES`.
 
-#### <a name=“gbtohmm”></a>ALGs part 6 - Find orthologs in more species
+#### <a name="gbtohmm"></a>ALGs part 6 - Find orthologs in more species
 
 Steps 1-4 of finding ALGs relies on using only a few species (perhaps 3-5) to avoid loss of orthologs due to the stringent ortholog selection process. [Step 5 - Merge `.groupby`/`.rbh` files, discussed above,](#groupbymerge) enables the inclusion of more genes by allowing for missing data in select groups. Then, by constructing hidden Markov models of the orthologs, we can search for orthologs in more species.
 
@@ -566,13 +566,13 @@ The script `odp_rbh_to_hmm` reads in a `.rbh` file and constructs one HMM model 
 
 The output of this pipeline is another `.rbh` file, now with the proteins of the additional species identified with the HMM.
 
-#### <a name=“plotmixing”></a>ALGs part 7 - Plot mixing of select linkage groups
+#### <a name="plotmixing"></a>ALGs part 7 - Plot mixing of select linkage groups
 
 If you have followed the above steps, you now have a `.rbh` file with orthologs that have been annotated by group, and includes many additional species thanks to the merging and HMM search steps.
 
 If you are using `odp` to look for phylogenetically diagnostic fusion-then-mixing events, then it is useful to plot linkage groups to visualize the extent of mixing of those groups. The script `odp_rbh_plot_mixing` does that. The output of this script are PNG and PDFs of the orthologs in those two groups plotted in the chromosome coordinates for each species. This script also estimates the degree of intermixing of two groups of genes on the chromosomes on which they coexist.
 
-### <a name=“4speciesphylogeny”></a>Determine which clade is sister
+### <a name="4speciesphylogeny"></a>Determine which clade is sister
 
 The module `odp_genome_rearrangegment_simulation` was developed to help answer the question of whether ctenophores or sponges are the sister clade of all other animals. This script requires one species that is the known outgroup, and one species nested in the phylogeny with a known relative position to all other species. In our study, we performed analyses in which the filasterean amoeba _Capsaspora owczarzaki_ or the choanoflagellate _Salpingoeca rosetta_ were the outgroup species. The species with the known phylogenetic position was the fire jellyfish _Rhopilema esculentum_. The program uses these genomes to polarize the relationships between the two genomes in an unresolved polytomy, in this case the ctenophore _Hormiphora californensis_ and the sponge _Ephydatia muelleri_.
 
