@@ -107,11 +107,19 @@ This software fills a niche in that it automates comparisons of chromosome-scale
 genomes, an increasingly important task as the genomes of more non-model
 organisms become available.
 
-For the aims above, this software works by:
-1. For comparisons between two species, this program finds reciprocal-best protein matches using diamond blastp. The pipeline performs comparions between all *n* species in the config file. Compute time scales quadratically with increasing species *O(n*<sup>2</sup>*)*. The [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) of each pairwise comparison is calculated to determine synteny block cutoffs in the cases of complex rearrangements. The signifiance of interactions between two or more genomes is calculated 
-2. Calculating [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) for each genome.
-3. Finding which orthologs correspond to previously identified ancestral linkage groups (ALGs), such as the Bilateria-Cnidaria-Sponge ALGs from [Simakov et al. (2020).](https://www.nature.com/articles/s41559-020-1156-z).
-3. Plotting the genome assembly, reciprocal best protein hits, the ALGs, and Da/Db using matplotlib.
+For the aims above, and for comparisons with *two* species, this software works by:
+1. Identifying orthologs.
+  - For comparisons between two species, this program finds reciprocal-best protein matches using diamond blastp. The pipeline performs comparions between all *n* species in the config file. Compute time scales quadratically with increasing species *O(n*<sup>2</sup>*)*.
+2. Identifying homologous scaffolds between species.
+  - The measure D of each pairwise comparison is calculated to determine synteny block cutoffs in the cases of complex rearrangements. See section [6.4 Identification of 17 Chordate Linkage Groups (page 11)](https://static-content.springer.com/esm/art%3A10.1038%2Fs41559-020-1156-z/MediaObjects/41559_2020_1156_MOESM1_ESM.pdf) of the Supplementary Information PDF from [Simakov et al. (2020).](https://www.nature.com/articles/s41559-020-1156-z).
+  -  The homology of scaffolds between two species is inferred by calculating the pairwise p-value using Fisher's exact test. See section [6.5 Significance testing of blocks of conserved synteny (page 12)](https://static-content.springer.com/esm/art%3A10.1038%2Fs41559-020-1156-z/MediaObjects/41559_2020_1156_MOESM1_ESM.pdf) of the Supplementary Information PDF from [Simakov et al. (2020).](https://www.nature.com/articles/s41559-020-1156-z).
+3. Identifying orthologs in the context of known ancestral linkage groups.
+  - Finding which orthologs correspond to previously identified ancestral linkage groups (ALGs), such as the Bilateria-Cnidaria-Sponge ALGs from [Simakov et al 2022](https://www.science.org/doi/10.1126/sciadv.abi5884).
+4. Plotting the genome assembly, reciprocal best protein hits, the ALGs, and D for both species using matplotlib.
+
+For comparisons between *three or more* species, the software can:
+1. Identify ALGs of a given number of species. Warning - each additional species added increases the stringency of the ALG identification.
+2. Test phylogenetic hypotheses with species quartets.
 
 ## <a name="install"></a>Installation
 
