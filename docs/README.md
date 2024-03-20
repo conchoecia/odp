@@ -82,10 +82,10 @@ diagrams of conserved linkages between genomes.
     - [Find and characterize ancestral linkage groups](#alganalysis)
       - [ALGs part 1 - Ortholog finding in 3+ species](#nwayreciprocalbest)
       - [ALGs part 2 - Find significantly numerous groups of orthologs](#groupby)
-      - [ALGs part 3 - Filter groups of orthologs](#groupbyfilter)  
-      - [ALGs part 4 - Annotate groups of orthologs](#groupbyannotate)
-      - [ALGs part 5 - Merge groupby files](#groupbymerge) 
-      - [ALGs part 6 - Find orthologs in more species](#groupbytohmm)
+      - [ALGs part 3 - Filter groups of orthologs](#gbfilter)
+      - [ALGs part 4 - Annotate groups of orthologs](#gbannotate)
+      - [ALGs part 5 - Merge groupby files](#gbmerge)
+      - [ALGs part 6 - Find orthologs in more species](#gbtohmm)
       - [ALGs part 7 - Plot mixing of select linkage groups](#plotmixing)
     - [Determine which clade is sister](#4speciesphylogeny)
 - [Citing odp](#cite)
@@ -279,28 +279,28 @@ ignore_autobreaks: True       # Skip steps to find breaks in synteny blocks
 diamond_or_blastp: "diamond"  # "diamond" or "blastp"
 plot_LGs: True                # Plot the ALGs based on the installed databases
 plot_sp_sp: True              # Plot the synteny between two species, if False just generates .rbh files
-  
+
 species:
   Celegans:
     proteins: /path/to/proteins_in_Cel_genome.fasta # required field
     chrom:    /path/to/Cel_annot.chrom              # required field
-    genome:   /path/to/Cel_genome_assembly.fasta    # required field 
+    genome:   /path/to/Cel_genome_assembly.fasta    # required field
 
     genus: "Caenorhabditis" # This is an optional field
-    species: "elegans" # This is an optional field 
+    species: "elegans" # This is an optional field
 
-    minscafsize: 1000000 # optional field. Sets minimum scaffold size to plot. 
+    minscafsize: 1000000 # optional field. Sets minimum scaffold size to plot.
 
     manual_breaks:    # optional field, tells the software to treat breaks
       - "I:50000"     #  as separate units for calculating the homology p-values
       - "IV:9000000"  #  with Fisher's exact test. Useful for plotting centromeres.
-      - "II:99009"    #  Here, we tell the software that Cel chroms I, IV, II have breaks.      
+      - "II:99009"    #  Here, we tell the software that Cel chroms I, IV, II have breaks.
 
     plotorder:    # This optional field tells the software to only plot the scaffolds
       - "I"       #  listed here, and to do it in this order. This is useful for plotting
       - "II"      #  comparisons between two species where you want a specific order for
       - "III"     #  both species.
-    
+
   Homosapiens:
     proteins: /path/to/Human_prots.fasta
     chrom:    /path/to/Human_annotation.chrom
@@ -352,13 +352,13 @@ snakemake --snakefile ${YOUR_ODP_INSTALL_PATH}/odp/scripts/odp_rbh_to_ribbon
 # your file will be saved as output.pdf
 ```
 
-A minimal working example of the config file is below. Again, more details are in 
+A minimal working example of the config file is below. Again, more details are in
 [`CONFIG_rbh_to_ribbon.yaml`](../example_configs/CONFIG_rbh_to_ribbon.yaml):
 
 ```yaml
 # There are several options for how to sort the chromosomes.
 # More information is available in the config file.
-chr_sort_order: optimal-chr-or 
+chr_sort_order: optimal-chr-or
 
 # Tells the program whether to plot the non-significant interactions.
 plot_all: True
@@ -444,7 +444,7 @@ analyses:
   - ["Celegans", "Homosapiens", "Mmus"]
   - ["Celegans", "Dmel", "Mmus"]
   # - ["Homosapiens", "Dmel", "Mmus"]   # You can comment out lines if you would like
-  
+
 species:
   Celegans:
     proteins: /path/to/proteins_in_Cel_genome.fasta
@@ -480,7 +480,7 @@ The output of the previous program, the `.rbh` file, has one ortholog per line. 
   * _D. melanogaster_ chromosome 3
   * and human *chromosome 17*
 
-will be one group. All of the orthologs that exist on a slightly different set of chromosomes will be another group, for example:  
+will be one group. All of the orthologs that exist on a slightly different set of chromosomes will be another group, for example:
   * _C. elegans_ chromosome I
   * _D. melanogaster_ chromosome 3
   * and *human chromosome 16*
@@ -505,7 +505,7 @@ versions of the genomes by shuffling the gene IDs in the `.chrom` file,
 measuring whether a group of *i* or fewer genes was present, then repeating this
 measurement hundreds of millions of times.
 
-#### <a name=“groupbyfilter”></a>ALGs part 3 - Filter groups of orthologs
+#### <a name=“gbfilter”></a>ALGs part 3 - Filter groups of orthologs
 
 The groups of reciprocal best hits, as well as the newly-calculated false
 discovery rates, are saved in the resulting `.groupby` file. This can be
@@ -522,7 +522,7 @@ on Google Drive, Apple Sheets, or Microsoft Excel.
 After removing the rows that have a less-than-significant false discovery rate,
 continue on to the next step to annotate the groups of orthologs.
 
-#### <a name=“groupbyannotate”></a>ALGs part 4 - Annotate groups of orthologs
+#### <a name=“gbannotate”></a>ALGs part 4 - Annotate groups of orthologs
 
 At this stage the resulting rows are groups of orthologous genes that are
 present on the same set of chromosomes in the species under consideration, and
@@ -533,7 +533,7 @@ It is useful at this stage to assign names to each of the rows in the `group` co
 
 It is not necessary that each row has its own unique group ID. However, doing so will help plot mixing in downstream analyses.
 
-#### <a name=“groupbymerge”></a>ALGs part 5 - Merge `.groupby`/`.rbh` files
+#### <a name=“gbmerge”></a>ALGs part 5 - Merge `.groupby`/`.rbh` files
 
 In this section let’s consider a few species to compare:
   - Unicellular (+colonial multicellular) outgroups of animals:
@@ -558,7 +558,7 @@ Each ortholog (row) in the resulting `.rbh` file will have a gene for each anima
 
 The notation we use to refer to an `.rbh` file created by merging other `.rbh` files uses parentheses to note the species that may have missing data, and unmodified text to note the species that will always have a gene for each ortholog. The analysis discussed above is notated as `(CFR-COW-MBR)-HCA-EMU-RES`.
 
-#### <a name=“groupbytohmm”></a>ALGs part 6 - Find orthologs in more species
+#### <a name=“gbtohmm”></a>ALGs part 6 - Find orthologs in more species
 
 Steps 1-4 of finding ALGs relies on using only a few species (perhaps 3-5) to avoid loss of orthologs due to the stringent ortholog selection process. [Step 5 - Merge `.groupby`/`.rbh` files, discussed above,](#groupbymerge) enables the inclusion of more genes by allowing for missing data in select groups. Then, by constructing hidden Markov models of the orthologs, we can search for orthologs in more species.
 
