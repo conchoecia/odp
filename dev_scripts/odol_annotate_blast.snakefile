@@ -32,6 +32,7 @@ import umap
 import umap.plot
 import random
 import time
+import warnings
 
 from ast import literal_eval
 import os
@@ -111,8 +112,15 @@ if "species_of_interest" not in config:
 #  - The keys are the analysis names.
 #  - The values are the filepath to the sampledf file.
 coo_files            = [x for x in os.listdir(config["subchrom_directory"]) if x.endswith(".coo.npz")]
-analysis_to_coo      = {x.replace(".coo.npz", ""): os.path.join(config["subchrom_directory"], x) for x in coo_files}
-analysis_to_sampledf = {k: os.path.join(config["subchrom_directory"], f"{k}.sampledf.tsv") for k in analysis_to_coo.keys()}
+if len(coo_files) == 0:
+    raise ValueError(f"No .coo.npz files in {config['subchrom_directory']}")
+analysis_to_coo      = {x.split(".method_")[0].replace(".coo.npz", ""): os.path.join(config["subchrom_directory"], x)
+                        for x in coo_files}
+sample_files = [x for x in os.listdir(config["subchrom_directory"]) if x.endswith(".sampledf.tsv")]
+analysis_to_sampledf = {}
+for thisanalysis in analysis_to_coo:
+    thissampledf = [x for x in sample_files if thisanalysis in x][0]
+    analysis_to_sampledf[thisanalysis] = os.path.join(config["subchrom_directory"], thissampledf)
 
 # Load in all of the dfs and make an analysis_to_samples dictionary.
 #  - The keys are the analysis names.
@@ -143,8 +151,8 @@ if not all([x in sample_to_rbh_file for x in unique_samples]):
 #print(analysis_to_samples)
 #print(sample_to_analysis)
 
-odol_n = [2, 3, 4, 5, 10, 15]
-odol_m = [0.0, 0.001, 0.01]
+odol_n = [5, 10, 15]
+odol_m = [0, 0.01, 0.1]
 
 # we need to make a list of target files, because expand doesn't have the ability for us
 # to subset the analyses we need for plotting the one-analysis-one-query-one-sample plots
@@ -157,6 +165,8 @@ for thissp in config["species_of_interest"]:
         for n, m, ALG, query in product(odol_n, odol_m, config["targetALGs"], config["blast_files"]):
             f = basedir + f"/ALG_reimbedding/one_analysis_one_species_one_query/{thisanalysis}.{thissp}.{query}.{ALG}.neighbors_{n}.mind_{m}.missing_large.subchrom.pdf"
             file_targets.append(f)
+print("species of interest are: {}".format(config["species_of_interest"]))
+print("analysis_to_sampledf: {}".format(analysis_to_sampledf))
 
 wildcard_constraints:
     analysis = "[A-Za-z0-9_]+",
@@ -171,29 +181,29 @@ rule all:
         expand(basedir + "/filt_coo/{analysis}_{ALG}.matrix.filt.tsv.gz",
                 analysis = analysis_to_samples.keys(),
                 ALG = config["targetALGs"]),
-        expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.df",
-                analysis = analysis_to_samples.keys(),
-                ALG = config["targetALGs"],
-                n = odol_n,
-                m = odol_m),
-        expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.bokeh.html",
-                analysis = analysis_to_samples.keys(),
-                ALG = config["targetALGs"],
-                n = odol_n,
-                m = odol_m),
-        # pre-plotting df
-        expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.df",
-                query = config["blast_files"],
-                analysis = analysis_to_samples.keys(),
-                ALG = config["targetALGs"],
-                n = odol_n,
-                m = odol_m),
-        expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.pdf",
-                query = config["blast_files"],
-                analysis = analysis_to_samples.keys(),
-                ALG = config["targetALGs"],
-                n = odol_n,
-                m = odol_m),
+        #expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.df",
+        #        analysis = analysis_to_samples.keys(),
+        #        ALG = config["targetALGs"],
+        #        n = odol_n,
+        #        m = odol_m),
+        #expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.bokeh.html",
+        #        analysis = analysis_to_samples.keys(),
+        #        ALG = config["targetALGs"],
+        #        n = odol_n,
+        #        m = odol_m),
+        ## pre-plotting df
+        #expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.df",
+        #        query = config["blast_files"],
+        #        analysis = analysis_to_samples.keys(),
+        #        ALG = config["targetALGs"],
+        #        n = odol_n,
+        #        m = odol_m),
+        #expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.pdf",
+        #        query = config["blast_files"],
+        #        analysis = analysis_to_samples.keys(),
+        #        ALG = config["targetALGs"],
+        #        n = odol_n,
+        #        m = odol_m),
         # file_targets contains the one-analysis-one-query-one-sample plots
         file_targets
 
@@ -456,8 +466,9 @@ rule filtCOO:
         algrbhdf = algrbhdf[algrbhdf["gene_group"] == params.thisALG]
         #open the coo file
         coo = load_npz(input.coo)
-        # replace the 0 values with -1s
-        coo.data[coo.data == 0] = -1
+        # In a previous version of this file, I did different things to replace the 0s with 9,999,999,999s in the missing data.
+        # Now, I just leave everything as it is and only bother with the distances in the upstream script, PhyloTreeUMAP.snakefile
+
         # get the rows that have values that aren't in the index of algrbhdf
         # convert this to a pandas df with indices and colnames
         coodf = pd.DataFrame(coo.todense())
@@ -465,8 +476,6 @@ rule filtCOO:
         coodf = coodf.loc[algrbhdf.index]
         # remove the columns that are not in the index of algrbhdf
         coodf = coodf[algrbhdf.index]
-        # convert the 0s to 9,999,999,999. Then the -1s to 0s
-        coodf = coodf.replace(0, 9999999999).replace(-1, 0)
         # change the indices to the value of the rbh column in the algrbhdf, matching on indices
         coodf.index   = [algrbhdf.loc[x, "rbh"] for x in coodf.index]
         # change the columns to the value of the rbh column in the algrbhdf, matching on columns
@@ -475,7 +484,8 @@ rule filtCOO:
         coodf.to_csv(output.filt_coo, sep="\t", compression="gzip", index=True)
 
 def tsvgz_plotumap(sample, sampledffile, algrbhfile, tsvgz,
-                   outdir, smalllargeNaN, n_neighbors, min_dist):
+                   outdir, smalllargeNaN, n_neighbors, min_dist,
+                   UMAPdf, UMAPbokeh):
     """
     This all-in-one plotting method makes UMAPs for the locus distance ALGs
         constructed by averaging across multiple species.
@@ -486,6 +496,9 @@ def tsvgz_plotumap(sample, sampledffile, algrbhfile, tsvgz,
         raise ValueError(f"The n_neighbors {n_neighbors} is not of type int or float. Exiting.")
     if type(min_dist) not in [float]:
         raise ValueError(f"The min_dist {min_dist} is not of type float. Exiting.")
+    # save the UMAP as a bokeh plot
+    if not UMAPbokeh.endswith(".html"):
+        raise ValueError(f"The output file {outhtml} does not end with '.html'. Exiting.")
 
     # read in the sample dataframe. We will need this later
     df = pd.read_csv(tsvgz, sep = "\t", index_col = 0)
@@ -498,83 +511,84 @@ def tsvgz_plotumap(sample, sampledffile, algrbhfile, tsvgz,
     sampledf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
     # We need a unique set of files for each of these
     # In every case, we must produce a .df file and a .bokeh.html file
-    UMAPdf    = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.subchrom.df"
-    UMAPbokeh = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.subchrom.bokeh.html"
-    try:
-        print(f"    PLOTTING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
-        reducer = umap.UMAP(n_neighbors = n_neighbors, min_dist = min_dist)
+    # Sometimes, there are errors with making the UMAP, in that if the graph is not fully connected UMAP will fail.
+    # For this reason, we should anticipate this error, and figure out what to do if it happens.
+    print(f"    PLOTTING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
+    reducer = umap.UMAP(n_neighbors = n_neighbors, min_dist = min_dist)
+    disconnected = False
+    with warnings.catch_warnings(record=True) as w:
+        # Ignore UserWarnings temporarily
+        warnings.filterwarnings("ignore", category=UserWarning)
+        # Your code that might raise the warning
         mapper = reducer.fit(df.to_numpy())
-        print("The embedding after fitting is:")
-        print(mapper)
-        print(mapper.embedding_)
-        # save the UMAP as a bokeh plot
-        if not UMAPbokeh.endswith(".html"):
-            raise ValueError(f"The output file {outhtml} does not end with '.html'. Exiting.")
-        #              ┓    •
-        # ┓┏┏┳┓┏┓┏┓  ┏┓┃┏┓╋╋┓┏┓┏┓
-        # ┗┻┛┗┗┗┻┣┛  ┣┛┗┗┛┗┗┗┛┗┗┫
-        #        ┛   ┛          ┛
-        hover_data = pd.DataFrame({"rbh_ortholog": [-1] * len(df),
-                                   "gene_group":   [-1] * len(df),
-                                   "color":        [-1] * len(df)
-                                   })
-        hover_data.index = algrbhdf["rbh"]
-        hover_data["rbh_ortholog"] = hover_data.index
-        # use apply to match the index to the "rbh" column of algrbhdf, and return the gene_group
-        hover_data["gene_group"] = [algrbhdf[algrbhdf["rbh"] == x]["gene_group"].values[0] for x in hover_data.index]
-        hover_data["color"]      = [algrbhdf[algrbhdf["rbh"] == x]["color"].values[0]      for x in hover_data.index]
-        hover_data = hover_data.reset_index(drop = True)
-        print(hover_data)
-        # the index is now the name of the ortholog, so we have to get the colors another way
-        #color_dict = dict(zip(algrbhdf["rbh"], algrbhdf["color"]))
-        color_dict = dict(zip(hover_data.index, hover_data["color"]))
-        print(color_dict)
-        print(f"type of mapper is: {type(mapper)}")
-        print(f"type of color_dict is: {type(color_dict)}")
-        print(f"type of hover_data is: {type(hover_data)}")
-        print(f"type of labels is: {type(list(hover_data['gene_group']))}")
-        print(f"mapper is: \n", mapper)
-        print(f"color_dict is: \n", color_dict)
-        print(f"hover_data is: \n", hover_data)
-        print(f"labels is: \n", list(hover_data["gene_group"]))
-
-        # Needs to be umap 0.5.5 or later
-        plot = umap.plot.interactive(mapper,
-                                     color_key = color_dict,
-                                     hover_data = hover_data,
-                                     labels = list(hover_data["rbh_ortholog"]), # TODO this needs to be changd to a list comprehension
-                                     tools=[], # this needs to be deleted, or else the zoom tool will not work.
-                                     point_size = 4
-                                     )
-        # add a title to the plot
+        # Check if any warning was generated
+        if w:
+            for warning in w:
+                if issubclass(warning.category, UserWarning):
+                    disconnected = True
+                    print("Got the warning that the graph is not fully connected. This happens mostly in the case of clades with highly conserved genomes:", warning.message)
+                    # You can further process or log the warning here if needed
+    # now we push left
+    # save the UMAP as a bokeh plot
+    if disconnected:
+        plot_title = f"(Disconnected) Topo UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
+    else:
         plot_title = f"Topo UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
-        plot.title.text = plot_title
-        # output to an HTML file
-        bokeh.io.output_file(UMAPbokeh)
-        # Save the plot to an HTML file
-        bokeh.io.save(plot)
 
-        # get the coordinates of the UMAP
-        df_embedding = pd.DataFrame(mapper.embedding_, columns=['UMAP1', 'UMAP2'])
-        df_embedding.index = df.index
-        umap_df = pd.concat([df, df_embedding], axis = 1)
-        umap_df["gene_group"] = [algrbhdf[algrbhdf["rbh"] == x]["gene_group"].values[0] for x in umap_df.index]
-        umap_df["color"]      = [algrbhdf[algrbhdf["rbh"] == x]["color"].values[0]      for x in umap_df.index]
+    print("The embedding after fitting is:")
+    print(mapper)
+    print(mapper.embedding_)
+    #              ┓    •
+    # ┓┏┏┳┓┏┓┏┓  ┏┓┃┏┓╋╋┓┏┓┏┓
+    # ┗┻┛┗┗┗┻┣┛  ┣┛┗┗┛┗┗┗┛┗┗┫
+    #        ┛   ┛          ┛
+    hover_data = pd.DataFrame({"rbh_ortholog": [-1] * len(df),
+                               "gene_group":   [-1] * len(df),
+                               "color":        [-1] * len(df)
+                               })
+    hover_data.index = algrbhdf["rbh"]
+    hover_data["rbh_ortholog"] = hover_data.index
+    # use apply to match the index to the "rbh" column of algrbhdf, and return the gene_group
+    hover_data["gene_group"] = [algrbhdf[algrbhdf["rbh"] == x]["gene_group"].values[0] for x in hover_data.index]
+    hover_data["color"]      = [algrbhdf[algrbhdf["rbh"] == x]["color"].values[0]      for x in hover_data.index]
+    hover_data = hover_data.reset_index(drop = True)
+    print(hover_data)
+    # the index is now the name of the ortholog, so we have to get the colors another way
+    #color_dict = dict(zip(algrbhdf["rbh"], algrbhdf["color"]))
+    color_dict = dict(zip(hover_data.index, hover_data["color"]))
+    print(color_dict)
+    print(f"type of mapper is: {type(mapper)}")
+    print(f"type of color_dict is: {type(color_dict)}")
+    print(f"type of hover_data is: {type(hover_data)}")
+    print(f"type of labels is: {type(list(hover_data['gene_group']))}")
+    print(f"mapper is: \n", mapper)
+    print(f"color_dict is: \n", color_dict)
+    print(f"hover_data is: \n", hover_data)
+    print(f"labels is: \n", list(hover_data["gene_group"]))
 
-        umap_df.to_csv(UMAPdf, sep = "\t", index = True)
-    except UserWarning as e:
-        # Catch the specific warning about graph not being fully connected
-        if "Graph is not fully connected" in str(e):
-            print("    Warning: Graph is not fully connected. Can't run UMAP with these parameters.")
-            # we check for file UMAPbokeh, so write this message to it
-            with open(UMAPbokeh, "w") as f:
-                f.write("The graph is not fully connected. Can't run UMAP with these parameters.")
-            # write an empty .df file
-            with open(UMAPdf, "w") as f:
-                f.write("")
-        else:
-            # If it's a different warning, re-raise it
-            raise e
+    # Needs to be umap 0.5.5 or later
+    plot = umap.plot.interactive(mapper,
+                                 color_key = color_dict,
+                                 hover_data = hover_data,
+                                 labels = list(hover_data["rbh_ortholog"]), # TODO this needs to be changd to a list comprehension
+                                 tools=[], # this needs to be deleted, or else the zoom tool will not work.
+                                 point_size = 4
+                                 )
+    # add a title to the plot
+    plot.title.text = plot_title
+    # output to an HTML file
+    bokeh.io.output_file(UMAPbokeh)
+    # Save the plot to an HTML file
+    bokeh.io.save(plot)
+
+    # get the coordinates of the UMAP
+    df_embedding = pd.DataFrame(mapper.embedding_, columns=['UMAP1', 'UMAP2'])
+    df_embedding.index = df.index
+    umap_df = pd.concat([df, df_embedding], axis = 1)
+    umap_df["gene_group"] = [algrbhdf[algrbhdf["rbh"] == x]["gene_group"].values[0] for x in umap_df.index]
+    umap_df["color"]      = [algrbhdf[algrbhdf["rbh"] == x]["color"].values[0]      for x in umap_df.index]
+
+    umap_df.to_csv(UMAPdf, sep = "\t", index = True)
 
 def reimbedding_get_mem_mb(wildcards, attempt):
     """
@@ -608,7 +622,8 @@ rule ALG_reimbedding:
         runtime = 10
     run:
         tsvgz_plotumap(params.analysis, input.sampledf, input.algrbhfile, input.tsvgz,
-                       params.outdir, "large", params.n, params.m)
+                       params.outdir, "large", params.n, params.m,
+                       output.UMAPdf, output.UMAPbokeh)
 
 rule annotate_blastresults:
     """

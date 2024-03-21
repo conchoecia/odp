@@ -1501,7 +1501,9 @@ def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
     reducer = umap.UMAP(low_memory=True, n_neighbors = n_neighbors, min_dist = min_dist)
     start = time.time()
     disconnected = False
-    # Enter the context manager to catch warnings
+    # Enter the context manager to catch warnings.
+    # For some of these parameters, namely small n_neighbors, the graph may not be fully connected.
+    #  This will cause a warning to be raised by UMAP.
     with warnings.catch_warnings(record=True) as w:
         # Ignore UserWarnings temporarily
         warnings.filterwarnings("ignore", category=UserWarning)
