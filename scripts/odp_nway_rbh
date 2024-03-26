@@ -43,6 +43,7 @@ import fasta
 
 # we need a way to handle the colors
 from odp_color_manager import generate_random_color as grc
+from odp_color_manager import yield_color
 
 configfile: "config.yaml"
 
@@ -579,6 +580,8 @@ rule groupby_rbh_results:
         grouped_multiple["count"] = grouped_multiple.rbh.str.len()
         grouped_mutiple = grouped_multiple.loc[grouped_multiple["count"] > 1, ]
 
+        # added call to yield_color() to get a sequential color palette
+        yc = yield_color() # sequential color palette from odp_color_manager
         # sort
         grouped_multiple = grouped_multiple.sort_values(by="count", ascending=False)
         alpha_dict = dict(zip(alphadf.Num_Genes_In_Chr_Group, alphadf.alpha))
@@ -614,7 +617,8 @@ rule groupby_rbh_results:
         # - request documented here: https://github.com/conchoecia/odp/issues/31
         # Generate a random color for each row by running the grc() command once per row.
         #  If alpha of the same row is greater than 0.05, then leave the color black
-        grouped_multiple["color"] = grouped_multiple.apply(lambda x: grc()
+        # Replacing with a sequential color palette. 
+        grouped_multiple["color"] = grouped_multiple.apply(lambda x: next(yc)
                     if x["alpha"] <= 0.05 else "#000000", axis = 1)
         # move the color column to right after the gene_group column
         cols1 = ['rbh', 'gene_group', 'color', 'count', 'alpha', 'alpha_type']
