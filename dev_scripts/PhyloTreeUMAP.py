@@ -1602,11 +1602,17 @@ def plot_umap_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, 
     plt.savefig(outpdf, bbox_inches='tight')
 
 def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
-                         outdir, sample, smalllargeNaN, n_neighbors, min_dist):
+                         outdir, sample, smalllargeNaN, n_neighbors,
+                         min_dist, missing_value_as = 9999999999):
     """
     This is an all-in-one plotting method to make UMAP plots from the files.
     Specifically, this is used for plotting the one-dot-one-genome UMAP plots.
     """
+
+    #make sure missing_value_as is an integer
+    if type(missing_value_as) != int:
+        raise ValueError(f"The missing_value_as {missing_value_as} is not of type int. Exiting.")
+
     # read in the sample dataframe. We will need this later
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
     # Read in the ALGcomboixfile
@@ -1626,8 +1632,28 @@ def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
     if smalllargeNaN not in ["small", "large"]:
         raise ValueError(f"The smalllargeNaN {smalllargeNaN} is not 'small' or 'large'. Exiting.")
     if smalllargeNaN == "large":
+        # If the matrix is large, we have to convert the real zeros to -1 before we change to csf
         # we have to flip the values of the lil matrix
-        lil.data[lil.data == 0] = 999999999999
+        print("setting zeros to -1")
+        lil.data[lil.data == 0] = -1
+        # We have to convert this to a dense matrix now. There is no way to modify the large values in a sparse matrix.
+        print("Converting to a dense matrix. RAM will increase now.")
+        # Goodbye, RAM.
+        matrix = lil.toarray()
+        del lil
+        # if the missing_values is "large", then we have to convert the 0 to the missing_value_as
+        # Here we switch the representation, namely we don't have to access the data with .data now that this
+        #  is a dense matrix.
+        print(f"setting zeros to {missing_value_as}")
+        matrix[matrix == 0] = missing_value_as
+        # now we convert the -1s to 0
+        print("converting -1s to 0")
+        matrix[matrix == -1] = 0
+    elif smalllargeNaN == "small":
+        # just change the name
+        matrix = lil
+        del lil
+
     # check that min_dist is between 0 and 1
     if min_dist < 0 or min_dist > 1:
         raise IOError(f"The min_dist {min_dist} is not between 0 and 1. Exiting.")
@@ -1648,7 +1674,7 @@ def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
             print(f"    PLOTTING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
             reducer = umap.UMAP(low_memory=True, n_neighbors = n_neighbors, min_dist = min_dist)
             start = time.time()
-            mapper = reducer.fit(lil)
+            mapper = reducer.fit(matrix)
             stop = time.time()
             print("   - It took {} seconds to fit_transform the UMAP".format(stop - start))
             # save the UMAP as a bokeh plot

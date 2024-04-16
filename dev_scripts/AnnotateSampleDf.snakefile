@@ -69,7 +69,9 @@ rule all:
         expand(ofix + "/{dfname}.supplemented.df",
             dfname=dfname_to_filepath.keys()),
         expand(ofix + "/{dfname}.supplemented.pdf",
-            dfname=dfname_to_filepath.keys())
+            dfname=dfname_to_filepath.keys()),
+        # this is the ALG dispersion plot
+        ofix + "/measurements/rbh_dispersion_plot.pdf"
 
 def stats_get_mem_mb(wildcards, attempt):
     """
@@ -298,6 +300,9 @@ rule make_composite_dataframe:
         compositedf.to_csv(output.df, sep="\t", index=True)
 
 rule pdf:
+    """
+    This makes a plot of all the statistics, with each statistic plotted over the samples
+    """
     input:
         df = ofix + "/{dfname}.supplemented.df",
         plotdfs = os.path.join(snakefile_path, "PhyloTreeUMAP_plotdfs.py")
@@ -311,3 +316,19 @@ rule pdf:
         """
         python {input.plotdfs} --plot_features -f {input.df} -o {output.pdf}
         """
+
+rule dispersion_plot:
+    """
+    This generates a dispersion plot of the rbh files from a single dataframe.
+    """
+    input:
+        df = ofix + "/measurements/allsamples.rbhstats.collated.df",
+        alg_rbh  = config["ALG_rbh"]
+    output:
+        pdf = ofix + "/measurements/rbh_dispersion_plot.pdf"
+    threads: 1
+    resources:
+        mem_mb  = 1000,
+        runtime = 3
+    run:
+        asd.bin_and_plot_decay(input.alg_rbh, input.df, output.pdf, config["ALG_name"], 5)

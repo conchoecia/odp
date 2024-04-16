@@ -71,7 +71,7 @@ if results_base_directory.endswith("/"):
 
 odog_n    = [10, 15, 20, 35, 50, 75, 100, 150, 250]
 odog_m    = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
-odog_size = ["small"]
+odog_size = ["large", "small"]
 
 odol_n    = [5, 15, 50]
 odol_m    = [0.0, 0.01, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
@@ -79,34 +79,34 @@ odol_size = ["large"]
 weighting_methods = ["phylogenetic", "mean"]
 rule all:
     input:
-        #    ┓  ┓
-        # ┏┓┏┫┏┓┃ - One-Dot-One-Locus plots
-        # ┗┛┗┻┗┛┗   Each dot represents a single locus, and the data vector is the distance to all other loci
-        # These two sets of files are generated during the rule odolGenCoo and the function topoumap_genmatrix()
-        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.coo.npz",
-                taxanalysis = config["taxids"],
-                weighting = weighting_methods,
-                sizeNaN = odol_size),
-        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.sampledf.tsv",
-                taxanalysis = config["taxids"],
-                weighting = weighting_methods,
-                sizeNaN = odol_size),
-        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.pdf",
-                n = odol_n,
-                m = odol_m,
-                taxanalysis = config["taxids"],
-                sizeNaN = odol_size,
-                weighting = weighting_methods),
-        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
-                n = odol_n,
-                m = odol_m,
-                taxanalysis = config["taxids"],
-                sizeNaN = odol_size,
-                weighting = weighting_methods),
-        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.paramsweep.pdf",
-                taxanalysis = config["taxids"],
-                sizeNaN = odol_size,
-                weighting = weighting_methods),
+        ##    ┓  ┓
+        ## ┏┓┏┫┏┓┃ - One-Dot-One-Locus plots
+        ## ┗┛┗┻┗┛┗   Each dot represents a single locus, and the data vector is the distance to all other loci
+        ## These two sets of files are generated during the rule odolGenCoo and the function topoumap_genmatrix()
+        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.coo.npz",
+        #        taxanalysis = config["taxids"],
+        #        weighting = weighting_methods,
+        #        sizeNaN = odol_size),
+        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.sampledf.tsv",
+        #        taxanalysis = config["taxids"],
+        #        weighting = weighting_methods,
+        #        sizeNaN = odol_size),
+        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.pdf",
+        #        n = odol_n,
+        #        m = odol_m,
+        #        taxanalysis = config["taxids"],
+        #        sizeNaN = odol_size,
+        #        weighting = weighting_methods),
+        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
+        #        n = odol_n,
+        #        m = odol_m,
+        #        taxanalysis = config["taxids"],
+        #        sizeNaN = odol_size,
+        #        weighting = weighting_methods),
+        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.paramsweep.pdf",
+        #        taxanalysis = config["taxids"],
+        #        sizeNaN = odol_size,
+        #        weighting = weighting_methods),
         #    ┓
         # ┏┓┏┫┏┓┏┓ - One-Dot-One-Genome plots
         # ┗┛┗┻┗┛┗┫   Each dot represents a single genome, and the data vector is the distance pairs
@@ -255,7 +255,7 @@ rule odogCooGen:
     input:
         gbgzfiles = expand(results_base_directory + "/distance_matrices/{sample}.gb.gz",
                            sample = config["sample_to_rbh_file"].keys()),
-        combotoindex = results_base_directory + "/combo_to_index.txt",
+        combotoindex = results_base_directory + "/combo_to_index.txt"   ,
         sampletsv    = results_base_directory + "/sampledf.tsv"
     output:
         coo    = results_base_directory + "/allsamples.coo.npz"
@@ -271,9 +271,31 @@ rule odogCooGen:
         coo = construct_coo_matrix_from_sampledf(sampledf, alg_combo_to_ix)
         save_npz(output.coo, coo)
 
+def odogPlotUMAP_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for the script depends on the size of the input genome.
+    """
+    attemptdict = {1: 200000,
+                   2: 250000,
+                   3: 300000,
+                   4: 350000,
+                   5: 400000}
+    return attemptdict[attempt]
+
+def odogPlotUMAP_get_runtime(wildcards, attempt):
+    """
+    The amount of RAM needed for the script depends on the size of the input genome.
+    """
+    attemptdict = {1: 300,
+                   2: 360,
+                   3: 420,
+                   4: 480,
+                   5: 540}
+    return attemptdict[attempt]
+
 rule odogPlotUMAP:
     input:
-        sampletsv    = results_base_directory + "/sampledf.tsv",
+        sampletsv    = results_base_directory + "/sampledf.tsv"      ,
         combotoindex = results_base_directory + "/combo_to_index.txt",
         coo    = results_base_directory + "/allsamples.coo.npz"
     output:
@@ -282,10 +304,11 @@ rule odogPlotUMAP:
     threads: 1
     params:
         outdir = results_base_directory + "/allsamples",
-    retries: 6
+    retries: 4
     resources:
-        mem_mb = coo_get_mem_mb,
-        runtime = coo_get_runtime
+        mem_mb  = odogPlotUMAP_get_mem_mb,
+        runtime = odogPlotUMAP_get_runtime,
+        bigUMAPSlots = 1
     run:
         #print(f"These are the wildcards: {wildcards}")
         plot_umap_from_files(input.sampletsv, input.combotoindex, input.coo,
@@ -301,7 +324,7 @@ rule odogPDF:
     retries: 4
     resources:
         mem_mb = pdf_get_mem_mb,
-        runtime = 5
+        runtime = 10
     run:
         plot_umap_pdf(input.df, output.pdf, "Allsamples", wildcards.sizeNaN, wildcards.n, wildcards.m)
 
