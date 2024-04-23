@@ -54,7 +54,8 @@ from PhyloTreeUMAP import (algcomboix_file_to_dict,
                            topoumap_plotumap,
                            sampleToRbhFileDict_to_sample_matrix)
 
-from odol_annotate_blast import umapdf_one_species_one_query
+from odol_annotate_blast import (umapdf_one_species_one_query,
+                                 umapdf_reimbedding_bokeh_plot_one_species)
 
 # ODP-specific imports
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
@@ -168,6 +169,11 @@ for thissp in config["species_of_interest"]:
         for n, m, ALG, query in product(odol_n, odol_m, config["targetALGs"], config["blast_files"]):
             f = basedir + f"/ALG_reimbedding/one_analysis_one_species_one_query/{thisanalysis}.{thissp}.{query}.{ALG}.neighbors_{n}.mind_{m}.missing_large.subchrom.pdf"
             file_targets.append(f)
+            f = f.replace(".pdf", ".df")
+            file_targets.append(f)
+            f = f.replace(".df", ".html")
+            file_targets.append(f)
+
 print("species of interest are: {}".format(config["species_of_interest"]))
 print("analysis_to_sampledf: {}".format(analysis_to_sampledf))
 
@@ -324,12 +330,11 @@ def tophit_get_mem_mb(wildcards, attempt):
     """
     The amount of RAM needed could change.
     """
-    attemptdict = {1: 250,
-                   2: 500,
-                   3: 1000,
-                   4: 2000,
-                   5: 4000,
-                   6: 8000}
+    attemptdict = {1: 500,
+                   2: 1000,
+                   3: 2000,
+                   4: 4000,
+                   5: 8000}
     return attemptdict[attempt]
 
 rule top_hit:
@@ -344,7 +349,7 @@ rule top_hit:
     threads: 1
     resources:
         mem_mb = tophit_get_mem_mb,
-        runtime = 1
+        runtime = 4
     params:
         split_first_colon = config["blast_split_first_colon"]
     run:
@@ -794,7 +799,8 @@ rule plot_one_species_one_query:
         blastp = basedir + "/blast_filt/{query}/{sample}_results.filt.blastp",
         algrbhfile = config["ALG_rbh_file"],
     output:
-        outPDF = basedir + "/ALG_reimbedding/one_analysis_one_species_one_query/{analysis}.{sample}.{query}.{ALG}.neighbors_{n}.mind_{m}.missing_large.subchrom.pdf"
+        outPDF = basedir + "/ALG_reimbedding/one_analysis_one_species_one_query/{analysis}.{sample}.{query}.{ALG}.neighbors_{n}.mind_{m}.missing_large.subchrom.pdf",
+        outdf  = basedir + "/ALG_reimbedding/one_analysis_one_species_one_query/{analysis}.{sample}.{query}.{ALG}.neighbors_{n}.mind_{m}.missing_large.subchrom.df"
     threads: 1
     resources:
         mem_mb = tophit_get_mem_mb,
@@ -804,6 +810,29 @@ rule plot_one_species_one_query:
                                      wildcards.ALG, wildcards.n, wildcards.m,
                                      wildcards.query, output.outPDF, species = wildcards.sample)
 
+rule plot_one_species_one_query_bokeh:
+    """
+    This takes the output of plot_one_species_one_query and makes a bokeh plot that we can interact with.
+    """
+    input:
+        df  = basedir + "/ALG_reimbedding/one_analysis_one_species_one_query/{analysis}.{sample}.{query}.{ALG}.neighbors_{n}.mind_{m}.missing_large.subchrom.df"
+    output:
+        df  = basedir + "/ALG_reimbedding/one_analysis_one_species_one_query/{analysis}.{sample}.{query}.{ALG}.neighbors_{n}.mind_{m}.missing_large.subchrom.html"
+    threads: 1
+    resources:
+        mem_mb = tophit_get_mem_mb,
+        runtime = 1
+    params:
+        plot_title = lambda wildcards: f"UMAP of {wildcards.sample} from {wildcards.analysis},\nALG {wildcards.ALG}, with {wildcards.query} blast results, min_dist {wildcards.m}, n_neighbors {wildcards.n}"
+    run:
+        umapdf_reimbedding_bokeh_plot_one_species(input.df,
+                                                  params.plot_title,
+                                                  output.df)
+
+
+
+
+# I don't think this is used anymore - APril 19th 2024
 #def plot_paramsweep_one_species_one_query(dataframe_files, blastp):
 #    """
 #    Makes the plot for the parameter sweep plot when we provide multiple dataframes.

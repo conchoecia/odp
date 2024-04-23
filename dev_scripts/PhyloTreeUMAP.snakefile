@@ -275,22 +275,22 @@ def odogPlotUMAP_get_mem_mb(wildcards, attempt):
     """
     The amount of RAM needed for the script depends on the size of the input genome.
     """
-    attemptdict = {1: 200000,
-                   2: 250000,
-                   3: 300000,
-                   4: 350000,
-                   5: 400000}
+    attemptdict = {#1: 200000,
+                   1: 250000,
+                   2: 300000,
+                   3: 350000,
+                   4: 400000}
     return attemptdict[attempt]
 
 def odogPlotUMAP_get_runtime(wildcards, attempt):
     """
     The amount of RAM needed for the script depends on the size of the input genome.
     """
-    attemptdict = {1: 300,
-                   2: 360,
-                   3: 420,
-                   4: 480,
-                   5: 540}
+    attemptdict = {#1: 300,
+                   1: 360,
+                   2: 420,
+                   3: 480,
+                   4: 540}
     return attemptdict[attempt]
 
 rule odogPlotUMAP:
@@ -304,7 +304,7 @@ rule odogPlotUMAP:
     threads: 1
     params:
         outdir = results_base_directory + "/allsamples",
-    retries: 4
+    retries: 3
     resources:
         mem_mb  = odogPlotUMAP_get_mem_mb,
         runtime = odogPlotUMAP_get_runtime,
