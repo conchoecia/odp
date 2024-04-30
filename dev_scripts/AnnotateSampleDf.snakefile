@@ -59,19 +59,63 @@ dfname_to_filepath = {os.path.basename(x).replace(".df","").replace(".tsv",""): 
                       for x in config["dfs"]}
 print(dfname_to_filepath)
 
+
+# If we want to make subplots of specific clades, execute the code below.
+# There are a lot of checks to perform.
+if "subplots" in config:
+    for subplot in config["subplots"]:
+        # make sure that each key in the subplots has at least "fileprefix", "title", and "taxids" keys
+        for key in ["fileprefix", "title", "taxids_to_include"]:
+            if not key in subplot:
+                raise ValueError(f"Subplot {subplot} does not have a {key} key")
+        # assert types
+        if type(subplot["fileprefix"]) != str:
+            raise ValueError(f"Subplot key for {subplot} is not a string")
+        if type(subplot["title"]) != str:
+            raise ValueError(f"Subplot key for {subplot} is not a string")
+        if type(subplot["taxids_to_include"]) != list:
+            raise ValueError(f"Subplot key for {subplot} is not a list")
+        # check that the fileprefixes of the subplots are all just alphanumeric
+        if not subplot["fileprefix"].isalnum():
+            raise ValueError(f"Subplot key for {subplot} is not alphanumeric. We only allow the chars [a-zA-Z0-9]")
+        # Check that the values in "taxids_to_include" are all integers
+        for thisval in subplot["taxids_to_include"]:
+            if not isinstance(thisval, int):
+                raise ValueError(f"Value {thisval} in subplot key {subplot} is not an integer. We only allow integers")
+        # Check all of the keys, and only allow the three we mentioned, plus "taxids_to_exclude"
+        for thiskey in subplot.keys():
+            if thiskey not in ["fileprefix", "title", "taxids_to_include", "taxids_to_exclude"]:
+                raise ValueError(f"Subplot key for {subplot} is not allowed. We only allow fileprefix, title, taxids, and taxids_to_include")
+
+        # if taxids_to_exclude is in the dictionary, make sure that all of the values are ints
+        if "taxids_to_exclude" in subplot:
+            if type(subplot["taxids_to_exclude"]) != list:
+                raise ValueError(f"Subplot key for {subplot} is not a list")
+            for thisval in subplot["taxids_to_exclude"]:
+                if not isinstance(thisval, int):
+                    raise ValueError(f"Value {thisval} in {subplot} is not an integer. We only allow integers")
+        # now that we are sure that subplots is legal, reformat such that the fileprefix is the key to one big dict
+    config["subplots"] = {s["fileprefix"]: s for s in config["subplots"]}
+
+print(config["subplots"])
+
 ofix = "dfannotate"
 
 rule all:
     input:
-        ofix + "/measurements/allsamples.protstats.collated.df",
-        ofix + "/measurements/allsamples.rbhstats.collated.df",
-        ofix + "/measurements/allsamples.genomestats.collated.df",
-        expand(ofix + "/{dfname}.supplemented.df",
-            dfname=dfname_to_filepath.keys()),
-        expand(ofix + "/{dfname}.supplemented.pdf",
-            dfname=dfname_to_filepath.keys()),
-        # this is the ALG dispersion plot
-        ofix + "/measurements/rbh_dispersion_plot.pdf"
+        #ofix + "/measurements/allsamples.protstats.collated.df",
+        #ofix + "/measurements/allsamples.rbhstats.collated.df",
+        #ofix + "/measurements/allsamples.genomestats.collated.df",
+        #expand(ofix + "/{dfname}.supplemented.df",
+        #    dfname=dfname_to_filepath.keys()),
+        #expand(ofix + "/{dfname}.supplemented.pdf",
+        #    dfname=dfname_to_filepath.keys()),
+        ## this is the ALG dispersion plot
+        #ofix + "/measurements/rbh_dispersion_plot.pdf",
+        # these are all the subclade plots
+        expand(ofix + "/subplots/{dfname}_{subplot}.pdf",
+               dfname = dfname_to_filepath.keys(),
+               subplot = config["subplots"].keys())
 
 def stats_get_mem_mb(wildcards, attempt):
     """
@@ -332,3 +376,27 @@ rule dispersion_plot:
         runtime = 3
     run:
         asd.bin_and_plot_decay(input.alg_rbh, input.df, output.pdf, config["ALG_name"], 5)
+
+rule subclade_plots:
+    """
+    These are plots of the subclades that are defined in the config file.
+    The output of this file is a pdf that has the dots of the specified clade highlighted, and everything else is not highlighted.
+    """
+    input:
+        df  = ofix + "/{dfname}.supplemented.df"
+    output:
+        pdf = ofix + "/subplots/{dfname}_{subplot}.pdf"
+    threads: 1
+    resources:
+        mem_mb  = 1000,
+        runtime = 5
+    params:
+        title = lambda wildcards: config["subplots"][wildcards.subplot]["title"],
+        taxids_to_include = lambda wildcards: config["subplots"][wildcards.subplot]["taxids_to_include"],
+        taxids_to_exclude = lambda wildcards: config["subplots"][wildcards.subplot].get("taxids_to_exclude", [])
+    run:
+        asd.plot_UMAP_highlight_subclade(input.df,
+                                         params.title,
+                                         params.taxids_to_include,
+                                         params.taxids_to_exclude,
+                                         output.pdf)

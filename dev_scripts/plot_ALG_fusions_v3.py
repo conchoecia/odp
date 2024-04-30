@@ -1159,9 +1159,9 @@ class SplitLossColocTree:
                     6340:    "#0CF247", # Annelida
                    2697496:  "#7624BF", # Gnathifera
                   33511:   "#78A6AF", # Deuterostomes
-                   # Chordates
-                    # Vertebrates
-                     # Cyclostomes
+                   # Chordates 7711
+                    # Vertebrates 7742
+                     # Cyclostomes 
                      1476529: "#F23341", # Jawless fishes - hagfish lampreys
                      # Gnathostomes
                       # Cartilaginous fishes - Condrichthyes

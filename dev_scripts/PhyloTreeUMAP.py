@@ -885,7 +885,7 @@ def umap_mapper_to_bokeh_topoumap(mapper, algrbhdf,
                                "gene_group":   algrbhdf["gene_group"],
                                "color":        algrbhdf["color"]
                                })
-    # if the values in 
+    # if the values in # TODO I never finished everything to the left of this
     color_dict = {i: algrbhdf["color"][i] for i in algrbhdf.index}
 
 

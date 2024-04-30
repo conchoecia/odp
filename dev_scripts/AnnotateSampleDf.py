@@ -5,6 +5,7 @@ This program contains the functions used by AnnotateSampleDf.snakefile
 """
 
 # This block imports fasta-parser as fasta
+from ast import literal_eval
 import os
 import sys
 thispath = os.path.dirname(os.path.realpath(__file__))
@@ -435,3 +436,81 @@ def bin_and_plot_decay(ALGrbhdf_filepath: str, algrbhrbhstatsdf_filepath: str, o
     odp_plot.format_matplotlib()
     # Save the plot as a jpeg
     plt.savefig(outpdf_filepath, format='pdf')
+
+def taxid_list_include_exclude_boolean(taxid_list, taxids_to_include, taxids_to_exclude):
+    """
+    This function returns True if the taxid is to be included in the plot.
+    Returns False if it is to be excluded.
+    This is a helper function that will be called from plot_UMAP_highlight_subclade() in a lambda function.
+    """
+    # make sure the taxid_list is a list, if not, interpret it as a literal
+    if not isinstance(taxid_list, list):
+        taxid_list = literal_eval(taxid_list)
+    # logic for checking whether to include
+    taxid_list = set(taxid_list)
+    include_intersection = taxid_list.intersection(set(taxids_to_include))
+    exclude_intersection = taxid_list.intersection(set(taxids_to_exclude))
+    return (len(include_intersection) > 0) and (len(exclude_intersection) == 0)
+
+def plot_UMAP_highlight_subclade(df_filepath, title, taxids_to_include,
+                                 taxids_to_exclude, pdfout,
+                                 gray_color = "#D6D9E0") -> None:
+    """
+    This plot shows the points of a UMAP, and highlights species in a subclade. Non-highlighted species are plotted in gray.
+
+    Inputs:
+      - df_filepath: The path to the dataframe output from the rule make_composite_dataframe from the snakefile.
+      - title: The title of the plot that will be put on the pdf.
+      - taxids_to_include: A list of taxids that will be highlighted in the plot.
+                            If the taxid string has this integer in it, it will be highlighted.
+      - taxids_to_exclude: A list of taxids that will be excluded from the plot.
+                            If the taxid string has this integer in it, it will be excluded,
+                            even if it is not in the taxids_to_include list.
+      - pdfout: The path to the output pdf file.
+      - gray_color: The color of the points that are not in the taxids_to_include list.
+    """
+    # enforce the types of the inputs
+    if not isinstance(df_filepath, str):
+        raise ValueError("df_filepath must be a string.")
+    if not isinstance(title, str):
+        raise ValueError("title must be a string.")
+    if not isinstance(taxids_to_include, list):
+        raise ValueError("taxids_to_include must be a list.")
+    if not isinstance(taxids_to_exclude, list):
+        raise ValueError("taxids_to_exclude must be a list.")
+    if not isinstance(pdfout, str):
+        raise ValueError("pdfout must be a string.")
+    # ensure that df_filepath exists
+    if not os.path.isfile(df_filepath):
+        raise ValueError(f"File {df_filepath} does not exist.")
+    for thislist in [taxids_to_include, taxids_to_exclude]:
+        if not all(isinstance(x, int) for x in thislist):
+            raise ValueError("All elements of taxids_to_include and taxids_to_exclude must be integers.")
+
+    # read in the dataframe
+    df = pd.read_csv(df_filepath, sep="\t")
+    print(df)
+    # change the color values of the points based on the taxids
+    df["color"] = df.apply(lambda x:
+                    x["color"] if taxid_list_include_exclude_boolean(x["taxid_list"],
+                        taxids_to_include, taxids_to_exclude)
+                    else gray_color, axis=1)
+    # make a plot with a single panel that is 1x1 inches.
+    fig = plt.figure(figsize=(2, 2))
+
+    # scatter the UMAP1 and UMAP2 columns of the df_embedding
+    plt.scatter(df["UMAP1"], df["UMAP2"],
+                c = list(df["color"]), s = 1,
+                linewidths = 0, edgecolors=None)
+
+    # Set the title
+    plt.title(title, fontsize=6)
+
+    # turn off the x and y axis ticks and tick values
+    plt.xticks([])
+    plt.yticks([])
+    # save the figure
+    #print(pdfout)
+    plt.savefig(pdfout, format='pdf')
+    plt.close()
+

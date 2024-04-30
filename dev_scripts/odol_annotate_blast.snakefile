@@ -122,7 +122,10 @@ analysis_to_coo      = {x.split(".method_")[0].replace(".coo.npz", ""): os.path.
 sample_files = [x for x in os.listdir(config["subchrom_directory"]) if x.endswith(".sampledf.tsv")]
 analysis_to_sampledf = {}
 for thisanalysis in analysis_to_coo:
-    thissampledf = [x for x in sample_files if thisanalysis in x][0]
+    hits = [x for x in sample_files if thisanalysis in x]
+    if len(hits) == 0:
+        raise ValueError(f"No sampledf file for {thisanalysis}")
+    thissampledf = hits[0]
     analysis_to_sampledf[thisanalysis] = os.path.join(config["subchrom_directory"], thissampledf)
 
 # Load in all of the dfs and make an analysis_to_samples dictionary.
@@ -156,6 +159,7 @@ if not all([x in sample_to_rbh_file for x in unique_samples]):
 
 #odol_n = [5, 10, 15]
 #odol_m = [0, 0.01, 0.1]
+# THESE ARE THE REEMBEDDED PLOTS
 odol_n = [15]
 odol_m = [0.1]
 # we need to make a list of target files, because expand doesn't have the ability for us
@@ -177,6 +181,7 @@ for thissp in config["species_of_interest"]:
 print("species of interest are: {}".format(config["species_of_interest"]))
 print("analysis_to_sampledf: {}".format(analysis_to_sampledf))
 
+
 wildcard_constraints:
     analysis = "[A-Za-z0-9_]+",
     query    = "[A-Za-z0-9]+" ,
@@ -184,12 +189,12 @@ wildcard_constraints:
 
 rule all:
     input:
-        expand(basedir + "/blast_concat/{query}/{analysis}.concat.filt.blastp",
-                query = config["blast_files"],
-                analysis = analysis_to_samples.keys()),
-        expand(basedir + "/filt_coo/{analysis}_{ALG}.matrix.filt.tsv.gz",
-                analysis = analysis_to_samples.keys(),
-                ALG = config["targetALGs"]),
+        #expand(basedir + "/blast_concat/{query}/{analysis}.concat.filt.blastp",
+        #        query = config["blast_files"],
+        #        analysis = analysis_to_samples.keys()),
+        #expand(basedir + "/filt_coo/{analysis}_{ALG}.matrix.filt.tsv.gz",
+        #        analysis = analysis_to_samples.keys(),
+        #        ALG = config["targetALGs"]),
         #expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.df",
         #        analysis = analysis_to_samples.keys(),
         #        ALG = config["targetALGs"],
@@ -349,7 +354,7 @@ rule top_hit:
     threads: 1
     resources:
         mem_mb = tophit_get_mem_mb,
-        runtime = 4
+        runtime = 2
     params:
         split_first_colon = config["blast_split_first_colon"]
     run:
@@ -465,7 +470,7 @@ rule filtCOO:
         thisALG = lambda wildcards: wildcards.ALG
     resources:
         mem_mb = tophit_get_mem_mb,
-        runtime = 1
+        runtime = 3
     retries: 6
     run:
         # readh in the alg rbh dataframe
@@ -627,7 +632,7 @@ rule ALG_reimbedding:
     threads: 1
     resources:
         mem_mb = reimbedding_get_mem_mb,
-        runtime = 10
+        runtime = 20
     run:
         tsvgz_plotumap(params.analysis, input.sampledf, input.algrbhfile, input.tsvgz,
                        params.outdir, "large", params.n, params.m,
