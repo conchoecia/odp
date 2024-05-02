@@ -98,7 +98,6 @@ def taxids_of_interest_to_analyses():
                [[6073],  []],      # cnidaria
                [[6340],  [42113]], # annelida minus clitellata
                [[42113], []],      # clitellata
-               [[6447],  [6606]],  # mollusca minus coleoida
                [[6606],  []],      # coleoida
                [[50557], []],      # insecta
                [[32341], []],      # Sophophora - subset of drosophilids
@@ -107,6 +106,19 @@ def taxids_of_interest_to_analyses():
                [[7586],  []],      # echinodermata
                [[7742],  []],      # Vertebrata
                #[[33317],[]]
+               # special analyses to look at cephalopods
+               [[6447],    [6606]], # mollusca minus coleoida
+               [[6447],    []],     # mollusca
+               [[47122],   []],     # Aplacophora
+               [[6544],    []],     # Bivalvia
+               [[6448],    []],     # Gastropoda
+               [[358446],  []],     # Monoplacophora
+               [[6650],    []],     # Polyplacophora
+               [[32584],    []],    # Scaphopoda
+               [[215450],  []],     # Coleoida
+               [[32577],   []],     # Nautiloidea
+               [[6606],    []],     # Decapodiformes
+               [[215451],  []],     # Octopodiformes
               ]
     return taxids_to_analyses(taxids)
 

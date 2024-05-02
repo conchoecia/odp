@@ -76,37 +76,37 @@ odog_size = ["large", "small"]
 odol_n    = [5, 15, 50]
 odol_m    = [0.0, 0.01, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
 odol_size = ["large"]
-weighting_methods = ["phylogenetic", "mean"]
+weighting_methods = ["phylogenetic"]
 rule all:
     input:
-        ##    ┓  ┓
-        ## ┏┓┏┫┏┓┃ - One-Dot-One-Locus plots
-        ## ┗┛┗┻┗┛┗   Each dot represents a single locus, and the data vector is the distance to all other loci
-        ## These two sets of files are generated during the rule odolGenCoo and the function topoumap_genmatrix()
-        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.coo.npz",
-        #        taxanalysis = config["taxids"],
-        #        weighting = weighting_methods,
-        #        sizeNaN = odol_size),
-        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.sampledf.tsv",
-        #        taxanalysis = config["taxids"],
-        #        weighting = weighting_methods,
-        #        sizeNaN = odol_size),
-        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.pdf",
-        #        n = odol_n,
-        #        m = odol_m,
-        #        taxanalysis = config["taxids"],
-        #        sizeNaN = odol_size,
-        #        weighting = weighting_methods),
-        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
-        #        n = odol_n,
-        #        m = odol_m,
-        #        taxanalysis = config["taxids"],
-        #        sizeNaN = odol_size,
-        #        weighting = weighting_methods),
-        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.paramsweep.pdf",
-        #        taxanalysis = config["taxids"],
-        #        sizeNaN = odol_size,
-        #        weighting = weighting_methods),
+        #    ┓  ┓
+        # ┏┓┏┫┏┓┃ - One-Dot-One-Locus plots
+        # ┗┛┗┻┗┛┗   Each dot represents a single locus, and the data vector is the distance to all other loci
+        # These two sets of files are generated during the rule odolGenCoo and the function topoumap_genmatrix()
+        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.coo.npz",
+                taxanalysis = config["taxids"],
+                weighting = weighting_methods,
+                sizeNaN = odol_size),
+        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.sampledf.tsv",
+                taxanalysis = config["taxids"],
+                weighting = weighting_methods,
+                sizeNaN = odol_size),
+        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.pdf",
+                n = odol_n,
+                m = odol_m,
+                taxanalysis = config["taxids"],
+                sizeNaN = odol_size,
+                weighting = weighting_methods),
+        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
+                n = odol_n,
+                m = odol_m,
+                taxanalysis = config["taxids"],
+                sizeNaN = odol_size,
+                weighting = weighting_methods),
+        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.paramsweep.pdf",
+                taxanalysis = config["taxids"],
+                sizeNaN = odol_size,
+                weighting = weighting_methods),
         #    ┓
         # ┏┓┏┫┏┓┏┓ - One-Dot-One-Genome plots
         # ┗┛┗┻┗┛┗┫   Each dot represents a single genome, and the data vector is the distance pairs
