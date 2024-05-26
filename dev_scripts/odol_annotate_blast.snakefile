@@ -55,6 +55,7 @@ from PhyloTreeUMAP import (algcomboix_file_to_dict,
                            sampleToRbhFileDict_to_sample_matrix)
 
 from odol_annotate_blast import (umapdf_one_species_one_query,
+                                 tsvgz_calcUMAP,
                                  umapdf_reimbedding_bokeh_plot_one_species)
 
 # ODP-specific imports
@@ -195,11 +196,11 @@ rule all:
         #expand(basedir + "/filt_coo/{analysis}_{ALG}.matrix.filt.tsv.gz",
         #        analysis = analysis_to_samples.keys(),
         #        ALG = config["targetALGs"]),
-        #expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.df",
-        #        analysis = analysis_to_samples.keys(),
-        #        ALG = config["targetALGs"],
-        #        n = odol_n,
-        #        m = odol_m),
+        expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.df",
+                analysis = analysis_to_samples.keys(),
+                ALG = config["targetALGs"],
+                n = odol_n,
+                m = odol_m),
         #expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.bokeh.html",
         #        analysis = analysis_to_samples.keys(),
         #        ALG = config["targetALGs"],
@@ -219,7 +220,7 @@ rule all:
         #        n = odol_n,
         #        m = odol_m),
         # file_targets contains the one-analysis-one-query-one-sample plots
-        file_targets
+        #file_targets
 
 rule install_diamond:
     output:
@@ -496,147 +497,37 @@ rule filtCOO:
         #save the df to a tsv.gz file
         coodf.to_csv(output.filt_coo, sep="\t", compression="gzip", index=True)
 
-def tsvgz_plotumap(sample, sampledffile, algrbhfile, tsvgz,
-                   outdir, smalllargeNaN, n_neighbors, min_dist,
-                   UMAPdf, UMAPbokeh):
-    """
-    This all-in-one plotting method makes UMAPs for the locus distance ALGs
-        constructed by averaging across multiple species.
-    Specifically, this is used for plotting the one-dot-one-locus UMAP plots.
-    """
-    # check that the types are correct
-    if type(n_neighbors) not in [int, float]:
-        raise ValueError(f"The n_neighbors {n_neighbors} is not of type int or float. Exiting.")
-    if type(min_dist) not in [float]:
-        raise ValueError(f"The min_dist {min_dist} is not of type float. Exiting.")
-    # save the UMAP as a bokeh plot
-    if not UMAPbokeh.endswith(".html"):
-        raise ValueError(f"The output file {outhtml} does not end with '.html'. Exiting.")
-
-    # read in the sample dataframe. We will need this later
-    df = pd.read_csv(tsvgz, sep = "\t", index_col = 0)
-    # read in the algrbh as a pandasdf
-    algrbhdf = parse_rbh(algrbhfile)
-    # only keep the rows that are in the df's indices that match the algrbhdf's rbh column'
-    algrbhdf = algrbhdf[algrbhdf["rbh"].isin(df.index)]
-
-    # read in the sampledf
-    sampledf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
-    # We need a unique set of files for each of these
-    # In every case, we must produce a .df file and a .bokeh.html file
-    # Sometimes, there are errors with making the UMAP, in that if the graph is not fully connected UMAP will fail.
-    # For this reason, we should anticipate this error, and figure out what to do if it happens.
-    print(f"    PLOTTING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
-    reducer = umap.UMAP(n_neighbors = n_neighbors, min_dist = min_dist)
-    disconnected = False
-    with warnings.catch_warnings(record=True) as w:
-        # Ignore UserWarnings temporarily
-        warnings.filterwarnings("ignore", category=UserWarning)
-        # Your code that might raise the warning
-        mapper = reducer.fit(df.to_numpy())
-        # Check if any warning was generated
-        if w:
-            for warning in w:
-                if issubclass(warning.category, UserWarning):
-                    disconnected = True
-                    print("Got the warning that the graph is not fully connected. This happens mostly in the case of clades with highly conserved genomes:", warning.message)
-                    # You can further process or log the warning here if needed
-    # now we push left
-    # save the UMAP as a bokeh plot
-    if disconnected:
-        plot_title = f"(Disconnected) Topo UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
-    else:
-        plot_title = f"Topo UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
-
-    print("The embedding after fitting is:")
-    print(mapper)
-    print(mapper.embedding_)
-    #              ┓    •
-    # ┓┏┏┳┓┏┓┏┓  ┏┓┃┏┓╋╋┓┏┓┏┓
-    # ┗┻┛┗┗┗┻┣┛  ┣┛┗┗┛┗┗┗┛┗┗┫
-    #        ┛   ┛          ┛
-    hover_data = pd.DataFrame({"rbh_ortholog": [-1] * len(df),
-                               "gene_group":   [-1] * len(df),
-                               "color":        [-1] * len(df)
-                               })
-    hover_data.index = algrbhdf["rbh"]
-    hover_data["rbh_ortholog"] = hover_data.index
-    # use apply to match the index to the "rbh" column of algrbhdf, and return the gene_group
-    hover_data["gene_group"] = [algrbhdf[algrbhdf["rbh"] == x]["gene_group"].values[0] for x in hover_data.index]
-    hover_data["color"]      = [algrbhdf[algrbhdf["rbh"] == x]["color"].values[0]      for x in hover_data.index]
-    hover_data = hover_data.reset_index(drop = True)
-    print(hover_data)
-    # the index is now the name of the ortholog, so we have to get the colors another way
-    #color_dict = dict(zip(algrbhdf["rbh"], algrbhdf["color"]))
-    color_dict = dict(zip(hover_data.index, hover_data["color"]))
-    print(color_dict)
-    print(f"type of mapper is: {type(mapper)}")
-    print(f"type of color_dict is: {type(color_dict)}")
-    print(f"type of hover_data is: {type(hover_data)}")
-    print(f"type of labels is: {type(list(hover_data['gene_group']))}")
-    print(f"mapper is: \n", mapper)
-    print(f"color_dict is: \n", color_dict)
-    print(f"hover_data is: \n", hover_data)
-    print(f"labels is: \n", list(hover_data["gene_group"]))
-
-    # Needs to be umap 0.5.5 or later
-    plot = umap.plot.interactive(mapper,
-                                 color_key = color_dict,
-                                 hover_data = hover_data,
-                                 labels = list(hover_data["rbh_ortholog"]), # TODO this needs to be changd to a list comprehension
-                                 tools=[], # this needs to be deleted, or else the zoom tool will not work.
-                                 point_size = 4
-                                 )
-    # add a title to the plot
-    plot.title.text = plot_title
-    # output to an HTML file
-    bokeh.io.output_file(UMAPbokeh)
-    # Save the plot to an HTML file
-    bokeh.io.save(plot)
-
-    # get the coordinates of the UMAP
-    df_embedding = pd.DataFrame(mapper.embedding_, columns=['UMAP1', 'UMAP2'])
-    df_embedding.index = df.index
-    umap_df = pd.concat([df, df_embedding], axis = 1)
-    umap_df["gene_group"] = [algrbhdf[algrbhdf["rbh"] == x]["gene_group"].values[0] for x in umap_df.index]
-    umap_df["color"]      = [algrbhdf[algrbhdf["rbh"] == x]["color"].values[0]      for x in umap_df.index]
-
-    umap_df.to_csv(UMAPdf, sep = "\t", index = True)
-
 def reimbedding_get_mem_mb(wildcards, attempt):
     """
     The amount of RAM needed could change.
     """
-    attemptdict = {1: 2000,
-                   2: 4000,
-                   3: 8000,
-                   4: 16000,
-                   5: 32000,
-                   6: 64000}
+    attemptdict = {1: 4000,
+                   2: 8000,
+                   3: 16000,
+                   4: 32000,
+                   5: 64000}
     return attemptdict[attempt]
 
-rule ALG_reimbedding:
+rule AReALGReimbedding:
     input:
         tsvgz      = basedir + "/filt_coo/{analysis}_{ALG}.matrix.filt.tsv.gz",
         algrbhfile = config["ALG_rbh_file"],
         sampledf   = lambda wildcards: analysis_to_sampledf[wildcards.analysis]
     output:
-        UMAPdf    = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.df",
-        UMAPbokeh = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.bokeh.html"
+        UMAPdf    = basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.df"
     params:
-        outdir   = lambda wildcards: basedir + "/ALG_reimbedding/{}/{}".format(wildcards.analysis, wildcards.ALG),
         analysis = lambda wildcards: wildcards.analysis,
         n        = lambda wildcards: int(wildcards.n),
         m        = lambda wildcards: float(wildcards.m)
-    retries: 6
+    retries: 4
     threads: 1
     resources:
         mem_mb = reimbedding_get_mem_mb,
         runtime = 20
     run:
-        tsvgz_plotumap(params.analysis, input.sampledf, input.algrbhfile, input.tsvgz,
-                       params.outdir, "large", params.n, params.m,
-                       output.UMAPdf, output.UMAPbokeh)
+        tsvgz_calcUMAP(params.analysis, input.sampledf, input.algrbhfile, input.tsvgz,
+                       "large", params.n, params.m,
+                       output.UMAPdf)
 
 rule annotate_blastresults:
     """

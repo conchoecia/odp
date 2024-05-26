@@ -99,24 +99,24 @@ def taxids_of_interest_to_analyses():
                [[6340],  [42113]], # annelida minus clitellata
                [[42113], []],      # clitellata
                [[6606],  []],      # coleoida
-               [[50557], []],      # insecta
+               #[[50557], []],      # insecta
                [[32341], []],      # Sophophora - subset of drosophilids
                #[[61985], []],     # myriapoda
                [[6231],  []],      # nematoda
                [[7586],  []],      # echinodermata
-               [[7742],  []],      # Vertebrata
+               #[[7742],  []],      # Vertebrata
                #[[33317],[]]
                # special analyses to look at cephalopods
                [[6447],    [6606]], # mollusca minus coleoida
                [[6447],    []],     # mollusca
-               [[47122],   []],     # Aplacophora
+               #[[47122],   []],     # Aplacophora
                [[6544],    []],     # Bivalvia
                [[6448],    []],     # Gastropoda
-               [[358446],  []],     # Monoplacophora
-               [[6650],    []],     # Polyplacophora
+               #[[358446],  []],     # Monoplacophora # there are currently no samples here
+               #[[6650],    []],     # Polyplacophora
                [[32584],    []],    # Scaphopoda
                [[215450],  []],     # Coleoida
-               [[32577],   []],     # Nautiloidea
+               #[[32577],   []],     # Nautiloidea
                [[6606],    []],     # Decapodiformes
                [[215451],  []],     # Octopodiformes
               ]
@@ -522,11 +522,28 @@ def NCBI_taxid_to_taxdict(ncbi, taxid):
     else:
         raise ValueError(f"The taxid is not a string or an integer. It is a {type(taxid)}. Exiting.")
 
+    original_taxid = taxid
+    # now we fix the taxid if it is something that existed, but no longer existed.
+    old_translator = {876063: 3126489, # this is for the moth Ochlodes sylvanus
+                      355208: 3056719, # this is for the moth Spicauda simplicius
+                      }
+    if taxid in old_translator:
+        taxid = old_translator[taxid]
+
     # safe, get the lineage
     entry = {"taxid": taxid}
     # for each node, make the full lineage string, in this form "Metazoa;Bilateria;Protostomes"
-    lineage = ncbi.get_lineage(taxid)
-    names   = ncbi.get_taxid_translator(lineage)
+    # If there is a taxid change we need to catch the warning warnings.warn("taxid %s was translated into %s" %(taxid, merged_conversion[taxid]))
+    #  We don't care if they changed the taxid name from what was originally in the file.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        lineage = ncbi.get_lineage(taxid)
+    # We're just going to ignore whatever changes were made, and we will force the last entry of the lineage
+    #  to be what is in the filename.
+    names = ncbi.get_taxid_translator(lineage)
+    names[original_taxid] = names[lineage[-1]]
+    lineage[-1] = original_taxid
+    # ^^ now we're done fidgeting with the lineage and it should work even if the lineage has been changed since the genome was downloaded.
     # make sure that the lineage and the names are not empty
     if len(lineage) == 0:
         raise ValueError(f"The lineage is empty for the taxid {taxid}. Exiting.")
@@ -582,6 +599,10 @@ def rbh_to_distance_gbgz(rbhfile, outfile, ALGname):
         Simakov2022BCnS_genefamily_10008  Simakov2022BCnS_genefamily_10927  42360830
         ```
     """
+    print(f"ALGname is {ALGname}")
+    print(f"rbhfile is {rbhfile}")
+    print(f"outfile is {outfile}")
+
     # We must check that all of the rbh files, when split on '-', have an integer as the 2nd element.
     # If not, the filename needs to be changed. Right now we parse the taxid from the filename.
     thisfilename = os.path.basename(rbhfile)
@@ -590,6 +611,7 @@ def rbh_to_distance_gbgz(rbhfile, outfile, ALGname):
         raise ValueError(f"There is a non-numeric character in the taxid string for file {rbhfile}. Exiting.")
 
     df = parse_rbh(rbhfile)
+    print(df.columns)
     # make sure that ALG "_scaf", "_gene", and "_pos" are in the columns.
     for col in ["_scaf", "_gene", "_pos"]:
         thiscol = f"{ALGname}{col}"
@@ -599,6 +621,7 @@ def rbh_to_distance_gbgz(rbhfile, outfile, ALGname):
                   if "_scaf" in x
                   and ALGname not in x][0].split("_")[0]
     # check that the second field when splitting on '-' is an integer
+    print("Thissample is: ", thissample)
     if not re.match( r"^[0-9]*$", thissample.split("-")[1] ):
         raise ValueError( f"There is a non-numeric character in the taxid string for the sample {thissample} when split with '-'. The file was {rbhfile} Exiting." )
     gb_filepath = outfile
@@ -997,6 +1020,22 @@ def algcomboix_file_to_dict(ALGcomboixfile) -> dict:
 def construct_coo_matrix_from_sampledf(sampledf, alg_combo_to_ix, print_prefix = ""):
     """
     This takes in a sampledf, and constructs a coo matrix of all of the distance matrices.
+    This method is used for ODOG plots, in which each "row" is a genome, and each "column" is
+      the topological linkage quantificiation of two loci from one another.
+
+    Inputs:
+      - sampledf: A pandas dataframe that contains the information about the samples. This is the output of ??
+      - alg_combo_to_ix: A dictionary that contains the unique ALG combinations to an index.
+          First column is a tuple of strings of the loci. Second column is the column index of that relationship.
+          The dataframe is tab-separated. An example is:
+           ('Simakov2022BCnS_genefamily_11671', 'Simakov2022BCnS_genefamily_8892') 0
+           ('Simakov2022BCnS_genefamily_11122', 'Simakov2022BCnS_genefamily_11671')        1
+           ('Simakov2022BCnS_genefamily_11671', 'Simakov2022BCnS_genefamily_3642') 2
+           ('Simakov2022BCnS_genefamily_11671', 'Simakov2022BCnS_genefamily_2277') 3
+      - print_prefix: A string that is printed before the print statements. This is useful for debugging.
+    Outputs:
+      - Outputs a coo sparse matrix object described above. The "rows" are genomes, the "columns" are the
+         topological quantification between two loci.
     """
     # take the first couple of keys from the alg_combo_to_ix and check that they are type tuple with two type strings
     counter = 0
@@ -1012,8 +1051,12 @@ def construct_coo_matrix_from_sampledf(sampledf, alg_combo_to_ix, print_prefix =
             break
 
     # check if the max index is greater than the length of the sampledf -1
+    # We require that the sampledf is indexed from 0-len(sampledf)-1 because the sampledf will later be
+    #  used to index the rows of the sparse matrix. The way the sparse matrix object is stored in numpy
+    #  is that there is no metadata associated with the rows
     if max(sampledf.index) > len(sampledf) - 1:
         raise ValueError(f"The maximum index of the sampledf is greater than the length of the sampledf. Exiting.")
+
     # This is annoying to create this temporary data structure, but it helps us pinpoint broken distance matrix .gb.gz files.
     tempdfs = []
     for i, row in sampledf.iterrows():
@@ -1363,6 +1406,10 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
     # Keep only the samples that are in taxids_to_keep and not in taxids_to_remove
     cdf2 = filter_sample_df_by_clades(cdf, taxids_to_keep, taxids_to_remove)
+    # If the length of the cdf2 is 0, then we have no samples to process.
+    # We must exit and tell the user that there is nothing here.
+    if len(cdf2) == 0:
+        raise ValueError(f"There are no samples to process for taxids {taxids_to_keep}, excluding {taxids_to_remove}. Exiting.")
     # save this to outsampledf, keeping the index. These are the samples we will continue to process
     cdf2.to_csv(outsampledf, sep = "\t", index = True)
     print("This is the dataframe loaded for the samples")
@@ -1614,16 +1661,50 @@ def plot_umap_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, 
     plt.savefig(outpdf, bbox_inches='tight')
 
 def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
-                         outdir, sample, smalllargeNaN, n_neighbors,
-                         min_dist, missing_value_as = 9999999999):
+                         sample, smalllargeNaN, n_neighbors,
+                         min_dist, dfoutfilepath, htmloutfilepath,
+                         UMAPconnectivity = "",
+                         missing_value_as = 9999999999):
     """
     This is an all-in-one plotting method to make UMAP plots from the files.
-    Specifically, this is used for plotting the one-dot-one-genome UMAP plots.
-    """
+    Specifically, this is used for plotting the one-dot-one-genome (ODOG) UMAP plots.
+    This rule can be used both for cases where the user wants to plot all of the genomes for the dataset,
+      or all of the genomes for a specific clade.
 
+    The required inputs are:
+      - sampledffile:     The filepath to the df that contains the samples and the taxids. I don't have any column specs for you at the moment.
+      - ALGcomboixfile:   The filepath that contains the ALG combinations and the indices.
+          First column is a tuple of strings of the loci. Second column is the column index of that relationship.
+          The dataframe is tab-separated. An example is:
+           ('Simakov2022BCnS_genefamily_11671', 'Simakov2022BCnS_genefamily_8892') 0
+           ('Simakov2022BCnS_genefamily_11122', 'Simakov2022BCnS_genefamily_11671')        1
+           ('Simakov2022BCnS_genefamily_11671', 'Simakov2022BCnS_genefamily_3642') 2
+           ('Simakov2022BCnS_genefamily_11671', 'Simakov2022BCnS_genefamily_2277') 3
+      - coofile:          The filepath to the coofile that contains the locus distances. The "rows" of the coo file are in the same order as in the sampledffile.
+      - outdir:           The directory to which we will save the resulting files.
+      - sample:           The name of the sample. This affects how the output files are named.
+      - smalllargeNaN:    This is either "small" or "large". This affects how the missing values are encoded.
+      - n_neighbors:      The number of neighbors to use in the UMAP parameters.
+      - min_dist:         The minimum distance to use in the UMAP parameters.
+      - dfoutfilepath:    The filepath to which we will save the resulting .df file.
+      - htmloutfilepath:  The filepath to which we will save the resulting .html file.
+      - missing_value_as: This is the value that the missing values for 'smalllargeNaN: large' will be encoded as. By default, this is 9999999999.
+    """
     #make sure missing_value_as is an integer
     if type(missing_value_as) != int:
         raise ValueError(f"The missing_value_as {missing_value_as} is not of type int. Exiting.")
+
+    # check that all of the relevant files are actually present
+    for filepath in [sampledffile, ALGcomboixfile, coofile]:
+        if not os.path.exists(filepath):
+            raise ValueError(f"The filepath {filepath} does not exist. Exiting.")
+
+    # check that the file ending for the df outfile is .df
+    if not dfoutfilepath.endswith(".df"):
+        raise ValueError(f"The dfoutfilepath {dfoutfilepath} does not end with '.df'. Exiting.")
+    # check that the html outfile is .html
+    if not htmloutfilepath.endswith(".html"):
+        raise ValueError(f"The htmloutfilepath {htmloutfilepath} does not end with '.html'. Exiting.")
 
     # read in the sample dataframe. We will need this later
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
@@ -1672,8 +1753,8 @@ def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
 
     # We need a unique set of files for each of these
     # In every case, we must produce a .df file and a .bokeh.html file
-    UMAPdf    = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.df"
-    UMAPbokeh = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.bokeh.html"
+    UMAPdf    = dfoutfilepath
+    UMAPbokeh = htmloutfilepath
     if len(cdf) <= n_neighbors:
         print(f"    The number of samples, {len(cdf)}, is less than the number of neighbors, {n_neighbors}. Skipping.")
         # write to empty UMAPdf and UMAPbokeh files
@@ -1695,18 +1776,12 @@ def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
             umap_df = umap_mapper_to_df(mapper, cdf)
             umap_df.to_csv(UMAPdf, sep = "\t", index = True)
             # save the connectivity figure
-            UMAPconnectivity = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.connectivity.jpeg"
-            UMAPconnectivit2 = f"{outdir}/{sample}.neighbors_{n_neighbors}.mind_{min_dist}.missing_{smalllargeNaN}.connectivity2.jpeg"
-            try:
-                umap_mapper_to_connectivity(mapper, UMAPconnectivity,
-                                            title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
-            except:
-                print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivity}")
-            try:
-                umap_mapper_to_connectivity(mapper, UMAPconnectivit2, bundled = True,
-                                            title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
-            except:
-                print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivit2}")
+            if UMAPconnectivity:
+                try:
+                    umap_mapper_to_connectivity(mapper, UMAPconnectivity,
+                                                title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
+                except:
+                    print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivity}")
         except UserWarning as e:
             # Catch the specific warning about graph not being fully connected
             if "Graph is not fully connected" in str(e):

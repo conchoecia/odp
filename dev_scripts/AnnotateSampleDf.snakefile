@@ -112,10 +112,30 @@ rule all:
         #    dfname=dfname_to_filepath.keys()),
         ## this is the ALG dispersion plot
         #ofix + "/measurements/rbh_dispersion_plot.pdf",
-        # these are all the subclade plots
-        expand(ofix + "/subplots/{dfname}_{subplot}.pdf",
-               dfname = dfname_to_filepath.keys(),
-               subplot = config["subplots"].keys())
+        ## these are all the subclade plots
+        #expand(ofix + "/subplots/{dfname}_{subplot}.pdf",
+        #       dfname = dfname_to_filepath.keys(),
+        #       subplot = config["subplots"].keys()),
+        # also produce the data availability statement for all the genomes
+        expand(ofix + "/dataAvailability_{dfname}.html",
+               dfname = dfname_to_filepath.keys())
+
+rule data_availability:
+    """
+    This rule reads in the dataframe and produces a Data Availability statement, complete with URLs.
+    """
+    input:
+        df = lambda wildcards: dfname_to_filepath[wildcards.dfname]
+    output:
+        html = ofix + "/dataAvailability_{dfname}.html"
+    threads: 1
+    retries: 1
+    resources:
+        mem_mb  = 1000,
+        runtime = 5
+    run:
+        asd.gen_data_availability_statement(input.df, output.html)
+
 
 def stats_get_mem_mb(wildcards, attempt):
     """

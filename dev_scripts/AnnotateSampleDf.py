@@ -69,6 +69,92 @@ def gen_rbh_stats(samplerbhfilepath, algrbhfilepath, ALGname, outfilepath):
         for ALG in genes_per_ALG:
             f.write(f"frac_ologs_{ALG}: {len(sigdf[sigdf['gene_group'] == ALG])/genes_per_ALG[ALG]}\n")
 
+def gen_data_availability_statement(sample_df_filepath, outfilepath):
+    """
+    This rule runs the data availability statement for the samples.
+    It lists specific genome accession numbers for the genome assemblies used in the paper.
+    """
+    # ensure that the outfilepath ends in html. We need to write an html file because we need links in the text.
+    if not outfilepath.endswith(".html"):
+        raise ValueError("The outfilepath must end in .html")
+
+    # read in the sampledf - the column index matters, so keep that
+    sampledf = pd.read_csv(sample_df_filepath, sep="\t", index_col=0)
+    # sort by taxname
+    sampledf = sampledf.sort_values("taxname")
+    # add a col for the accession number. Get the third field of "Halichondriapanicea-6063-GCA963675165.1" delimited with '-'
+    sampledf["accession_number"] = sampledf["sample"].apply(lambda x: x.split("-")[2])
+    # Define the HTML content
+    html_content = """
+                   <!DOCTYPE html>
+                   <html lang="en">
+                   <head>
+                       <meta charset="UTF-8">
+                       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                       <title>Data Availability Statement for {sample_df_filepath}</title>
+                   </head>
+                   <body>
+                       <p>All data presented in this article are available in public repositories. The genomes used are available through the INSDC database (ENA, NCBI, DDBJ) accession numbers:
+                   """
+    # this needs to go on at the end of the htm content to close the document
+    # groupby the taxid, then sort the groups by taxname (alphabetically)
+    gb = sampledf.groupby("taxname")
+    acceptable_strings = ["GCA", "GCF"]
+    counter = 0
+    for taxname, group in gb:
+        # go through the rows in the group
+        accessions = [x for x in group["accession_number"].tolist() if x.startswith(tuple(acceptable_strings))]
+        taxid = group["taxid"].iloc[0]
+        if len(accessions) > 0:
+            # get the accession number for each taxname
+            #html_content += f"<i>{taxname}</i> (" # this one is simpler
+            html_content += f"<i><a href='https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?mode=Info&id={taxid}'>{taxname}</a></i> ("
+            for i in range(len(accessions)-1):
+                thisac = accessions[i]
+                an = thisac[0:3] + "_" + thisac[3:]
+                html_content += f"<a href='https://www.ncbi.nlm.nih.gov/datasets/genome/{an}'>{an}</a>, "
+            # now do the last one and add the closing parenthesis
+            thisac = accessions[-1]
+            an = thisac[0:3] + "_" + thisac[3:]
+            html_content += f"<a href='https://www.ncbi.nlm.nih.gov/datasets/genome/{an}'>{an}</a>), "
+        counter += 1
+    # replace the last ", " with a period
+    html_content = html_content[:-2] + "."
+    if counter > 1:
+        # find the last occurrence of ")," and replace it with "), and "
+        html_content = html_content.rsplit("),", 1)[0] + "), and " + html_content.rsplit("),", 1)[1]
+    html_content += " Genomes downloaded from other sources were: "
+
+    # Now we add the section about genomes that were not derived from GCA or GCF
+    counter = 0
+    for taxname, group in gb:
+        accessions = [x for x in group["accession_number"].tolist() if not x.startswith(tuple(acceptable_strings))]
+        taxid = group["taxid"].iloc[0]
+        if len(accessions) > 0:
+            # get the accession number for each taxname
+            #html_content += f"<i>{taxname}</i> ("
+            html_content += f"<i><a href='https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?mode=Info&id={taxid}'>{taxname}</a></i> ("
+            for i in range(len(accessions)-1):
+                html_content += f"{an}, "
+            # now do the last one and add the closing parenthesis
+            thisac = accessions[-1]
+            an = thisac[0:3] + "_" + thisac[3:]
+            html_content += f"{an}), "
+    # replace the last ", " with a period
+    html_content = html_content[:-2] + "."
+    if counter > 1:
+        # find the last occurrence of ")," and replace it with "), and "
+        html_content = html_content.rsplit("),", 1)[0] + "), and " + html_content.rsplit("),", 1)[1]
+
+    html_content += """
+                    </p>
+                    </body>
+                    </html>
+                    """
+    # Write the HTML content to the file
+    with open(outfilepath, "w") as file:
+        file.write(html_content)
+
 def gen_annotation_stats(sampleproteinfilepath, algrbhfilepath, outfilepath):
     """
     This generates information about the genome annotation. Specifically, it looks at the proteins in the annotation.

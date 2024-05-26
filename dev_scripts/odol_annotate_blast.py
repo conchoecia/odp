@@ -8,13 +8,141 @@ There is a module, because this allows us to import the functions into other pro
 from ast import literal_eval
 import matplotlib.lines as mlines
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import os
 import pandas as pd
 import random
+from rbh_tools import parse_rbh
+import umap
+import umap.plot
+import warnings
 
-# imports form other scripts I have written:
+import numpy as np
+import bokeh
+from bokeh import events
 from bokeh_helper import convert_hex_string_to_colorvalues, remove_ticks
+from bokeh.models import ColumnDataSource, CustomJS, TextInput, HoverTool, Div, Legend
+from bokeh.plotting import figure, save, output_file
+from bokeh.models.widgets import Button
+# This sets out the layout to make a button to export the data.
+from bokeh.layouts import column, row
+
+def tsvgz_calcUMAP(sample, sampledffile, algrbhfile, tsvgz,
+                   smalllargeNaN, n_neighbors, min_dist,
+                   UMAPdf):
+    """
+    This all-in-one method calculates the UMAPs for the locus distance ALGs
+        constructed by averaging across multiple species, then saves a dataframe.
+    Plotting is handled by another function.
+    """
+    # check that the types are correct
+    if type(n_neighbors) not in [int, float]:
+        raise ValueError(f"The n_neighbors {n_neighbors} is not of type int or float. Exiting.")
+    if type(min_dist) not in [float]:
+        raise ValueError(f"The min_dist {min_dist} is not of type float. Exiting.")
+
+    # read in the sample dataframe. We will need this later
+    df = pd.read_csv(tsvgz, sep = "\t", index_col = 0)
+    # read in the algrbh as a pandasdf
+    algrbhdf = parse_rbh(algrbhfile)
+    # only keep the rows that are in the df's indices that match the algrbhdf's rbh column'
+    algrbhdf = algrbhdf[algrbhdf["rbh"].isin(df.index)]
+
+    # read in the sampledf
+    sampledf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
+    # We need a unique set of files for each of these
+    # In every case, we must produce a .df file and a .bokeh.html file
+    # Sometimes, there are errors with making the UMAP, in that if the graph is not fully connected UMAP will fail.
+    # For this reason, we should anticipate this error, and figure out what to do if it happens.
+    print(f"    PLOTTING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
+    reducer = umap.UMAP(n_neighbors = n_neighbors, min_dist = min_dist)
+    disconnected = False
+    with warnings.catch_warnings(record=True) as w:
+        # Ignore UserWarnings temporarily
+        warnings.filterwarnings("ignore", category=UserWarning)
+        # Your code that might raise the warning
+        mapper = reducer.fit(df.to_numpy())
+        # Check if any warning was generated
+        if w:
+            for warning in w:
+                if issubclass(warning.category, UserWarning):
+                    disconnected = True
+                    print("Got the warning that the graph is not fully connected. This happens mostly in the case of clades with highly conserved genomes:", warning.message)
+                    # You can further process or log the warning here if needed
+    # now we push left
+    # save the UMAP as a bokeh plot
+    if disconnected:
+        plot_title = f"(Disconnected) Topo UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
+    else:
+        plot_title = f"Topo UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
+
+    # get the coordinates of the UMAP
+    df_embedding = pd.DataFrame(mapper.embedding_, columns=['UMAP1', 'UMAP2'])
+    df_embedding.index = df.index
+
+    print("The embedding after fitting is:")
+    print(mapper)
+    print(mapper.embedding_)
+
+    # save the umap
+    umap_df = pd.concat([df, df_embedding], axis = 1)
+    umap_df["gene_group"] = [algrbhdf[algrbhdf["rbh"] == x]["gene_group"].values[0] for x in umap_df.index]
+    umap_df["color"]      = [algrbhdf[algrbhdf["rbh"] == x]["color"].values[0]      for x in umap_df.index]
+    umap_df.to_csv(UMAPdf, sep = "\t", index = True)
+
+def simple_UMAP_plot(UMAPdf, title, outfile, colorcol = False):
+    """
+    This plot makes a simple pdf plot of the UMAP.
+    Doesn't do anything fancy. Just plots columns "UMAP1" and "UMAP2" of the UMAPdf.
+    If the flag colorcol is set to True, then it will color the dots based on the "color" column.
+    """
+    # read in the tab-delimited file as a pandas dataframe
+    df = pd.read_csv(UMAPdf, sep = "\t", index_col = 0)
+    # Check that the outfile.
+    # save the UMAP as a bokeh plot
+    if not UMAPbokeh.endswith(".html"):
+        raise ValueError(f"The output file {outhtml} does not end with '.html'. Exiting.")
+    #              ┓    •
+    # ┓┏┏┳┓┏┓┏┓  ┏┓┃┏┓╋╋┓┏┓┏┓
+    # ┗┻┛┗┗┗┻┣┛  ┣┛┗┗┛┗┗┗┛┗┗┫
+    #        ┛   ┛          ┛
+    hover_data = pd.DataFrame({"rbh_ortholog": [-1] * len(df),
+                               "gene_group":   [-1] * len(df),
+                               "color":        [-1] * len(df)
+                               })
+    hover_data.index = algrbhdf["rbh"]
+    hover_data["rbh_ortholog"] = hover_data.index
+    # use apply to match the index to the "rbh" column of algrbhdf, and return the gene_group
+    hover_data["gene_group"] = [algrbhdf[algrbhdf["rbh"] == x]["gene_group"].values[0] for x in hover_data.index]
+    hover_data["color"]      = [algrbhdf[algrbhdf["rbh"] == x]["color"].values[0]      for x in hover_data.index]
+    hover_data = hover_data.reset_index(drop = True)
+    print(hover_data)
+    # the index is now the name of the ortholog, so we have to get the colors another way
+    #color_dict = dict(zip(algrbhdf["rbh"], algrbhdf["color"]))
+    color_dict = dict(zip(hover_data.index, hover_data["color"]))
+    print(color_dict)
+    print(f"type of mapper is: {type(mapper)}")
+    print(f"type of color_dict is: {type(color_dict)}")
+    print(f"type of hover_data is: {type(hover_data)}")
+    print(f"type of labels is: {type(list(hover_data['gene_group']))}")
+    print(f"mapper is: \n", mapper)
+    print(f"color_dict is: \n", color_dict)
+    print(f"hover_data is: \n", hover_data)
+    print(f"labels is: \n", list(hover_data["gene_group"]))
+
+    # Needs to be umap 0.5.5 or later
+    plot = umap.plot.interactive(mapper,
+                                 color_key = color_dict,
+                                 hover_data = hover_data,
+                                 labels = list(hover_data["rbh_ortholog"]), # TODO this needs to be changd to a list comprehension
+                                 tools=[], # this needs to be deleted, or else the zoom tool will not work.
+                                 point_size = 4
+                                 )
+    # add a title to the plot
+    plot.title.text = plot_title
+    # output to an HTML file
+    bokeh.io.output_file(UMAPbokeh)
+    # Save the plot to an HTML file
+    bokeh.io.save(plot)
 
 def umapdf_one_species_one_query(UMAPdf, blastp, analysis, ALG, n, m, query, outputPDF, species = None):
     """
@@ -143,15 +271,6 @@ def umapdf_one_species_one_query(UMAPdf, blastp, analysis, ALG, n, m, query, out
 
         # Save the df_embedding with the blastp results, with the index saved
         df_embedding.to_csv(outputPDF.replace(".pdf", ".df"), sep = "\t", index = True)
-
-import numpy as np
-from bokeh import events
-from bokeh.models import ColumnDataSource, CustomJS, TextInput, HoverTool, Div, Legend
-from bokeh.plotting import figure, save, output_file
-from bokeh.models.widgets import Button
-# This sets out the layout to make a button to export the data.
-from bokeh.layouts import column, row
-
 
 def umapdf_reimbedding_bokeh_plot_one_species(blastdf, plot_title, output_html, scalar = 1.5):
     """
