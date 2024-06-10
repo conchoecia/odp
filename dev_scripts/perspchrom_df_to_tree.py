@@ -201,6 +201,21 @@ def stats_on_changedf(sampledf, changedf) -> pd.DataFrame:
     change_to_total_counts = groupby_target.groupby("change")["counts"].sum().to_dict()
     # make a column num_samples_in_taxid by maping the target_taxid to the total number of samples with that taxid with the dict taxid_to_sample_count
     groupby_target["number_of_samples_in_taxid"] = groupby_target["target_taxid"].map(taxid_to_sample_count)
+    # The change_frac_total is, for any given event, the percent of times we inferred that event on that branch.
+    #  For example, the change ('A1a', 'A1b') was observed 1230 times on the branch leading to 33213,
+    #                                                         5 times on the branch leading to 41711,
+    #                                                         2 times on the branch leading to 42450,
+    #                                                         2 times on the branch leading to 9871,
+    #                                                         and a few times in other places.
+    #  To calculate the change_frac_total, we sum the observations for this change type. 1230 + 5 + 2 + 2 = 1239.
+    #  Then, these are the change_frac_total values for each of the branches:
+    #                                                         target_taxid  change          counts  change_frac_total
+    #                                                         33213         ('A1a', 'A1b')  1230    1230/1239 = 0.993
+    #                                                         41711         ('A1a', 'A1b')  5       5/1239   = 0.004
+    #                                                         42450         ('A1a', 'A1b')  2       2/1239   = 0.002
+    #                                                          9871         ('A1a', 'A1b')  2       2/1239   = 0.002
+    #  This calculation is therefore useful for QC'ing how well the algorithm is working on known fusion or loss events.
+    #   For example, 33213 is the clade leading up to bilateria, and this is the branch on which we know those changes occurred.
     groupby_target["change_frac_total"] = groupby_target.apply(lambda row: row["counts"]/change_to_total_counts[row["change"]], axis=1)
     groupby_target["frac_samples_w_this_taxid_w_this_change"] = groupby_target.apply(lambda row: row["counts"]/taxid_to_sample_count[row["target_taxid"]], axis=1)
     # use ete3 to get the names of the taxids
@@ -832,7 +847,6 @@ def run_n_simulations_save_results(sampledfpath, algdfpath, filename,
     print(sampledf)
     print("This is the algdf")
     print(algdf)
-    sys.exit()
 
     counter = 0
     c = coloc_array(abs_bin_size=abs_bin_size, frac_bin_size=frac_bin_size)
@@ -1889,7 +1903,8 @@ def main():
     print(simulation_filepaths)
     if len(simulation_filepaths) == 0:
         raise Exception("No simulation files found in ./simulations/")
-    read_simulations_and_make_heatmaps(simulation_filepaths, sys.argv[1], sys.argv[2],
+    read_simulations_and_make_heatmaps(simulation_filepaths,
+                                       sys.argv[1], sys.argv[2],
                                        "simulations", clades_of_interest)
 
 if __name__ == "__main__":

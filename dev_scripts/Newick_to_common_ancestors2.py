@@ -51,10 +51,12 @@ def parse_args():
       - the original config file from which the tree was derived.
       - the taxids of interest, if we want to plot the divergence relative to a specific species. Accepts a list of taxids
       - the email address to use for programmatic access to NCBI
+      - file with samples and chromosome sizes.
       - a flag -s that just tells the program to make the species list
     """
     parser = argparse.ArgumentParser(description="This script takes a newick tree and identifies the divergence time of various nodes in the tree.")
     parser.add_argument("-n", "--newick", help="The path to the newick tree file.", required=True)
+    parser.add_argument("-C", "--chromosome_sizes", help="The path to the chromosome sizes")
     parser.add_argument("-p", "--prefix", help="The output prefix for the file, including a prepended path if you want another directory.", required=True)
     parser.add_argument("-c", "--config", help="The original config file from which the tree was derived.", required=False)
     parser.add_argument("-t", "--taxids", help="The taxids of interest, if we want to plot the divergence relative to a specific species. Accepts a list of taxids.", required=False)
@@ -84,6 +86,11 @@ def parse_args():
     if not os.path.exists(args.newick):
         # raise an IO error
         raise IOError("The newick file does not exist: {}".format(args.newick))
+
+    # make sure the chromosome_sizes file exists
+    if args.chromosome_sizes:
+        if not os.path.exists(args.chromosome_sizes):
+            raise IOError("The chromosome sizes file does not exist: {}".format(args.chromosome_sizes))
 
     # optional args
     if args.config:
@@ -304,7 +311,8 @@ class TaxNode:
     __slots__ = ['taxid', 'parent', 'children',
                  'name', 'nodeages', 'nodeage',
                  'nodeageinterpolated', 'lineage', 'lineage_string',
-                 'sort_order', 'dist_crown', 'dist_crown_plus_root']
+                 'sort_order', 'dist_crown', 'dist_crown_plus_root',
+                 "chromsize_median", "chromsize_mean", "chromsize_list"]
     def __init__(self, taxid) -> None:
         self.taxid = taxid
         self.parent = None
@@ -325,6 +333,10 @@ class TaxNode:
         # This is the distance of all the edges from this node to the tips,
         #  plus the distance of the edge leading up to this node.
         self.dist_crown_plus_root = None
+        # chromsize info
+        self.chromsize_median = -1
+        self.chromsize_mean   = -1
+        self.chromsize_list   = []
 
     def __str__(self) -> str:
         outstring  = "TaxNode:\n"
@@ -348,9 +360,11 @@ class TaxEdge:
     Useful for recording path lengths and other properties.
     Don't use it for navigating the graph. Just use the edges
     """
-    __slots__ = ['parent_taxid', 'child_taxid', 'branch_length',
+    __slots__ = ['parent_taxid', 'child_taxid',
+                 'parent_age', 'child_age',
+                 'branch_length',
                  'dist_crown_plus_this_edge',
-                 'parent_age', 'child_age']
+                 'parent_lineage', 'child_lineage']
     def __init__(self, parent_taxid, child_taxid) -> None:
         self.parent_taxid = parent_taxid
         self.child_taxid = child_taxid
@@ -358,6 +372,8 @@ class TaxEdge:
         self.child_age = None
         self.branch_length = None
         self.dist_crown_plus_this_edge = None
+        self.parent_lineage = None
+        self.child_lineage  = None
 
     def __str__(self) -> str:
         outstring  = "TaxEdge:\n"
@@ -441,6 +457,55 @@ class TaxIDtree:
         if edgekey not in self.edges:
             self.edges[edgekey] = TaxEdge(parent_taxid, child_taxid)
         return 0
+
+    def add_chromosome_info_file(self, chrominfo_file):
+        """
+        Adds chromosome info to the nodes from a file.
+        The format of the file is:
+        f"%s\t%d" % (sample_string, num_chromosomes)
+
+        The algorithm is: Load the dataframe
+        """
+        chromdf = pd.read_csv(chrominfo_file, sep="\t", header=None)
+        # the headers are sample_string, num_chromosomes
+        chromdf.columns = ["sample_string", "num_chromosomes"]
+        # only get the sample_strings that have exactly two '-' characters
+        chromdf = chromdf[chromdf["sample_string"].str.count("-") == 2]
+        chromdf["taxid"] = chromdf["sample_string"].str.split("-").str[1]
+        missing = 0
+        for i, row in chromdf.iterrows():
+            taxid = int(row["taxid"])
+            if taxid in self.nodes:
+                self.nodes[taxid].chromsize_list.append(row["num_chromosomes"])
+            else:
+                missing += 1
+        print("There were {} missing taxids in the graph taht were present in the genomes".format(missing))
+
+        # now do a reverse BFS to sum the chromosome lists at each node
+        counter = 1
+        for node in self.nodes:
+            print("  - Setting up the chromsizes in the node: {} of {}".format(counter, len(self.nodes)), end="\r")
+            newlist = []
+            # do a dfs to get all the tips in this clade
+            stack = [node]
+            while len(stack) > 0:
+                current = stack.pop()
+                if len(self.nodes[current].children) == 0:
+                    newlist.extend(self.nodes[current].chromsize_list)
+                else:
+                    stack.extend(self.nodes[current].children)
+            self.nodes[node].chromsize_list = newlist
+            counter += 1
+        print()
+
+        # Go through all the nodes and calculate the mean and median chromsize
+        for node in self.nodes:
+            if len(self.nodes[node].chromsize_list) > 0:
+                self.nodes[node].chromsize_mean = sum(self.nodes[node].chromsize_list)/len(self.nodes[node].chromsize_list)
+                self.nodes[node].chromsize_median = sorted(self.nodes[node].chromsize_list)[len(self.nodes[node].chromsize_list)//2]
+            else:
+                self.nodes[node].chromsize_mean = -1
+                self.nodes[node].chromsize_median = -1
 
     def set_leaf_ages_to_zero(self) -> None:
         """
@@ -972,6 +1037,7 @@ class TaxIDtree:
                     queue.append(current)
                     continue
             # Mark the current node as visited
+            # This only is activated if the current node is not re-added
             visited.add(current)
             # Add the parent node to the queue for further processing
             if parent is not None and parent not in visited:
@@ -1012,48 +1078,33 @@ class TaxIDtree:
         for node in self.nodes:
             self.nodes[node].lineage_string = ";".join([str(x) for x in self.nodes[node].lineage])
 
+        # If there are any edges, we can add the lineage information to the edges
+        for edge in self.edges:
+            self.edges[edge].parent_lineage = self.nodes[edge[0]].lineage
+            self.edges[edge].child_lineage  = self.nodes[edge[1]].lineage
+
     def print_edge_information(self, outfile) -> None:
         """
-        Prints the edge information of the tree.
-        The columns are:
-          - source: the parent node
-          - target: the child node
-          - source_age: the age of the parent node
-          - target_age: the age of the child node
-          - branch_length: the branch length between the parent and child node.
-          - dist_crown_plus_this_edge: the distance from the crown to the tip, including this edge.
+        Prints the edge information of the tree. Use __slots__ to determine what to print.
         """
-        # There are a few things we want to update
-        queue = [self.root]
-        outhandle = open(outfile, "w")
-        print("source\ttarget\tsource_age\ttarget_age\tbranch_length\tdist_crown_plus_this_edge", file = outhandle)
-        while len(queue) > 0:
-            print("    The queue length is {}    ".format(len(queue)), end="\r")
-            source = queue.pop(0)
-            for target in self.nodes[source].children:
-                queue.append(target)
-                source_age    = self.nodes[source].nodeage
-                target_age    = self.nodes[target].nodeage
-                branch_length = source_age - target_age
-                dist_crown_plus_this_edge = self.edges[(source, target)].dist_crown_plus_this_edge
-                #print("source: {}\ttarget: {}\tsource_age: {}\ttarget_age: {}\tbranch_length: {}\tsource_ages: {}\ttarget_ages: {}".format(
-                print("{}\t{}\t{}\t{}\t{}\t{}".format(
-                             source,     target,
-                             source_age, target_age,
-                             branch_length,
-                             dist_crown_plus_this_edge),
-                             file = outhandle)
-        print()
-        outhandle.close()
+        # get the fields
+        fields = self.edges[(self.root, list(self.nodes[self.root].children)[0])].__slots__
+        with open(outfile, "w") as outhandle:
+            print("\t".join(fields), file = outhandle)
+            for edge in self.edges:
+                print("\t".join([str(getattr(self.edges[edge], x))
+                                 for x in self.edges[edge].__slots__]), file = outhandle)
 
     def print_node_information(self, outfile) -> None:
         """
         prints all the fields of the nodes to a file. Use the slots to determine what to print.
         """
+        fields = self.nodes[self.root].__slots__
         with open(outfile, "w") as outhandle:
-            print("node\t" + "\t".join(self.nodes[self.root].__slots__), file = outhandle)
+            print("\t".join(self.nodes[self.root].__slots__), file = outhandle)
             for node in self.nodes:
-                print("{}\t".format(node) + "\t".join([str(getattr(self.nodes[node], x)) for x in self.nodes[self.root].__slots__]), file = outhandle)
+                print("\t".join([str(getattr(self.nodes[node], x))
+                                 for x in self.nodes[self.root].__slots__]), file = outhandle)
 
 def main():
     # first we need to parse the arguments from the comand line
@@ -1187,6 +1238,8 @@ def main():
     CFtree.calc_dist_crown()
     # calculate the lineage info
     CFtree.add_lineage_info()
+    # add chromosome information
+    CFtree.add_chromosome_info_file(args.chromosome_sizes)
 
     # Print out the info of the first 5 leaves
     print("These are the first five leaves")

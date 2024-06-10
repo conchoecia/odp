@@ -17,7 +17,22 @@ Citation : If you use this software for your scientific publication, please cite
 
 Description:
   This program is an updated version of the plot_ALG_fusions.py.
-  In this version, we construct event string for each species. We do not bother to make the rest of the table.
+    1. First, the program reads in the rbh files. *
+      - For every NCBI taxid, we just pick the first genome with that NCBI taxid that we encounter.
+    2. Read in the rbh file to determine how everything will be colored, and to get
+        all of the ALGs to plot.
+    3. We read through all of the rbh files in a for loop to figure out the chromosomes
+        on which everything is located.
+        - There are several sections where we add the colocalization results to this table
+        - ALG Presence+Absence Columns
+        - ALG Colocalization Columns
+    4. ALG Dispersion, fusion, and splits. We keep track of what is going on using cutoffs.
+      - This is the section of the code called 'ALG Dispersion and Fusion'
+      - The format is [taxid, "(gain|loss|split)", "taxid", "(gain|loss|split)", ...]
+    5. The results are saved to a file called per_species_ALG_presence_fusions.tsv
+
+
+  We construct an event string for each species. We do not bother to make the rest of the table.
     The rest of the table is the part that contains the matrix of whether or not an ALG is colocalized on the same chromosome in that species.
 
 PREREQUISITES:
@@ -852,6 +867,7 @@ def main():
                  for f in os.listdir(args.directory)
                  if f.endswith('.rbh')], reverse = True))
 
+    # 1. First, the program reads in the rbh files. *
     print("The rbh file set length before filtering is {}".format(len(rbh_files)))
     # just pick the first rbh file to get the one species with each taxid. All of our files will have the NCBI taxid in the file name.
     seen_taxids = set()
@@ -872,14 +888,12 @@ def main():
     rbh_files = keep_these
     print("The rbh file set length after filtering is {}".format(len(rbh_files)))
 
-    #rbh_files = rbh_files[:10]
-    #keep_these = ["Rhopilema", "Branchiostoma", "Lytechinus"]
-    #rbh_files = [x for x in rbh_files if any([y in x for y in keep_these])]
-
-    # first we need to read through all of the rbh files to get all of the possible ALGs to plot
+    # 2. Read in the rbh file to determine how everything will be colored, and to get all of the ALGs.
     ALGdf = rbh_tools.parse_ALG_rbh_to_colordf(args.ALG_rbh)
 
-    # First we figure out on which chromosomes the ALGs are located. Some may be split.
+    # 3. We read through all of the rbh files in a for loop to figure out the chromosomes
+    #     on which everything is located.
+    # We determine on which chromosomes the ALGs are located. Some may be split.
     sample_to_chromnum    = {}
     sample_to_taxidstring = {}
     sample_to_taxid       = {}
@@ -1041,7 +1055,6 @@ def main():
     # If the other clade's ALGs are detectable, and are not colocalized in at least 50% of the clade,
     #  then we consider that this ALG pair is not colocalized in this clade.
     min_for_noncolocalized = 0.5
-    # If the 
 
     for i, row in perspchrom.iterrows():
         # ----- ALG PRESENCE ABSENCE -----
@@ -1201,7 +1214,7 @@ def main():
         # print a progress bar on the same line to tell the user how much longer we have to go
         print("\r{}/{}          ".format(i+1, len(perspchrom)), end="")
 
-    # save the file to a tsv
+    # 5. The results are saved to a file called per_species_ALG_presence_fusions.tsv
     perspchrom.to_csv("per_species_ALG_presence_fusions.tsv", sep='\t', index=False)
 
     # all of this is for doing the clade-level analysis

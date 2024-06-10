@@ -14,6 +14,7 @@ from PhyloTreeUMAP import (algcomboix_file_to_dict,
                            ALGrbh_to_algcomboix,
                            plot_umap_from_files,
                            plot_umap_pdf,
+                           plot_umap_phylogeny_pdf,
                            taxids_to_analyses,
                            taxids_of_interest_to_analyses,
                            topoumap_genmatrix,
@@ -83,7 +84,7 @@ odol_size = ["large"]
 weighting_methods = ["phylogenetic"]
 
 # use these parameters for the clade-specific exploration
-codog_n    = [10, 20, 40]
+codog_n    = [5, 10, 20, 40]
 codog_m    = [0.0, 0.25, 0.5, 0.75]
 codog_size = ["large"]
 
@@ -149,7 +150,15 @@ rule all:
                n       = codog_n,
                m       = codog_m,
                sizeNaN = codog_size,
-               taxanalysis = config["taxids"])
+               taxanalysis = config["taxids"]),
+        expand(results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.phylogeny.pdf",
+               n       = codog_n,
+               m       = codog_m,
+               sizeNaN = codog_size,
+               taxanalysis = config["taxids"]),
+        expand(results_base_directory + "/ODOG/clades/{taxanalysis}.missing_{sizeNaN}.paramsweep.pdf",
+               sizeNaN = codog_size,
+               taxanalysis = config["taxids"]),
 
 # ┏┓    ┓        ┓         ┓
 # ┗┓┏┓┏┓┃┏┏┓┏┳┓┏┓┃┏┏┓  ┏┓┓┏┃┏┓┏
@@ -515,6 +524,42 @@ rule odogClPlotUMAP:
         plot_umap_from_files(input.sampletsv, input.combotoindex, input.coo,
                              wildcards.taxanalysis, wildcards.sizeNaN, int(wildcards.n),
                              float(wildcards.m), output.df, output.html)
+
+rule odogClPDF:
+    input:
+        df  = results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
+    output:
+        pdf = results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.phylogeny.pdf"
+    threads: 1
+    #retries: 4
+    resources:
+        mem_mb = pdf_get_mem_mb,
+        highio = 1,
+        runtime = 10
+    run:
+        plot_umap_phylogeny_pdf(input.df, output.pdf, wildcards.taxanalysis, wildcards.sizeNaN, wildcards.n, wildcards.m)
+
+rule odogClSweep:
+    """
+    Makes a pdf of the parameter sweep of the all-species UMAP plots.
+    """
+    input:
+        dfs = expand(results_base_directory + "/ODOG/clades/{{taxanalysis}}.neighbors_{n}.mind_{m}.missing_{{sizeNaN}}.df",
+                n = codog_n,
+                m = codog_m),
+        plotdfs = os.path.join(snakefile_path, "PhyloTreeUMAP_plotdfs.py")
+    output:
+        pdf  = results_base_directory + "/ODOG/clades/{taxanalysis}.missing_{sizeNaN}.paramsweep.pdf"
+    threads: 1
+    retries: 4
+    resources:
+        mem_mb = pdf_get_mem_mb,
+        highio = 1,
+        runtime = 5
+    shell:
+        """
+        python {input.plotdfs} -f "{input.dfs}" -o {output.pdf}
+        """
 
 #    ┓  ┓
 # ┏┓┏┫┏┓┃ - One-Dot-One-Locus plots

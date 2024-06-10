@@ -119,6 +119,7 @@ def taxids_of_interest_to_analyses():
                #[[32577],   []],     # Nautiloidea
                [[6606],    []],     # Decapodiformes
                [[215451],  []],     # Octopodiformes
+               [[10197, 6040, 6073], []], #ctenos, sponges, cnidarians
               ]
     return taxids_to_analyses(taxids)
 
@@ -907,6 +908,7 @@ def umap_mapper_to_bokeh_topoumap(mapper, algrbhdf,
                                   outhtml, plot_title = "UMAP"):
     """
     This takes a UMAP mapper and an ALGRBHdf and returns a bokeh plot.
+    THIS IS SPECIFICALLY FOR ODOL PLOTS (one-dot-one-locus). We wouldn't need the algrbhdf otherwise.
     """
     if not outhtml.endswith(".html"):
         raise ValueError(f"The output file {outhtml} does not end with '.html'. Exiting.")
@@ -941,6 +943,7 @@ def umap_mapper_to_bokeh_topoumap(mapper, algrbhdf,
 def umap_mapper_to_bokeh(mapper, sampledf, outhtml, plot_title = "UMAP"):
     """
     This takes a UMAP mapper and a sampledf and returns a bokeh plot.
+    THIS IS SPECIFICALLY FOR ODOG PLOTS (one-dot-one-genome). That is why we need the sampledf.
     """
     if not outhtml.endswith(".html"):
         raise ValueError(f"The output file {outhtml} does not end with '.html'. Exiting.")
@@ -1659,6 +1662,316 @@ def plot_umap_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, 
 
     # save the figure as a pdf
     plt.savefig(outpdf, bbox_inches='tight')
+
+class phylogeny_plotting:
+    """
+    This class handles the algorithm for plotting a phylogeny in UMAP (or tSNE, or PCA) space.
+    The concept is that there are genomes that are points in the 2D space. We will draw straight
+      lines connecting the genomes in the topology of the tree.
+
+    The implementation isn't very clean at the moment, but it works.
+    Requires pandas
+    """
+    def __init__(self, df_embedding, lineage_col, x_col, y_col, treetype = "ncbi"):
+        """
+        This initializes the phylogeny_plotting class. The class is initialized with the UMAP coordinates
+          of the genomes, the taxid_list of the genomes, the taxid_to_point dictionary, the taxid_to_parent
+          dictionary, and the taxid_to_children dictionary.
+        """
+        self.df_embedding = df_embedding
+        self.lineage_col  = lineage_col
+
+        # If treetype is ncbi, we expect lineage to be a list of ints (taxids).
+        #  We will check if the objects in that column are lists of ints or not
+        print([type(x) for x in self.df_embedding[self.lineage_col]])
+        if treetype == "ncbi":
+            self.df_embedding[self.lineage_col] = self.df_embedding[self.lineage_col].apply(
+                lambda x: aliteraleval(x) if type(x) != list else x)
+        print("we changed the type")
+        print([type(x) for x in self.df_embedding[self.lineage_col]])
+
+        #print out the types of the column
+        # make sure the column type is int
+        self.x_col        = x_col
+        self.y_col        = y_col
+        self.nodes      = {}
+        self.plot_edges = []
+        # add stuff to nodes, edges, and plot_edges
+        self.build_graph()
+        print(f"nodes before trimming: ", self.nodes)
+        # now we simplify the graph so there aren't so many nodes.
+        self.simplify_graph()
+        print(f"nodes after trimming: ", self.nodes)
+        # add the other edges
+        self.breadth_first_node_addition()
+        print(self.plot_edges)
+
+    def midpoint(self, x1, y1, x2, y2):
+        """
+        Calculate the midpoint between two points.
+        Returns x, y
+        """
+        return (x1 + x2)/2, (y1 + y2)/2
+
+    def build_graph(self):
+        """
+        Takes the self.df_embedding and builds the graph G.
+        """
+        # This adds the nodes and edges to the graph.
+        # Not sure which we will use yet.
+        for lineage in self.df_embedding[self.lineage_col]:
+            for i in range(len(lineage)):
+                s = int(lineage[i])
+                if s not in self.nodes:
+                    self.nodes[s] = {"x": None,
+                                     "y": None,
+                                     "children": set(),
+                                     "parent":  None}
+                if i < (len(lineage) - 1):
+                    t = int(lineage[i+1])
+                    self.nodes[s]["children"].add(t)
+                if i > 0:
+                    r = int(lineage[i-1])
+                    self.nodes[s]["parent"] = r
+        # now go through the tips and add the coordinates to them
+        gb = self.df_embedding.sort_values(by = ["UMAP1", "UMAP2"], ascending = [True, True]).groupby("taxid")
+        for taxid, group in gb:
+            if len(group) > 1:
+                print("plotting lines")
+                # there are n rows, for each we calculate the euc
+                for i in range(len(group)-1):
+                    for j in range(i+1, len(group)):
+                        # if we're on the first set of points, just use this as the "root" for this node
+                        x1, y1 = group.iloc[i]["UMAP1"], group.iloc[i]["UMAP2"]
+                        x2, y2 = group.iloc[j]["UMAP1"], group.iloc[j]["UMAP2"]
+                        if i == 0:
+                            mid_x, mid_y = self.midpoint(x1, y1, x2, y2)
+                            # We use these as the coordinates for the node, where we will draw from later
+                            # We just use the first set of points as the "root" for this node for lack of
+                            #  a better option.
+                            self.nodes[taxid]["x"] = mid_x
+                            self.nodes[taxid]["y"] = mid_y
+                        # We always draw the lines, though
+                        self.plot_edges.append({"x1": x1, "x2": x2,
+                                                "y1": y1, "y2": y2,
+                                                "color": (0, 0, 0, 0.75)})
+            # If there are no duplicates for this taxid, we don't add any plot edges, but
+            #   we still add the node to the nodes dictionary
+            else:
+                self.nodes[taxid]["x"] = group.iloc[0]["UMAP1"]
+                self.nodes[taxid]["y"] = group.iloc[0]["UMAP2"]
+
+    def find_root(self):
+        """
+        Returns the root.
+        """
+        for node in self.nodes:
+            if self.nodes[node]["parent"] == None:
+                return node
+
+    def simplify_graph(self):
+        """
+        We now want to simplify the graph.
+        Say we have a tree like this:
+
+                 ,---D---E                                ,---E
+        ,--A--B--C          We will simplify it to: ,--A--C
+                 |___F___G                                |___G
+
+        The reason we want to do this is to avoid a complicated graph traversal algorithm.
+        Everything will have a parent with at least two children.
+        """
+        # Now start at the root and go through and delete all the nodes until we get to the first
+        #  with two or more children
+        root = self.find_root()
+        queue = [root]
+        while len(queue) > 0:
+            node = queue.pop(0)
+            children = self.nodes[node]["children"]
+            if len(children) == 1:
+                child = list(children)[0]
+                # We have to remove the parent from the queue, and add the node to the queue
+                self.nodes[child]["parent"] = None
+                queue.append(child)
+                del self.nodes[node]
+
+        nodelist = list(self.nodes.keys())
+        for node in nodelist:
+            # target the middles
+            parent           = self.nodes[node]["parent"]
+            if parent is not None:
+                children         = self.nodes[node]["children"]
+                #print(f"The node is {node}, the children are {children}, the parent is {parent} and it is in nodes? {parent in self.nodes}")
+                parents_children = self.nodes[parent]["children"]
+                grandparent      = self.nodes[parent]["parent"]
+                if len(children) == 1:
+                    self.nodes[parent]["children"].discard(node)
+                    #print(f"  - removing {node} from {parent}'s children")
+                    self.nodes[parent]["children"].update(children)
+                    #print(f"  - adding {children} to {parent}'s children")
+                    for child in children:
+                        self.nodes[child]["parent"] = parent
+                        #print(f"  - setting {child}'s parent to {parent}")
+                        #print(f"  - child is now {child}: {self.nodes[child]}")
+                    #print(f"  - removing {node} from nodes")
+                    del self.nodes[node]
+
+    def breadth_first_node_addition(self):
+        """
+        This goes through the nodes, which are now populated, and adds the tree plotting edges.
+        """
+        done = False
+        root = self.find_root()
+        # initialize the queue with the things we know the positions of, that are not plotted
+        queue = [x for x in self.nodes
+                 if self.nodes[x]["x"] is not None]
+        while len(queue) > 0:
+            #print(queue)
+            node = queue.pop(0)
+            if self.nodes[node]["x"] is None:
+                # if we don't have any plotting info for this,
+                #   just add it back to the end of the queue
+                queue.append(node)
+            else:
+                # At least the one we're looking at has plotting info
+                # We want to see if there is a sister node that hasn't been plotted yet
+                # get the first parent that has more than one child
+                parent = self.nodes[node]["parent"]
+                if parent == None:
+                    # we're at the root, so quit now
+                    continue
+                sisters      = list(self.nodes[parent]["children"])
+                filt_sisters = [x for x in sisters if self.nodes[x]["x"] is not None]
+                if len(filt_sisters) == len(sisters):
+                    #print(f"Sisters is {sisters} and filt_sisters is {filt_sisters}")
+                    for i in range(len(sisters)-1):
+                        x1, y1 = self.nodes[sisters[i]]["x"], self.nodes[sisters[i]]["y"]
+                        x2, y2 = self.nodes[sisters[i+1]]["x"], self.nodes[sisters[i+1]]["y"]
+                        self.plot_edges.append({"x1": x1,
+                                                "x2": x2,
+                                                "y1": y1,
+                                                "y2": y2,
+                                                "color": (0., 0., 0., 0.5)})
+                        if i == 0:
+                            mid_x, mid_y = self.midpoint(x1, y1, x2, y2)
+                            self.nodes[parent]["x"] = mid_x
+                            self.nodes[parent]["y"] = mid_y
+                    # remove the sisters, since we already have had them.
+                    queue = [x for x in queue if x not in sisters]
+                    queue.append(parent)
+                else:
+                    # we're not ready for this node, so look at it later
+                    queue.append(node)
+        # now, make an orthogonal red line connecting to the middle of the line of the points
+        #  closest to the root
+        root = self.find_root()
+        children = list(self.nodes[root]["children"])
+        x1, y1 = self.nodes[children[0]]["x"], self.nodes[children[0]]["y"]
+        x2, y2 = self.nodes[children[1]]["x"], self.nodes[children[1]]["y"]
+        children_line_length = np.sqrt((x1 - x2)**2 + (y1 - y2)**2)
+        root_line_length = children_line_length / 20
+        mid_x, mid_y = self.midpoint(x1, y1, x2, y2)
+
+        # Calculate the slope of the original line segment
+        if x2 - x1 != 0:
+            slope_original = (y2 - y1) / (x2 - x1)
+            # Calculate the slope of the orthogonal line (negative reciprocal)
+            slope_orthogonal = -1 / slope_original
+        else:
+            slope_orthogonal = 0
+
+        # Define the length of the orthogonal line segment (half-length in each direction from the midpoint)
+        length = root_line_length
+
+        # Calculate the change in x and y for the orthogonal line
+        delta_x = length / np.sqrt(1 + slope_orthogonal**2)
+        delta_y = slope_orthogonal * delta_x
+
+        # Determine the endpoints of the orthogonal line segment
+        x3, y3 = mid_x + delta_x, mid_y + delta_y
+        #x4, y4 = mid_x - delta_x, mid_y - delta_y
+
+        self.plot_edges.append({"x1": mid_x, "x2": x3,
+                                "y1": mid_y, "y2": y3,
+                                "color": (1., 0., 0., 0.5)})
+
+def plot_umap_phylogeny_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, min_dist):
+    """
+    Makes a UMAP plot from a .df file. Each row will have the samples, the UMAP coordinates,
+    and the colors. Uses the the ncbi taxonomy information to draw a tree.
+
+    Arguments:
+      - outpdf - the path to which we will save the pdf file with the UMAP plot.
+      - the sample    - This will be included in the text of the plot.
+      - smalllargeNaN - This will be included in the text of the plot.
+      - n_neighbors   - This will be included in the text of the plot.
+      - min_dist      - This will be included in the text of the plot.
+    """
+    odp_plot.format_matplotlib()
+    warnings.filterwarnings("ignore", message=".*findfont.*")
+
+    figfontsize = 6
+
+    # try to read the csv. If it doesn't work, just make an empty pdf
+    try:
+        df_embedding = pd.read_csv(sampledfumapfile, sep = "\t", index_col = 0)
+    except:
+        # make an empty pdf
+        fig = plt.subplots(figsize=(5, 5))
+        # Add the text "Not able to make this plot, no data"
+        plt.text(0.5, 0.5, "Not able to make this plot, no data", horizontalalignment='center', verticalalignment='center')
+        # make sure that the plot is tight
+        plt.tight_layout()
+        plt.savefig(outpdf)
+        return
+    # load in the df filepath
+    df_embedding = pd.read_csv(sampledfumapfile, sep = "\t", index_col = 0)
+    # make a matplotlib plot of the UMAP with the df_embedding, and the color_dict from SplitLossColocTree as the legend
+    # make a figure that is 5x5 inches
+    fig = plt.subplots(figsize=(5, 5))
+    # scatter the UMAP1 and UMAP2 columns of the df_embedding
+    scatter = plt.scatter(df_embedding["UMAP1"], df_embedding["UMAP2"],
+                          c = df_embedding["color"], lw = 0, s = 5)
+    # get the name of the ncbi taxid from the SplitLossColocTree color_dict
+    ncbi = NCBITaxa()
+
+    # make sure the taxids are in the dataframe before putting them in the legend
+    all_taxids = set()
+    for i, row  in df_embedding.iterrows():
+        temprow = row["taxid_list"]
+        if type(temprow) == str:
+            temprow = aliteraleval(temprow)
+        all_taxids.update(temprow)
+    legend_dict = {}
+    # now we add the legends
+    for key in SplitLossColocTree.color_dict_top:
+        taxid = int(key)
+        if taxid in all_taxids:
+            taxname = ncbi.get_taxid_translator([taxid])[taxid]
+            legend_dict[taxname] = SplitLossColocTree.color_dict_top[key]
+    print("This is the legend dict")
+    print(legend_dict)
+    legend_patches = [mpatches.Patch(color=color, label=label)
+                      for label, color in legend_dict.items()]
+    # add the entries to the legend
+    legend = plt.legend(handles=legend_patches, loc="upper right", bbox_to_anchor=(1.2, 1.1), fontsize = figfontsize)
+    # compose the title from the other arguments
+    title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
+    plt.title(title, fontsize = figfontsize)
+    # Turn off the ticks
+    plt.tick_params(axis='both', which='both', bottom=False,
+                    top=False, left=False, right=False,
+                    labelbottom=False, labelleft=False)
+    plt.subplots_adjust(right=0.95)
+    # adjust the plot so that we can see to the right
+
+    phylogeny_plot_object = phylogeny_plotting(df_embedding, "taxid_list", "UMAP1", "UMAP2")
+    for edge in phylogeny_plot_object.plot_edges:
+        plt.plot([edge["x1"], edge["x2"]], [edge["y1"], edge["y2"]], lw = 0.5, color = edge["color"])
+
+    # save the figure as a pdf
+    plt.savefig(outpdf, bbox_inches='tight')
+
 
 def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
                          sample, smalllargeNaN, n_neighbors,
