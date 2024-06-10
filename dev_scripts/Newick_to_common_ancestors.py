@@ -45,12 +45,14 @@ def parse_args():
       - the file path of the newick tree
       - the output prefix for the file, including a prepended path
       - the original config file from which the tree was derived.
+      - the taxids of interest, if we want to plot the divergence relative to a specific species. Accepts a list of taxids
       - the email address to use for programmatic access to NCBI
     """
     parser = argparse.ArgumentParser(description="This script takes a newick tree and identifies the divergence time of various nodes in the tree.")
     parser.add_argument("-n", "--newick", help="The path to the newick tree file.", required=True)
     parser.add_argument("-p", "--prefix", help="The output prefix for the file, including a prepended path if you want another directory.", required=True)
     parser.add_argument("-c", "--config", help="The original config file from which the tree was derived.", required=False)
+    parser.add_argument("-t", "--taxids", help="The taxids of interest, if we want to plot the divergence relative to a specific species. Accepts a list of taxids.", required=False)
     parser.add_argument("-e", "--email", help="The email address to use for programmatic access to NCBI.", required=False)
 
     # check that the newick and config files actually exist
@@ -64,11 +66,14 @@ def parse_args():
         # make sure that the config file exists
         if not os.path.exists(args.config):
             # raise an IO error
-            raise IOError("The config file does not exist: {}".format(args.config))             
+            raise IOError("The config file does not exist: {}".format(args.config))
         # make sure that the user has also provided an email address
         if not args.email:
             # raise an error
             raise ValueError("If you provide a config file, you must also provide an email address to programmatically access the NCBI taxonomy database.")
+
+    # If the type of taxids is None, return an empty list. If it is an int, return a list with that int.
+    
 
     return parser.parse_args()
 
@@ -186,6 +191,47 @@ def report_divergence_time_all_vs_all(tree, output_prefix):
                 divergence_times[entry] = age
             f.write("{}\t{}\t{}\n".format(sp1, sp2, age))
     return divergence_times
+
+def report_divergence_time_one_vs_all(tree, query_taxid, output_prefix):
+    """
+    This method gets the divergence times and writes them to a file with the prefix.
+    Also safely makes a directory if it does not yet exist.
+
+    Makes a dictionary of the divergence times for a single species (defined by the NCBI taxid) all the species
+    """
+    # first we must enforce that the input type for the query_taxid is an integer
+    if not isinstance(query_taxid, int):
+        raise ValueError("The query_taxid must be an integer.")
+
+    # first come up with the outfile path
+    outfile_path = "{}.{}.divergence_times.txt".format(query_taxid, output_prefix)
+    # data structure to save the divergence times
+    divergence_times = {}
+    # safely make the directories if they don't exist
+    create_directories_recursive_notouch(outfile_path)
+    # open the outfile for writing
+    with open(outfile_path, "w") as f:
+        lineages = get_all_lineages(tree)
+
+   #     for sp1, sp2, age in get_divergence_time_all_vs_all(tree):
+   #         entry = (sp1, sp2)
+   #         if entry not in divergence_times:
+   #             divergence_times[entry] = age
+   #         f.write("{}\t{}\t{}\n".format(sp1, sp2, age))
+
+
+   # sp_list_sorted = list(sorted(lineages.keys()))
+   # for i in range(len(sp_list_sorted)-1):
+   #     for j in range(i+1, len(sp_list_sorted)):
+   #         sp1 = sp_list_sorted[i]
+   #         sp2 = sp_list_sorted[j]
+   #         common_ancestor, age = find_common_ancestor_age(lineages[sp1], lineages[sp2])
+   #         # round this to 5 decimal places
+   #         age_print = round(age, 5)
+   #         yield sp1, sp2, age_print
+
+    return divergence_times
+
 
 def convert_ncbi_entry_to_dict(ncbi_entry):
     entries = []
