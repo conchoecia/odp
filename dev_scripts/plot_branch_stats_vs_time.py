@@ -194,6 +194,8 @@ def plot_fusions_per_branch_vs_time(outprefix, resultsdf, intensity_of_extinctio
     # save the plot as a pdf
     pdfout = outprefix.rstrip(".pdf") + ".pdf"
     plt.savefig(pdfout)
+    # close the figure to free up memory
+    plt.close(fig)
 
 def plot_intensity_of_extinction(outprefix, count_df, intensity_of_extinction_filepath, suppress_plotting = False):
     """
@@ -375,6 +377,8 @@ def plot_intensity_of_extinction(outprefix, count_df, intensity_of_extinction_fi
         # save to a pdf
         outpdf =  outprefix.rstrip(".pdf").rstrip(".tsv") + ".pdf"
         plt.savefig(outpdf)
+        # close the figure to free up memory
+        plt.close(fig)
     return statsresults
 
 def get_edge_stats_single_taxid(taxid, edgedf, nodedf, eventdf) -> pd.DataFrame:
@@ -383,6 +387,9 @@ def get_edge_stats_single_taxid(taxid, edgedf, nodedf, eventdf) -> pd.DataFrame:
     The things we will calculate:
       - The rate of fusions on this specific branch
       - The rate of fusions on this and child branches
+
+    Returns:
+      - A dataframe with event counts at each age.
     """
     # we need to filter the edgedf where the lineage of the child_taxid is the taxid
     keep_indices = []
@@ -439,7 +446,9 @@ def add_events_to_edge_df(edgedf, eventdf) -> pd.DataFrame:
 
     # Initialize a dictionary to hold the new columns
     new_columns = {"num_fusions_this_branch": 0,
-                   "num_losses_this_branch": 0}
+                   "num_losses_this_branch": 0,
+                   "num_fusions_per_my_this_branch": 0,
+                   "num_losses_per_my_this_branch": 0}
     # get all of the unique categories without the parentheses from the eventdf
     ALGs         = sorted(set([x for x in eventdf['change'].unique() if x[0] != '(']))
     for thisALG in ALGs:
@@ -489,6 +498,9 @@ def add_events_to_edge_df(edgedf, eventdf) -> pd.DataFrame:
                 for thiscol in colnames:
                     edgedf.loc[edge_row.index, thiscol] += 1
     print("There were {} missing events".format(missing_events))
+
+    edgedf["num_fusions_per_my_this_branch"] = edgedf["num_fusions_this_branch"] / edgedf["branch_length"]
+    edgedf["num_losses_per_my_this_branch"] = edgedf["num_losses_this_branch"] / edgedf["branch_length"]
     return edgedf
 
 def main():
@@ -508,6 +520,9 @@ def main():
 
     edgedf = add_events_to_edge_df(edgedf, eventdf)
     print("Edgedf has been marked up")
+    # save this to a new file, as it has the number of changes per branch
+    edgedf.to_csv("modified_edge_list.tsv", sep='\t', index=False)
+
     # print the columns that have _this_branch
 
     # verify that there every value in the target column is unique
