@@ -38,6 +38,7 @@ def parse_args():
       - the statsdf file.
       - the intensity of extinction file.
       - an optional list of taxids to omit, anything in the clade that has one of these taxids as a parent (or as the actual taxid) will be omitted.
+      - a flag R to just rerun the incomplete parts of the analysis. Doesn't bother to output a node file.
 
     We will check that both files exist.
     """
@@ -112,6 +113,7 @@ def plot_fusions_per_branch_vs_time(outprefix, resultsdf, intensity_of_extinctio
     ax[2][0].set_title("Losses/branch vs Age")
     ax[2][0].set_xlabel("Age")
     ax[2][0].set_ylabel("Losses/branch")
+
     if intensity_of_extinction_filepath is not None:
         # This is intensity of extinction
         for i, row in intensity_of_extinction_df.iterrows():
@@ -125,8 +127,8 @@ def plot_fusions_per_branch_vs_time(outprefix, resultsdf, intensity_of_extinctio
             ax[3][1].add_patch(rectangle)
         # Add some text to the plots "Rhode & Miller (2005) Extinction Intensity"
         # Add it to the top left.
-        ax[3][0].text(0.05, 0.95, "Rhode & Miller (2005) Extinction Intensity", fontsize=8, transform=ax[3][0].transAxes)
-        ax[3][1].text(0.05, 0.95, "Rhode & Miller (2005) Extinction Intensity", fontsize=8, transform=ax[3][1].transAxes)
+        ax[3][0].text(0.05, 0.92, "Rhode & Miller (2005) Extinction Intensity", fontsize=8, transform=ax[3][0].transAxes)
+        ax[3][1].text(0.05, 0.92, "Rhode & Miller (2005) Extinction Intensity", fontsize=8, transform=ax[3][1].transAxes)
         # This is intensity of origination
         for i, row in intensity_of_extinction_df.iterrows():
             left_x = -1 * row['Time (Ma)']
@@ -139,8 +141,8 @@ def plot_fusions_per_branch_vs_time(outprefix, resultsdf, intensity_of_extinctio
             ax[4][1].add_patch(rectangle)
         # Add some text to the plots "Rhode & Miller (2005) Extinction Intensity"
         # Add it to the top left.
-        ax[4][0].text(0.05, 0.95, "Rhode & Miller (2005) Origination Intensity", fontsize=8, transform=ax[4][0].transAxes)
-        ax[4][1].text(0.05, 0.95, "Rhode & Miller (2005) Origination Intensity", fontsize=8, transform=ax[4][1].transAxes)
+        ax[4][0].text(0.05, 0.92, "Rhode & Miller (2005) Origination Intensity", fontsize=8, transform=ax[4][0].transAxes)
+        ax[4][1].text(0.05, 0.92, "Rhode & Miller (2005) Origination Intensity", fontsize=8, transform=ax[4][1].transAxes)
 
     # now make the same thing, but log2 of the ratio
     # first plot, combined on one axis
@@ -187,6 +189,8 @@ def plot_fusions_per_branch_vs_time(outprefix, resultsdf, intensity_of_extinctio
         for axj in [0,1]:
             ax[axi][axj].tick_params(axis='both', which='major', labelsize=fontsize)
             ax[axi][axj].set_title(ax[axi][axj].get_title(), fontsize=fontsize)
+            ax[axi][axj].set_xlabel(ax[axi][axj].get_xlabel(), fontsize=fontsize)
+            ax[axi][axj].set_ylabel(ax[axi][axj].get_ylabel(), fontsize=fontsize)
 
     # increase the horizontal and vertical space between the panels
     plt.subplots_adjust(hspace=0.5, wspace=0.5)
@@ -196,6 +200,29 @@ def plot_fusions_per_branch_vs_time(outprefix, resultsdf, intensity_of_extinctio
     plt.savefig(pdfout)
     # close the figure to free up memory
     plt.close(fig)
+
+def _subdf_no_missing(df, col1name, col2name) -> pd.DataFrame:
+    """
+    Given two column names and a df, extract those two columns, then remove rows with missing values, or values that are -inf or inf.
+    A view of the original df is fine since we do not modify the subdf.
+    Returns a view of the original df.
+    """
+    statsdf = df[[col1name, col2name]]
+    return statsdf[~statsdf.isin([np.nan, np.inf, -np.inf]).any(axis=1)]
+
+def _full_sk_stats(df, col1name, col2name, spearman_or_kendall) -> tuple:
+    """
+    Given a df and two column names,
+    Returns a 3-element tuple of correlation, the p-value, and n (sample size)
+    """
+    statsdf = _subdf_no_missing(df, col1name, col2name)
+    if spearman_or_kendall == "spearman":
+        corr, p = spearmanr(statsdf[col1name], statsdf[col2name])
+    elif spearman_or_kendall == "kendall":
+        corr, p = kendalltau(statsdf[col1name], statsdf[col2name])
+    else:
+        raise ValueError(f"Unknown correlation type {spearman_or_kendall}")
+    return (corr, p, len(statsdf))
 
 def plot_intensity_of_extinction(outprefix, count_df, intensity_of_extinction_filepath, suppress_plotting = False):
     """
@@ -230,41 +257,42 @@ def plot_intensity_of_extinction(outprefix, count_df, intensity_of_extinction_fi
     plotdf["origination_intensity_normalized"] = plotdf["intensity_of_origination"] / 100
     # We want to measure the spearman correlation between the intensity of extinction and the fusions and losses. Use log for the fusions and losses.
     #  - It is not appropriate to use Pearson correlation, because the data are not linear (the percent, ranging between 0-100 or 0-1, cannot be linearly related to the number of fusions or losses).
-    fusion_spearman_corr, fusion_spearman_p     = spearmanr( plotdf["extinction_intensity_normalized"], np.log2(plotdf["fusions_ratio"]))
-    loss_spearman_corr, loss_spearman_p         = spearmanr( plotdf["extinction_intensity_normalized"], np.log2(plotdf["losses_ratio"]))
-    fusion_kendalltau_corr, fusion_kendalltau_p = kendalltau(plotdf["extinction_intensity_normalized"], np.log2(plotdf["fusions_ratio"]))
-    loss_kendalltau_corr,   loss_kendalltau_p   = kendalltau(plotdf["extinction_intensity_normalized"], np.log2(plotdf["losses_ratio"]))
-    #print(f"The Spearman correlation between the intensity of extinction and the log2 of the fusions ratio is {fusion_spearman_corr}")
-    #print(f"  - the p-value is {fusion_spearman_p}")
-    #print(f"The Kendall tau correlation between the intensity of extinction and the log2 of the fusions ratio is {fusion_kendalltau_corr}")
-    #print(f"  - the p-value is {fusion_kendalltau_p}")
-    #print(f"The Spearman correlation between the intensity of extinction and the log2 of the losses ratio is {loss_spearman_corr}")
-    #print(f"  - the p-value is {loss_spearman_p}")
-    #print(f"The Kendall tau correlation between the intensity of extinction and the log2 of the losses ratio is {loss_kendalltau_corr}")
-    #print(f"  - the p-value is {loss_kendalltau_p}")
+    # get the values that have no nans or inf values
+    fusion_spearman_corr,   fusion_spearman_p,   fusion_spearman_n   = _full_sk_stats(plotdf, "extinction_intensity_normalized", "fusions_ratio", "spearman")
+    loss_spearman_corr,     loss_spearman_p,     loss_spearman_n     = _full_sk_stats(plotdf, "extinction_intensity_normalized", "losses_ratio", "spearman")
+    fusion_kendalltau_corr, fusion_kendalltau_p, fusion_kendalltau_n = _full_sk_stats(plotdf, "extinction_intensity_normalized", "fusions_ratio", "kendall")
+    loss_kendalltau_corr,   loss_kendalltau_p,   loss_kendalltau_n   = _full_sk_stats(plotdf, "extinction_intensity_normalized", "losses_ratio", "kendall")
     statsresults = {}
     statsresults["extinction_fusion_spearman_r"]   = fusion_spearman_corr
     statsresults["extinction_fusion_spearman_p"]   = fusion_spearman_p
+    statsresults["extinction_fusion_spearman_n"]   = fusion_spearman_n
     statsresults["extinction_fusion_kendalltau_r"] = fusion_kendalltau_corr
     statsresults["extinction_fusion_kendalltau_p"] = fusion_kendalltau_p
+    statsresults["extinction_fusion_kendalltau_n"] = fusion_kendalltau_n
     statsresults["extinction_losses_spearman_r"]   = loss_spearman_corr
     statsresults["extinction_losses_spearman_p"]   = loss_spearman_p
+    statsresults["extinction_losses_spearman_n"]   = loss_spearman_n
     statsresults["extinction_losses_kendalltau_r"] = loss_kendalltau_corr
     statsresults["extinction_losses_kendalltau_p"] = loss_kendalltau_p
+    statsresults["extinction_losses_kendalltau_n"] = loss_kendalltau_n
 
 
-    ofusion_spearman_corr,   ofusion_spearman_p   = spearmanr( plotdf["origination_intensity_normalized"], np.log2(plotdf["fusions_ratio"]))
-    oloss_spearman_corr,     oloss_spearman_p     = spearmanr( plotdf["origination_intensity_normalized"], np.log2(plotdf["losses_ratio"]))
-    ofusion_kendalltau_corr, ofusion_kendalltau_p = kendalltau(plotdf["origination_intensity_normalized"], np.log2(plotdf["fusions_ratio"]))
-    oloss_kendalltau_corr,   oloss_kendalltau_p   = kendalltau(plotdf["origination_intensity_normalized"], np.log2(plotdf["losses_ratio"]))
+    ofusion_spearman_corr,   ofusion_spearman_p,   ofusion_spearman_n   = _full_sk_stats(plotdf, "origination_intensity_normalized", "fusions_ratio", "spearman")
+    oloss_spearman_corr,     oloss_spearman_p,     oloss_spearman_n     = _full_sk_stats(plotdf, "origination_intensity_normalized", "losses_ratio" , "spearman")
+    ofusion_kendalltau_corr, ofusion_kendalltau_p, ofusion_kendalltau_n = _full_sk_stats(plotdf, "origination_intensity_normalized", "fusions_ratio", "kendall")
+    oloss_kendalltau_corr,   oloss_kendalltau_p,   oloss_kendalltau_n   = _full_sk_stats(plotdf, "origination_intensity_normalized", "losses_ratio" , "kendall")
     statsresults["origination_fusion_spearman_r"]   = ofusion_spearman_corr
     statsresults["origination_fusion_spearman_p"]   = ofusion_spearman_p
+    statsresults["origination_fusion_spearman_n"]   = ofusion_spearman_n
     statsresults["origination_fusion_kendalltau_r"] = ofusion_kendalltau_corr
     statsresults["origination_fusion_kendalltau_p"] = ofusion_kendalltau_p
+    statsresults["origination_fusion_kendalltau_n"] = ofusion_kendalltau_n
     statsresults["origination_losses_spearman_r"]   = oloss_spearman_corr
     statsresults["origination_losses_spearman_p"]   = oloss_spearman_p
+    statsresults["origination_losses_spearman_n"]   = oloss_spearman_n
     statsresults["origination_losses_kendalltau_r"] = oloss_kendalltau_corr
     statsresults["origination_losses_kendalltau_p"] = oloss_kendalltau_p
+    statsresults["origination_losses_kendalltau_n"] = oloss_kendalltau_n
 
     if not suppress_plotting:
         # EXTINCTION INTENSITY
@@ -285,13 +313,13 @@ def plot_intensity_of_extinction(outprefix, count_df, intensity_of_extinction_fi
         ax[1][0].set_xlabel("Extinction Intensity (%)")
         ax[1][0].set_ylabel("Fusions/branch")
         # add the spearman and kendall tau information
-        ax[1][0].text(0.5, 0.5, f"Spearman correlation: {fusion_spearman_corr:.2f}\nSpearman p={fusion_spearman_p:.4e}\nKendall tau: {fusion_kendalltau_corr:.2f}\nKendall p={fusion_kendalltau_p:.4e}", fontsize=fontsize, transform=ax[1][0].transAxes)
+        ax[1][0].text(0.5, 0.5, f"Spearman correlation: {fusion_spearman_corr:.2f}\nSpearman p={fusion_spearman_p:.4e}\nSpearman n={fusion_spearman_n}\n\nKendall tau: {fusion_kendalltau_corr:.2f}\nKendall p={fusion_kendalltau_p:.4e}\nKendall n={fusion_kendalltau_n}", fontsize=fontsize, transform=ax[1][0].transAxes)
         # third, just losses
         ax[2][0].scatter(plotdf["intensity_of_extinction"], plotdf["losses_ratio"], color=red)
         ax[2][0].set_title("Losses/branch vs Extinction Intensity")
         ax[2][0].set_xlabel("Extinction Intensity (%)")
         ax[2][0].set_ylabel("Losses/branch")
-        ax[2][0].text(0.5, 0.5, f"Spearman correlation: {loss_spearman_corr:.2f}\nSpearman p={loss_spearman_p:.4e}\nKendall tau: {loss_kendalltau_corr:.2f}\nKendall p={fusion_kendalltau_p:.4e}", fontsize=fontsize, transform=ax[2][0].transAxes)
+        ax[2][0].text(0.5, 0.5, f"Spearman correlation: {loss_spearman_corr:.2f}\nSpearman p={loss_spearman_p:.4e}\nSpearman n={loss_spearman_n}\nKendall tau: {loss_kendalltau_corr:.2f}\nKendall p={loss_kendalltau_p:.4e}\nKendall n={loss_kendalltau_n}", fontsize=fontsize, transform=ax[2][0].transAxes)
 
         # now make the same thing, but log2 of the ratio
         # first plot, combined on one axis
@@ -324,13 +352,13 @@ def plot_intensity_of_extinction(outprefix, count_df, intensity_of_extinction_fi
         ax[1][2].set_xlabel("Origination Intensity (%)")
         ax[1][2].set_ylabel("Fusions/branch")
         # add the spearman and kendall tau information
-        ax[1][2].text(0.5, 0.5, f"Spearman correlation: {ofusion_spearman_corr:.2f}\nSpearman p={ofusion_spearman_p:.4e}\nKendall tau: {ofusion_kendalltau_corr:.2f}\nKendall p={ofusion_kendalltau_p:.4e}", fontsize=fontsize, transform=ax[1][2].transAxes)
+        ax[1][2].text(0.5, 0.5, f"Spearman correlation: {ofusion_spearman_corr:.2f}\nSpearman p={ofusion_spearman_p:.4e}\nSpearman n={ofusion_spearman_n}\nKendall tau: {ofusion_kendalltau_corr:.2f}\nKendall p={ofusion_kendalltau_p:.4e}\nKendall n={ofusion_kendalltau_n}", fontsize=fontsize, transform=ax[1][2].transAxes)
         # third, just losses
         ax[2][2].scatter(plotdf["intensity_of_origination"], plotdf["losses_ratio"], color=red)
         ax[2][2].set_title("Losses/branch vs Origination Intensity")
         ax[2][2].set_xlabel("Origination Intensity (%)")
         ax[2][2].set_ylabel("Losses/branch")
-        ax[2][2].text(0.5, 0.5, f"Spearman correlation: {oloss_spearman_corr:.2f}\nSpearman p={oloss_spearman_p:.4e}\nKendall tau: {oloss_kendalltau_corr:.2f}\nKendall p={ofusion_kendalltau_p:.4e}", fontsize=fontsize, transform=ax[2][2].transAxes)
+        ax[2][2].text(0.5, 0.5, f"Spearman correlation: {oloss_spearman_corr:.2f}\nSpearman p={oloss_spearman_p:.4e}\nSpearman n={oloss_spearman_n}\nKendall tau: {oloss_kendalltau_corr:.2f}\nKendall p={oloss_kendalltau_p:.4e}\nKendall n={oloss_kendalltau_n}", fontsize=fontsize, transform=ax[2][2].transAxes)
 
         # now make the same thing, but log2 of the ratio
         # first plot, combined on one axis
@@ -537,56 +565,75 @@ def main():
     # change the types of the previous two to int
     nodedf["fusions_in_this_clade"] = nodedf["fusions_in_this_clade"].astype(int)
     nodedf["losses_in_this_clade"] = nodedf["losses_in_this_clade"].astype(int)
+    nodedf["fusions_in_this_clade_div_dist_crown"] = -1.00000000001
+    nodedf["losses_in_this_clade_div_dist_crown"]  = -1.00000000001
+    nodedf["fusions_in_this_clade_div_dist_crown_plus_root"] = -1.00000000001
+    nodedf["losses_in_this_clade_div_dist_crown_plus_root"]  = -1.00000000001
     if args.intensity_of_extinction is not None:
         nodedf["extinction_fusion_spearman_r"]    = -1.00000000001
         nodedf["extinction_fusion_spearman_p"]    = -1.00000000001
+        nodedf["extinction_fusion_spearman_n"]    = -1.00000000001
         nodedf["extinction_fusion_kendalltau_r"]  = -1.00000000001
         nodedf["extinction_fusion_kendalltau_p"]  = -1.00000000001
+        nodedf["extinction_fusion_kendalltau_n"]  = -1.00000000001
         nodedf["extinction_losses_spearman_r"]    = -1.00000000001
         nodedf["extinction_losses_spearman_p"]    = -1.00000000001
+        nodedf["extinction_losses_spearman_n"]    = -1.00000000001
         nodedf["extinction_losses_kendalltau_r"]  = -1.00000000001
         nodedf["extinction_losses_kendalltau_p"]  = -1.00000000001
+        nodedf["extinction_losses_kendalltau_n"]  = -1.00000000001
         nodedf["origination_fusion_spearman_r"]   = -1.00000000001
         nodedf["origination_fusion_spearman_p"]   = -1.00000000001
+        nodedf["origination_fusion_spearman_n"]   = -1.00000000001
         nodedf["origination_fusion_kendalltau_r"] = -1.00000000001
         nodedf["origination_fusion_kendalltau_p"] = -1.00000000001
+        nodedf["origination_fusion_kendalltau_n"] = -1.00000000001
         nodedf["origination_losses_spearman_r"]   = -1.00000000001
         nodedf["origination_losses_spearman_p"]   = -1.00000000001
+        nodedf["origination_losses_spearman_n"]   = -1.00000000001
         nodedf["origination_losses_kendalltau_r"] = -1.00000000001
         nodedf["origination_losses_kendalltau_p"] = -1.00000000001
+        nodedf["origination_losses_kendalltau_n"] = -1.00000000001
 
     # We want some clade names
     NCBI = ete3.NCBITaxa()
-    counter = 0
-    for node in nodedf['taxid']:
+    for i, row in nodedf.iterrows():
+        node = row["taxid"]
         clade_name = NCBI.get_taxid_translator([node])[node]
         clade_name = clade_name[0].upper() + clade_name[1:]
+
         if " " in clade_name:
             clade_name = "".join([x.capitalize() for x in clade_name.split(" ")])
-        print("  - We are processing node {} / {}".format(counter, len(nodedf)))
+        print("  - We are processing node {} / {}".format(i, len(nodedf)))
         resultsdf, (fusions, losses) = get_edge_stats_single_taxid(node, edgedf, nodedf, eventdf)
         # update the nodedf with the number of fusions and losses
-        nodedf.loc[nodedf['taxid'] == node, 'fusions_in_this_clade'] = fusions
-        nodedf.loc[nodedf['taxid'] == node, 'losses_in_this_clade'] = losses
-        #print(resultsdf)
-        #print("For node {}, we found {} fusions and {} losses".format(node, fusions, losses))
+        # we can use iloc because we have i
+        nodedf.loc[i, 'fusions_in_this_clade'] = fusions
+        nodedf.loc[i, 'losses_in_this_clade'] = losses
+        # if the name field is empty or Nan, add it
+        if nodedf.loc[i, "name"] == "" or pd.isna(nodedf.loc[i, "name"]):
+            nodedf.loc[i, "name"] = clade_name
 
+        outprefix1 = f"{clade_name}_{node}_changes_vs_time"
         if not args.suppress_plotting:
             # plot the changes per time
             if args.intensity_of_extinction is not None:
-                outprefix = f"{clade_name}_{node}_changes_vs_time"
-                plot_fusions_per_branch_vs_time(outprefix, resultsdf, intensity_of_extinction_filepath = args.intensity_of_extinction)
+                plot_fusions_per_branch_vs_time(outprefix1, resultsdf, intensity_of_extinction_filepath = args.intensity_of_extinction)
             else:
-                plot_fusions_per_branch_vs_time(outprefix, resultsdf)
+                plot_fusions_per_branch_vs_time(outprefix1, resultsdf)
 
+        outprefix2 = f"{clade_name}_{node}_changes_vs_intensity"
         # now plot the intensity of extinction with the change types depending on whether they are present.
         if args.intensity_of_extinction is not None:
-            outprefix = f"{clade_name}_{node}_changes_vs_intensity"
-            statsdf = plot_intensity_of_extinction(outprefix, resultsdf, args.intensity_of_extinction, suppress_plotting = args.suppress_plotting)
+            statsdf = plot_intensity_of_extinction(outprefix2, resultsdf, args.intensity_of_extinction, suppress_plotting = args.suppress_plotting)
             for key in statsdf:
                 nodedf.loc[nodedf['taxid'] == node, key] = statsdf[key]
-        counter += 1
 
+    # now calculate the rates
+    nodedf["fusions_in_this_clade_div_dist_crown"] = nodedf["fusions_in_this_clade"] / nodedf["dist_crown"]
+    nodedf["losses_in_this_clade_div_dist_crown"]  = nodedf["losses_in_this_clade"] / nodedf["dist_crown"]
+    nodedf["fusions_in_this_clade_div_dist_crown_plus_root"] = nodedf["fusions_in_this_clade"] / nodedf["dist_crown_plus_root"]
+    nodedf["losses_in_this_clade_div_dist_crown_plus_root"]  = nodedf["losses_in_this_clade"] / nodedf["dist_crown_plus_root"]
     # now save the modified node df
     nodedf.to_csv("modified_node_list.tsv", sep='\t', index=False)
 
