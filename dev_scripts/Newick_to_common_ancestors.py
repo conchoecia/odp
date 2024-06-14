@@ -312,12 +312,13 @@ class TaxNode:
                  'name', 'nodeages', 'nodeage',
                  'nodeageinterpolated', 'lineage', 'lineage_string',
                  'sort_order', 'dist_crown', 'dist_crown_plus_root',
-                 "chromsize_median", "chromsize_mean", "chromsize_list"]
-    def __init__(self, taxid) -> None:
+                 "chromsize_median", "chromsize_mean", "num_genomes",
+                 "chromsize_list"]
+    def __init__(self, taxid, name = None) -> None:
         self.taxid = taxid
         self.parent = None
         self.children = set()
-        self.name = None
+        self.name = name
         # node age estimates, in millions of years ago
         self.nodeages = Counter()
         # This is the singular node age estimate, once we are happy with one of them
@@ -336,6 +337,7 @@ class TaxNode:
         # chromsize info
         self.chromsize_median = -1
         self.chromsize_mean   = -1
+        self.num_genomes      = -1
         self.chromsize_list   = []
 
     def __str__(self) -> str:
@@ -389,12 +391,13 @@ class TaxIDtree:
     This is a datastructure to quickly search for the most closely related species
       given search species 1 and a tree of species 2...N.
     """
-    __slots__ = ["nodes", "edges", "root", "leaf_order"]
+    __slots__ = ["nodes", "edges", "root", "leaf_order", "NCBI"]
     def __init__(self) -> None:
         self.nodes = {}
         self.edges = {}
         self.root = None
         self.leaf_order = []
+        self.NCBI = ete3.NCBITaxa()
 
     def find_root(self) -> int:
         """
@@ -431,19 +434,26 @@ class TaxIDtree:
     def add_node(self, taxid) -> TaxNode:
         """
         Takes a taxid, name, and lineage and adds it to the tree.
+        Safely adds, so we can call this multiple times.
+        Doesn't fail if the node already exists.
         """
         if taxid not in self.nodes:
             self.nodes[taxid] = TaxNode(taxid)
+            # for now, we are just using NCBI taxids, so it is safe to use NCBI.get_taxid_translator()
+            clade_name = self.NCBI.get_taxid_translator([taxid])[taxid]
+            clade_name = clade_name[0].upper() + clade_name[1:]
+            if " " in clade_name:
+                clade_name = "".join([x.capitalize() for x in clade_name.split(" ")])
+            self.nodes[taxid].name = clade_name
         return self.nodes[taxid]
 
     def add_edge(self, parent_taxid, child_taxid) -> int:
         """
         Adds an edge between two nodes.
         """
-        if not parent_taxid in self.nodes:
-            self.nodes[parent_taxid] = TaxNode(parent_taxid)
-        if not child_taxid in self.nodes:
-            self.nodes[child_taxid] = TaxNode(child_taxid)
+        # add the nodes. The addition is safe, so we can call this multiple times.
+        self.add_node(parent_taxid)
+        self.add_node(child_taxid)
         # From the parent, add the child
         self.nodes[parent_taxid].children.add(child_taxid)
         # from the child, add the parent. If there is no parent, fine. If there is a parent already, must match the existing taxid.
@@ -506,6 +516,7 @@ class TaxIDtree:
             else:
                 self.nodes[node].chromsize_mean = -1
                 self.nodes[node].chromsize_median = -1
+            self.nodes[node].num_genomes = len(self.nodes[node].chromsize_list)
 
     def set_leaf_ages_to_zero(self) -> None:
         """
