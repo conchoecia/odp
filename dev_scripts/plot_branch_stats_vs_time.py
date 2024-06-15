@@ -702,38 +702,37 @@ def main():
     NCBI = ete3.NCBITaxa()
     for i, row in nodedf.iterrows():
         node = row["taxid"]
-        if node == 33208:
-            clade_name = NCBI.get_taxid_translator([node])[node]
-            clade_name = clade_name[0].upper() + clade_name[1:]
+        clade_name = NCBI.get_taxid_translator([node])[node]
+        clade_name = clade_name[0].upper() + clade_name[1:]
 
-            if " " in clade_name:
-                clade_name = "".join([x.capitalize() for x in clade_name.split(" ")])
-            print("  - We are processing node {} / {}".format(i, len(nodedf)))
-            resultsdf, (fusions, losses) = get_edge_stats_single_taxid(node, edgedf)
-            outprefix0 = f"{clade_name}_{node}_changes_vs_age"
-            resultsdf.to_csv(outprefix0 + ".tsv", sep='\t', index=False)
-            # update the nodedf with the number of fusions and losses
-            # we can use iloc because we have i
-            nodedf.loc[i, 'fusions_in_this_clade'] = fusions
-            nodedf.loc[i, 'losses_in_this_clade'] = losses
-            # if the name field is empty or Nan, add it
-            if nodedf.loc[i, "name"] == "" or pd.isna(nodedf.loc[i, "name"]):
-                nodedf.loc[i, "name"] = clade_name
+        if " " in clade_name:
+            clade_name = "".join([x.capitalize() for x in clade_name.split(" ")])
+        print("  - We are processing node {} / {}".format(i, len(nodedf)))
+        resultsdf, (fusions, losses) = get_edge_stats_single_taxid(node, edgedf)
+        outprefix0 = f"{clade_name}_{node}_changes_vs_age"
+        resultsdf.to_csv(outprefix0 + ".tsv", sep='\t', index=False)
+        # update the nodedf with the number of fusions and losses
+        # we can use iloc because we have i
+        nodedf.loc[i, 'fusions_in_this_clade'] = fusions
+        nodedf.loc[i, 'losses_in_this_clade'] = losses
+        # if the name field is empty or Nan, add it
+        if nodedf.loc[i, "name"] == "" or pd.isna(nodedf.loc[i, "name"]):
+            nodedf.loc[i, "name"] = clade_name
 
-            outprefix1 = f"{clade_name}_{node}_changes_vs_time"
-            if not args.suppress_plotting:
-                # plot the changes per time
-                if args.intensity_of_extinction is not None:
-                    plot_fusions_per_branch_vs_time(outprefix1, resultsdf, intensity_of_extinction_filepath = args.intensity_of_extinction)
-                else:
-                    plot_fusions_per_branch_vs_time(outprefix1, resultsdf)
-
-            outprefix2 = f"{clade_name}_{node}_changes_vs_intensity"
-            # now plot the intensity of extinction with the change types depending on whether they are present.
+        outprefix1 = f"{clade_name}_{node}_changes_vs_time"
+        if not args.suppress_plotting:
+            # plot the changes per time
             if args.intensity_of_extinction is not None:
-                statsdf = plot_intensity_of_extinction(outprefix2, resultsdf, args.intensity_of_extinction, suppress_plotting = args.suppress_plotting)
-                for key in statsdf:
-                    nodedf.loc[nodedf['taxid'] == node, key] = statsdf[key]
+                plot_fusions_per_branch_vs_time(outprefix1, resultsdf, intensity_of_extinction_filepath = args.intensity_of_extinction)
+            else:
+                plot_fusions_per_branch_vs_time(outprefix1, resultsdf)
+
+        outprefix2 = f"{clade_name}_{node}_changes_vs_intensity"
+        # now plot the intensity of extinction with the change types depending on whether they are present.
+        if args.intensity_of_extinction is not None:
+            statsdf = plot_intensity_of_extinction(outprefix2, resultsdf, args.intensity_of_extinction, suppress_plotting = args.suppress_plotting)
+            for key in statsdf:
+                nodedf.loc[nodedf['taxid'] == node, key] = statsdf[key]
 
     # now calculate the rates
     nodedf["fusions_in_this_clade_div_dist_crown"] = nodedf["fusions_in_this_clade"] / nodedf["dist_crown"]
