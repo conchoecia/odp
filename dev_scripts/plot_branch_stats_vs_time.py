@@ -221,7 +221,14 @@ def _full_sk_stats(df, col1name, col2name, spearman_or_kendall) -> tuple:
     elif spearman_or_kendall == "kendall":
         corr, p = kendalltau(statsdf[col1name], statsdf[col2name])
     elif spearman_or_kendall == "pearson":
-        corr, p = pearsonr(np.log2(statsdf[col1name]), np.log2(statsdf[col2name]))
+        statsdf = statsdf[[col1name, col2name]]
+        statsdf[col1name] = np.log2(statsdf[col1name])
+        statsdf[col2name] = np.log2(statsdf[col2name])
+        statsdf = _subdf_no_missing(statsdf, col1name, col2name)
+        if len(statsdf) >= 2:
+            corr, p = pearsonr(statsdf[col1name], statsdf[col2name])
+        else:
+            corr, p = np.nan, np.nan
     else:
         raise ValueError(f"Unknown correlation type {spearman_or_kendall}")
     return (corr, p, len(statsdf))
