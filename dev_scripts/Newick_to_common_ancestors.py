@@ -7,7 +7,9 @@ This script takes a newick tree and identifies the divergence time of various no
 import argparse
 from collections import Counter,deque
 import ete3
+from matplotlib import pyplot as plt
 import networkx as nx
+import numpy as np
 import os
 import pandas as pd
 import random
@@ -311,9 +313,36 @@ class TaxNode:
     __slots__ = ['taxid', 'parent', 'children',
                  'name', 'nodeages', 'nodeage',
                  'nodeageinterpolated', 'lineage', 'lineage_string',
-                 'sort_order', 'dist_crown', 'dist_crown_plus_root',
-                 "chromsize_median", "chromsize_mean", "num_genomes",
-                 "chromsize_list"]
+                 'sort_order', 'x', 'y',
+                 'dist_crown', 'dist_crown_plus_root',
+                 "chromsize_median", "chromsize_mean",
+                 "num_genomes", "chromsize_list",
+                 "fusions_in_this_clade",
+                 "losses_in_this_clade",
+                 "extinction_fusion_spearman_r",
+                 "extinction_fusion_spearman_p",
+                 "extinction_fusion_spearman_n",
+                 "extinction_fusion_kendalltau_r",
+                 "extinction_fusion_kendalltau_p",
+                 "extinction_fusion_kendalltau_n",
+                 "extinction_losses_spearman_r",
+                 "extinction_losses_spearman_p",
+                 "extinction_losses_spearman_n",
+                 "extinction_losses_kendalltau_r",
+                 "extinction_losses_kendalltau_p",
+                 "extinction_losses_kendalltau_n",
+                 "origination_fusion_spearman_r",
+                 "origination_fusion_spearman_p",
+                 "origination_fusion_spearman_n",
+                 "origination_fusion_kendalltau_r",
+                 "origination_fusion_kendalltau_p",
+                 "origination_fusion_kendalltau_n",
+                 "origination_losses_spearman_r",
+                 "origination_losses_spearman_p",
+                 "origination_losses_spearman_n",
+                 "origination_losses_kendalltau_r",
+                 "origination_losses_kendalltau_p",
+                 "origination_losses_kendalltau_n"]
     def __init__(self, taxid, name = None) -> None:
         self.taxid = taxid
         self.parent = None
@@ -328,6 +357,8 @@ class TaxNode:
         self.lineage = None
         self.lineage_string = ""
         self.sort_order = None
+        self.x = None
+        self.y = None
         # path information
         # This is the distance of all the edges from this node to the tips
         self.dist_crown = None
@@ -342,18 +373,10 @@ class TaxNode:
 
     def __str__(self) -> str:
         outstring  = "TaxNode:\n"
-        outstring += "  - taxis: {}\n".format(self.taxid)
-        outstring += "  - parent: {}\n".format(self.parent)
-        outstring += "  - children: {}\n".format(self.children)
-        outstring += "  - name: {}\n".format(self.name)
-        outstring += "  - nodeages: {}\n".format(self.nodeages)
-        outstring += "  - nodeage: {}\n".format(self.nodeage)
-        outstring += "  - nodeageinterpolated: {}\n".format(self.nodeageinterpolated)
-        outstring += "  - lineage: {}\n".format(self.lineage)
-        outstring += "  - lineage_string: {}\n".format(self.lineage_string)
-        outstring += "  - sort_order: {}\n".format(self.sort_order)
-        outstring += "  - dist_crown: {}\n".format(self.dist_crown)
-        outstring += "  - dist_crown_plus_root: {}\n".format(self.dist_crown_plus_root)
+        # now print out all of the fields that are currently in the object
+        for slot in self.__slots__:
+            if hasattr(self, slot):
+                outstring += "  - {}: {}\n".format(slot, getattr(self, slot))
         return outstring
 
 class TaxEdge:
@@ -366,7 +389,10 @@ class TaxEdge:
                  'parent_age', 'child_age',
                  'branch_length',
                  'dist_crown_plus_this_edge',
-                 'parent_lineage', 'child_lineage']
+                 'parent_lineage', 'child_lineage',
+                 'num_fusions_this_branch', 'num_losses_this_branch',
+                 'num_fusions_per_my_this_branch', 'num_losses_per_my_this_branch',
+                 'fusions', 'losses']
     def __init__(self, parent_taxid, child_taxid) -> None:
         self.parent_taxid = parent_taxid
         self.child_taxid = child_taxid
@@ -376,14 +402,15 @@ class TaxEdge:
         self.dist_crown_plus_this_edge = None
         self.parent_lineage = None
         self.child_lineage  = None
+        self.fusions = Counter()
+        self.losses  = Counter()
 
     def __str__(self) -> str:
         outstring  = "TaxEdge:\n"
-        outstring += "  - parent_taxid: {}\n".format(self.parent_taxid)
-        outstring += "  - child_taxid: {}\n".format(self.child_taxid)
-        outstring += "  - branch_length: {}\n".format(self.branch_length)
-        outstring += "  - parent_age: {}\n".format(self.parent_age)
-        outstring += "  - child_age: {}\n".format(self.child_age)
+        for slot in self.__slots__:
+            #if hasattr(self, slot) and slot not in ["fusions", "losses"]:
+            if hasattr(self, slot):
+                outstring += "  - {}: {}\n".format(slot, getattr(self, slot))
         return outstring
 
 class TaxIDtree:
@@ -399,13 +426,237 @@ class TaxIDtree:
         self.leaf_order = []
         self.NCBI = ete3.NCBITaxa()
 
+    def ingest_node_edge(self, node_file, edge_file):
+        # Read in existing node and edge files and construct the tree.
+        nodedf = pd.read_csv(node_file, sep="\t")
+        # ingest the nodes
+        for idx, row in nodedf.iterrows():
+            taxid = row["taxid"]
+            self.add_node(taxid)
+            # now go through all of the columns and add them to self.colname items
+            for col in nodedf.columns:
+                if col == "taxid":
+                    continue
+                elif col == "nodeages":
+                    self.nodes[taxid].__setattr__(col, eval(row[col]))
+                elif col == "lineage":
+                    self.nodes[taxid].__setattr__(col, eval(row[col]))
+                elif col == "chromsize_list":
+                    self.nodes[taxid].__setattr__(col, eval(row[col]))
+                elif col == "children":
+                    self.nodes[taxid].children = set(eval(row[col]))
+                else:
+                    self.nodes[taxid].__setattr__(col, row[col])
+            if self.nodes[taxid].num_genomes == -1:
+                self.nodes[taxid].num_genomes = len(self.nodes[taxid].chromsize_list)
+        # Now add the edges
+        edgedf = pd.read_csv(edge_file, sep="\t")
+        counter = 0
+        for idx, row in edgedf.iterrows():
+            p = row["parent_taxid"]
+            c = row["child_taxid"]
+            # check that the parent and child are in the nodes
+            if not p in self.nodes:
+                raise ValueError("The parent taxid is not in the nodes.")
+            if not c in self.nodes:
+                raise ValueError("The child taxid is not in the nodes.")
+            self.add_edge(p, c)
+            for col in edgedf.columns:
+                if col == "parent" or col == "child":
+                    continue
+                # if the column is not in self, check if it starts with num_ and ends with _this_branch
+                if col.startswith("num_") and col.endswith("_this_branch") and (col not in ['num_fusions_this_branch', 'num_losses_this_branch', 'num_fusions_per_my_this_branch', 'num_losses_per_my_this_branch']):
+                    # determine if it is a fusion or a loss
+                    checkfield = col.split("_")[1]
+                    if "+" in checkfield:
+                        # it is a fusion
+                        self.edges[(p, c)].fusions[col] = row[col]
+                    else:
+                        # it is a loss
+                        self.edges[(p, c)].losses[col]  = row[col]
+                else:
+                    self.edges[(p, c)].__setattr__(col, row[col])
+
+    def sort_nodes(self, sort = "lineage"):
+        """
+        All this does is figure out the sort order for the leaves.
+        It does this by sorting based on the self.lineage_string.
+        It updates the self.leaf_order list.
+        Then it updates the sort_order for each node.
+        """
+        if sort not in ["lineage", "ascending", "descending"]:
+            raise ValueError("The sort parameter is not recognized.")
+        if sort == "lineage":
+            tempdict = {x: self.nodes[x].lineage for x in self.nodes if len(self.nodes[x].children) == 0}
+            self.leaf_order = [k for k, v in sorted(tempdict.items(), key=lambda item: item[1])]
+            # now update the sort order of each node
+        elif sort in ["ascending", "descending"]:
+            # Sorts the nodes in descending order using the least dist_crown field
+            # needs to use a DFS to put things into the right order
+            self.leaf_order = []
+            if self.root is None:
+                self.root = self.find_root()
+            stack = [self.root]
+            while stack:
+                node = stack.pop()
+                if node is None:
+                    raise ValueError("The node is None. The stack is: {}".format(stack))
+                if len(self.nodes[node].children) == 0:
+                    self.leaf_order.append(node)
+                else:
+                    # We have to make some decision about which to look at first
+                    #  We will look at the one with the least dist_crown first
+                    children = list(self.nodes[node].children)
+                    if sort == "ascending":
+                        children.sort(key=lambda x: self.nodes[x].dist_crown)
+                    elif sort == "descending":
+                        children.sort(key=lambda x: self.nodes[x].dist_crown, reverse=True)
+                    stack += children
+        for i in range(len(self.leaf_order)):
+            node = self.leaf_order[i]
+            self.nodes[node].sort_order = i
+
+    def plot_tree(self, ax, sort = "ascending", variable = None, lw_standard = 0.25, text_older_than = 999999999999):
+        """
+        Returns an axis object with the tree plotted.
+        For now, just sorts based on the ncbi lineage.
+        Eventually, will plot the line thickness and color based on the variable.
+        """
+        red = "#D22C16"
+        blue = "#3054A3"
+
+        self.sort_nodes(sort)
+        for i in range(len(self.leaf_order)):
+            node = self.leaf_order[i]
+            self.nodes[node].x = i
+
+        if variable is not None:
+            # get the min and max of the variable
+            minv = min([y for y in [self.edges[x].__getattribute__(variable) for x in self.edges] if y != 0]) * 0.1
+            # get the max that isn't infinity
+            maxv = max([y for y in [self.edges[x].__getattribute__(variable) for x in self.edges] if y != float("inf")]) + minv
+            print("We're trying variable: {} with min: {} and max: {}".format(variable, minv, maxv))
+
+        def _log_normalize(value, min_val_linear, max_val_linear):
+            # Step 1: Convert the min and max values to log space
+            min_val_log = np.log(min_val_linear)
+            max_val_log = np.log(max_val_linear)
+
+            # Step 2: Apply logarithmic transformation to the input values
+            log_transformed = np.log(value)
+
+            # Step 3: Min-Max scaling to [0, 1] using the log-transformed min and max values
+            scaled_values = (log_transformed - min_val_log) / (max_val_log - min_val_log)
+            # check to make sure that there are no NaNs
+            if np.isnan(scaled_values):
+                raise ValueError("The scaled values are NaN. The input value was: {}, input min was {}, input max was {}".format(value, min_val_linear, max_val_linear))
+
+            return scaled_values
+
+
+        # now, do a reverse BFS from the tips and plot everything.
+        # Things that are plotted are the edges. This can also just be inferred from the nodes.
+        plotted = set()
+        edge_drawn = set()
+        queue = deque(self.leaf_order)
+        print()
+        while queue:
+            node = queue.popleft()
+            print(f"  - There are {len(queue)} nodes left in the queue.", end="\r")
+            #print("  - self.nodes[x].x for the children is: {}".format([self.nodes[x].x for x in self.nodes[node].children]))
+            # If there are children, first check if all of them are plotted, if not,
+            #  we must skip this node for now and add it to the end of the queue.
+            if len(self.nodes[node].children) > 0:
+                if not all([child in plotted for child in self.nodes[node].children]):
+                    queue.append(node)
+                    continue
+
+            # THIS ONLY HAPPENS IF WE HAVE NOT CONTINUED
+            # DRAWING THE clade hat (These are drawn with a constant y, changing x)
+            # we need to draw the line from the node to the parent.
+            # if there are no children, we do not need to draw the vertical line
+            if len(self.nodes[node].children) == 0:
+                # we already set the x-value to be the sort order outside of this while loop
+                pass
+            elif len(self.nodes[node].children) == 1:
+                # In this case, there are no children, or just one. In this case we draw no line
+                #  connecting children. We just set x to whatever the child's x is
+                self.nodes[node].x = self.nodes[list(self.nodes[node].children)[0]].x
+            else:
+                # We have to figure out how to draw the vertical line first
+                #  Again, y is constant, changing x
+                y = self.nodes[node].nodeage
+                x_min = min([self.nodes[x].x for x in self.nodes[node].children])
+                if type(x_min) not in [int, float]:
+                    raise ValueError("The x_min is not a number.")
+                x_max = max([self.nodes[x].x for x in self.nodes[node].children])
+                if type(x_max) not in [int, float]:
+                    raise ValueError("The x_max is not a number.")
+                ax.plot([x_min, x_max], [y, y], color="black", linewidth=lw_standard)
+                # We now must set the x value of the node to be the average of the
+                self.nodes[node].x = (x_min + x_max)/2
+
+            # DRAWING THE BRANCHES (Drawn with a constant x, changing y)
+            if (self.nodes[node].parent is not None) and (self.nodes[node].parent != -1):
+                x       = self.nodes[node].x
+                y_start = self.nodes[node].nodeage
+                p       = self.nodes[node].parent
+                y_stop  = self.nodes[p].nodeage
+                e       = (p, node)
+                if e not in edge_drawn:
+                    if variable is not None:
+                        # get the value of the variable for this edge
+                        value = self.edges[(p, node)].__getattribute__(variable)
+                        # if the value is nan, convert to zero
+                        if np.isnan(value):
+                            value = 0
+                        # if the value is infinity, we plot it as the max value
+                        if value == float("inf"):
+                            value = 0
+                        value += minv
+                        # now we need to normalize the value
+                        value = _log_normalize(value, minv, maxv)
+                        # now we need to change the thickness
+                        lw = 20 * value
+                        if "fusion" in variable:
+                            color = blue
+                        elif "loss" in variable:
+                            color = red
+                        ax.plot([x, x], [y_start, y_stop], color=color, linewidth=lw, alpha=value)
+                    else:
+                        ax.plot([x, x], [y_start, y_stop], color="black", linewidth=lw_standard)
+                    # now add the parent node
+                    if p not in plotted:
+                        queue.append(p)
+                    edge_drawn.add(e)
+            # we now plotted the node
+            plotted.add(node)
+        print()
+
+        # Let's add text to the nodes of the plot.
+        #  If the node is older than text_older_than, we will add the text.
+        #  The alignment will different depending on the sort
+        for node in self.nodes:
+            if self.nodes[node].nodeage > text_older_than:
+                nodename = self.nodes[node].name
+                # check if none or nan
+                if (nodename is None) or np.isnan(nodename):
+                    nodename = self.NCBI.get_taxid_translator([node])[node]
+                if sort == "ascending":
+                    ax.text(self.nodes[node].x, self.nodes[node].nodeage, nodename, ha="right", va="bottom", rotation=-45)
+                elif sort == "descending":
+                    ax.text(self.nodes[node].x, self.nodes[node].nodeage, nodename, ha="left", va="top", rotation=45)
+                else:
+                    ax.text(self.nodes[node].x, self.nodes[node].nodeage, nodename, ha="center", va="bottom", rotation=0)
+        return ax
+
     def find_root(self) -> int:
         """
         Finds the root and returns its int. The root is defined as something without a parent.
         """
         potential_roots = []
         for node in self.nodes:
-            if self.nodes[node].parent is None:
+            if (self.nodes[node].parent is None) or (self.nodes[node].parent == -1):
                 potential_roots.append(node)
         if len(potential_roots) == 0:
             raise ValueError("There is no root in this tree.")
@@ -1098,13 +1349,21 @@ class TaxIDtree:
         """
         Prints the edge information of the tree. Use __slots__ to determine what to print.
         """
-        # get the fields
-        fields = self.edges[(self.root, list(self.nodes[self.root].children)[0])].__slots__
+        # get the fields. Don't include fusions or losses
+        fields = [x for x in self.edges[(self.root, list(self.nodes[self.root].children)[0])].__slots__
+                  if x not in ["fusions", "losses"]]
+        fusion_fields = [x for x in self.edges[(self.root, list(self.nodes[self.root].children)[0])].fusions]
+        losses_fields = [x for x in self.edges[(self.root, list(self.nodes[self.root].children)[0])].losses]
         with open(outfile, "w") as outhandle:
-            print("\t".join(fields), file = outhandle)
+            print("\t".join(fields + fusion_fields + losses_fields), file = outhandle)
             for edge in self.edges:
-                print("\t".join([str(getattr(self.edges[edge], x))
-                                 for x in self.edges[edge].__slots__]), file = outhandle)
+                outstring = "\t".join([str(getattr(self.edges[edge], x))
+                                 for x in self.edges[edge].__slots__])
+                if len(fusion_fields) > 0:
+                    outstring += "\t" + "\t".join([str(self.edges[edge].fusions[x]) for x in fusion_fields])
+                if len(losses_fields) > 0:
+                    outstring += "\t" + "\t".join([str(self.edges[edge].losses[x]) for x in losses_fields])
+                print(outstring, file = outhandle)
 
     def print_node_information(self, outfile) -> None:
         """

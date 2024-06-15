@@ -697,7 +697,7 @@ def image_vertical_barrier(width, height, color = "#F0F93E") -> Image:
     return Image.new('RGB', (width, height),
                       color = RGB_color)
 
-def standard_plot_out(perspchrom, outprefix)->None:
+def standard_plot_out(perspchrom, outprefix, taxid_order = None, safe = False)->None:
     """
     Makes a pixel-wise plot of a dataframe.
     Currently has a "phylogenetic" bar on the left side.
@@ -706,36 +706,61 @@ def standard_plot_out(perspchrom, outprefix)->None:
 
     At the top there is a colorbar that encodes the ALG colocalization pairs.
     """
+    # first, convert the colnames that have "(" as the first character to a tuple. just use eval
+    for i in range(len(perspchrom.columns)):
+        col = perspchrom.columns[i]
+        if type(col) == str:
+            if col[0] == "(" and col[-1] == ")":
+                perspchrom.rename(columns={col: eval(col)}, inplace=True)
+
+    concatenate_these_images = []
     # convert matrix to a species image
     # make an image of a pseudo-phylogenetic tree
-    tree_image    = image_sp_matrix_to_lineage(perspchrom["taxidstring"])
+    if taxid_order is None:
+        # In this case we use whatever sorting the dataframe has
+        tree_image    = image_sp_matrix_to_lineage(perspchrom["taxidstring"])
+        bar1 = image_vertical_barrier(2, len(perspchrom), color = "#000000")
+        bar2 = image_vertical_barrier(1, len(perspchrom), color = "#F0F93E")
+        bar3 = image_vertical_barrier(2, len(perspchrom), color = "#000000")
+        concatenate_these_images += [tree_image, bar1, bar2, bar3]
+    else:
+        print(taxid_order)
 
-    bar1 = image_vertical_barrier(2, len(perspchrom), color = "#000000")
-    bar2 = image_vertical_barrier(1, len(perspchrom), color = "#F0F93E")
-    bar3 = image_vertical_barrier(2, len(perspchrom), color = "#000000")
+        # In this case, get the first taxid that matches the one in the taxid_order
+        # Then sort the dataframe by this order
+        keep_indices = []
+        for taxid in taxid_order:
+            # get the first taxid that matches the one in the taxid_order
+            if len(perspchrom[perspchrom["taxid"] == taxid]) == 0:
+                if safe:
+                    raise ValueError("The taxid {} is not in the dataframe.".format(taxid))
+            else:
+                keep_indices.append(perspchrom[perspchrom["taxid"] == taxid].index[0])
+        print(keep_indices)
+        # now it is sorted by the taxid_order
+        perspchrom = perspchrom.loc[keep_indices]
+        perspchrom = perspchrom.reset_index(drop=True)
 
     # make an image of the ALG presence/absence matrix
     presabs_image = image_sp_matrix_to_presence_absence(perspchrom, color_dict = dict_BCnSALG_to_color())
-
     # gap bars
     bar4 = image_vertical_barrier(2, len(perspchrom), color = "#000000")
     bar5 = image_vertical_barrier(1, len(perspchrom), color = "#F0F93E")
     bar6 = image_vertical_barrier(2, len(perspchrom), color = "#000000")
+    concatenate_these_images += [presabs_image, bar4, bar5, bar6]
 
     # make an image of the colocalization matrix
     coloc_image = image_colocalization_matrix(perspchrom, clustering = True, color_dict = dict_BCnSALG_to_color())
     coloc_image_unclust = image_colocalization_matrix(perspchrom, clustering = False, color_dict = dict_BCnSALG_to_color())
 
     # concatenate all the images
-    concatenate_these_images = [tree_image, bar1, bar2, bar3, presabs_image,
-                                bar4, bar5, bar6, coloc_image]
-    composite_image = image_concatenate_horizontally(concatenate_these_images)
+    concatenate_clustered = concatenate_these_images + [coloc_image]
+    composite_image = image_concatenate_horizontally(concatenate_clustered)
     composite_image.save("{}_composite_image.png".format(outprefix))
 
     # make the same plot, but not sorted
-    concatenate_these_images = [tree_image, bar1, bar2, bar3, presabs_image,
-                                bar4, bar5, bar6, coloc_image_unclust]
-    composite_image = image_concatenate_horizontally(concatenate_these_images)
+    concatenate_unclustered = concatenate_these_images + [coloc_image_unclust]
+    composite_image = image_concatenate_horizontally(concatenate_unclustered)
     composite_image.save("{}_composite_image_unclustered.png".format(outprefix))
 
 def plot_missing_vs_colocalized(perspchrom, fileprefix):
