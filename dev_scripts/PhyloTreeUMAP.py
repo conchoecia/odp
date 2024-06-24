@@ -497,7 +497,7 @@ def rbh_to_gb(sample, rbhdf, outfile):
     # Save the result DataFrame to a tsv file
     result_df.to_csv(outfile, sep="\t", index=False, compression="gzip")
 
-def NCBI_taxid_to_taxdict(ncbi, taxid):
+def NCBI_taxid_to_taxdict(ncbi, taxid) -> dict:
     """
     Takes a single NCBI taxid as input and returns a dictionary with useful information:
 

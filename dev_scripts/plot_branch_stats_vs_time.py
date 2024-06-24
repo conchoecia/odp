@@ -79,6 +79,12 @@ def plot_fusions_per_branch_vs_time(outprefix, resultsdf, intensity_of_extinctio
     # call the function to properly format the text
     format_matplotlib()
 
+    # MAGIC NUMBERS
+    fs = 8
+    # make the axis limits go from -1200 to 0
+    xmin = -900
+    xmax = 0
+
     # Now make three plots, each top of one another.
     # The 0th row shows both fusions and fissions ratios together in the same axis.
     # The 1st row shows just the fusion ratio on the axis.
@@ -94,53 +100,71 @@ def plot_fusions_per_branch_vs_time(outprefix, resultsdf, intensity_of_extinctio
         num_rows = 5
         # read in the intensity of extinction file
         intensity_of_extinction_df = pd.read_csv(intensity_of_extinction_filepath, sep='\t')
-        print(intensity_of_extinction_df)
-        # first, we need to get the intensity of extinction for each age.
 
     red = "#D22C16"
     blue = "#3054A3"
 
-    fig, ax = plt.subplots(num_rows, 4, figsize=(10, 10))
+    fig, ax = plt.subplots(num_rows, 4, figsize=(12, 12))
     # first, combined
-    print(list(resultsdf.columns))
-    print(resultsdf[["fusions_ratio", "losses_ratio", "fusion_rate_at_this_age_mean", "loss_rate_at_this_age_mean"]])
+    #print(resultsdf[["fusions_ratio", "losses_ratio", "fusion_rate_at_this_age_mean", "loss_rate_at_this_age_mean"]])
     for coli in [0,1,2,3]:
         # The age axis is the same in all of the plots
         for rowi in range(num_rows):
-            ax[rowi][coli].set_xlabel("Age")
-
+            ax[rowi][coli].set_xlabel("Million Years ago (Mya)")
         if coli < 2:
             yfusion = "fusions_ratio"
             yloss   = "losses_ratio"
-            ylabel = "Changes/branch"
         else:
             yfusion = "fusion_rate_at_this_age_mean"
             yloss   = "loss_rate_at_this_age_mean"
-            ylabel  = "Changes/million years"
         # Determine if we're doing the log2 of the values
-        label_append = ""
         if coli % 2 == 0:
             # we use the native values
             ax[0][coli].plot(resultsdf["age"], resultsdf[yfusion], color=blue)
             ax[0][coli].plot(resultsdf["age"], resultsdf[yloss]  ,   color=red)
             ax[1][coli].plot(resultsdf["age"], resultsdf[yfusion], color=blue)
             ax[2][coli].plot(resultsdf["age"], resultsdf[yloss]  , color=red)
+            label_append = ""
         else:
             # we use the log2 of the values
-            label_append = "(log2)"
             ax[0][coli].plot(resultsdf["age"], np.log2(resultsdf[yfusion].astype('float64')), color=blue )
             ax[0][coli].plot(resultsdf["age"], np.log2(resultsdf[yloss].astype('float64')  ), color=red  )
             ax[1][coli].plot(resultsdf["age"], np.log2(resultsdf[yfusion].astype('float64')), color=blue )
             ax[2][coli].plot(resultsdf["age"], np.log2(resultsdf[yloss].astype('float64')  ), color=red  )
+            label_append = " (log2)"
 
-        ax[0][coli].set_title("Fusions and Losses/branch vs Age")
-        ax[0][coli].set_ylabel("Changes/branch" + label_append)
+        # do it by per branch or by the rate
+        if coli < 2:
+            ylabel0 = "Changes/My"
+            ylabel1 = "Fusions/My"
+            ylabel2 = "Losses/My"
+            ylabel3 = "Extinction\nIntensity (%)"
+            ylabel4 = "Origination\nIntensity (%)"
+            title0  = "Fusions or Losses per branch vs Mya"
+            title1  = "Fusions/My vs Mya"
+            title2  = "Losses/My vs Mya"
+            title3  = "Rohde & Muller (2005)\nExtinction Intensity"
+            title4  = "Rohde & Muller (2005)\nOrigination Intensity"
+        elif (coli >= 2) and (coli < 4):
+            ylabel0 = "Changes/My"
+            ylabel1 = "Fusions/My"
+            ylabel2 = "Losses/My"
+            ylabel3 = "Extinction\nIntensity (%)"
+            ylabel4 = "Origination\nIntensity (%)"
+            title0  = "Fusions or Losses per My vs Mya"
+            title1  = "Fusions/My vs Mya"
+            title2  = "Losses/My vs Mya"
+            title3  = "Rohde & Muller (2005)\nExtinction Intensity"
+            title4  = "Rohde & Muller (2005)\nOrigination Intensity"
+
+        ax[0][coli].set_title( title0                , fontsize = fs)
+        ax[0][coli].set_ylabel(ylabel0 + label_append, fontsize = fs)
         # second, just fusions
-        ax[1][coli].set_title("Fusions/branch vs Age")
-        ax[1][coli].set_ylabel("Fusions/branch" + label_append)
+        ax[1][coli].set_title( title1                , fontsize = fs)
+        ax[1][coli].set_ylabel(ylabel1 + label_append, fontsize = fs)
         # third, just losses
-        ax[2][coli].set_title("Losses/branch vs Age")
-        ax[2][coli].set_ylabel("Losses/branch" + label_append)
+        ax[2][coli].set_title( title2                , fontsize = fs)
+        ax[2][coli].set_ylabel(ylabel2 + label_append, fontsize = fs)
 
         if intensity_of_extinction_filepath is not None:
             # This is intensity of extinction
@@ -151,9 +175,6 @@ def plot_fusions_per_branch_vs_time(outprefix, resultsdf, intensity_of_extinctio
                 width = 1
                 rectangle = patches.Rectangle((left_x, left_y), width, height, fill="#555555", edgecolor=None)
                 ax[3][coli].add_patch(rectangle)
-            # Add some text to the plots "Rhode & Miller (2005) Extinction Intensity"
-            # Add it to the top left.
-            ax[3][coli].text(0.05, 0.92, "Rhode & Miller (2005) Extinction Intensity", fontsize=8, transform=ax[3][0].transAxes)
             # This is intensity of origination
             for i, row in intensity_of_extinction_df.iterrows():
                 left_x = -1 * row['Time (Ma)']
@@ -162,38 +183,33 @@ def plot_fusions_per_branch_vs_time(outprefix, resultsdf, intensity_of_extinctio
                 width = 1
                 rectangle = patches.Rectangle((left_x, left_y), width, height, fill="#555555", edgecolor=None)
                 ax[4][coli].add_patch(rectangle)
-            # Add some text to the plots "Rhode & Miller (2005) Extinction Intensity"
-            # Add it to the top left.
-            ax[4][coli].text(0.05, 0.92, "Rhode & Miller (2005) Origination Intensity", fontsize=8, transform=ax[4][0].transAxes)
+            ax[3][coli].set_title( title3 , fontsize = fs)
+            ax[3][coli].set_ylabel(ylabel3, fontsize = fs)
+            ax[4][coli].set_title( title4 , fontsize = fs)
+            ax[4][coli].set_ylabel(ylabel4, fontsize = fs)
 
-        # make the axis limits go from -1200 to 0
-        xmin = -900
-        xmax = 0
-        for axi in range(num_rows):
-            ax[axi][coli].set_xlim(xmin, xmax)
-
-        # if we have the intensity of extinction, we need to scale the y-axis
-        if intensity_of_extinction_filepath is not None:
+            # WE NOW SCALE THE Y-AXES
             # get the values where 'Time (Ma)' is between xmin and xmax
             subdf = intensity_of_extinction_df[(intensity_of_extinction_df['Time (Ma)'] >= xmax) & (intensity_of_extinction_df['Time (Ma)'] <= -1 * xmin)]
             # the ylim is 1.1 times the maximum value
             ymax = 1.1 * subdf['Extinction Intensity (%)'].max()
             ax[3][coli].set_ylim(0, ymax)
-
             # Now do the same for origination intensity
             ymax = 1.1 * subdf['Origination Intensity (%)'].max()
             ax[4][coli].set_ylim(0, ymax)
 
-        # change the fontsize of the axes and the titles
-        fontsize = 8
         for axi in range(num_rows):
-            ax[axi][coli].tick_params(axis='both', which='major', labelsize=fontsize)
-            ax[axi][coli].set_title( ax[axi][coli].get_title(),   fontsize=fontsize)
-            ax[axi][coli].set_xlabel(ax[axi][coli].get_xlabel(),  fontsize=fontsize)
-            ax[axi][coli].set_ylabel(ax[axi][coli].get_ylabel(),  fontsize=fontsize)
+            ax[axi][coli].set_xlim(xmin, xmax)
+
+        # change the fontsize of the axes and the titles
+        for axi in range(num_rows):
+            ax[axi][coli].tick_params(axis='both', which='major', labelsize=fs)
+            ax[axi][coli].set_title( ax[axi][coli].get_title(),    fontsize=fs)
+            ax[axi][coli].set_xlabel(ax[axi][coli].get_xlabel(),   fontsize=fs)
+            ax[axi][coli].set_ylabel(ax[axi][coli].get_ylabel(),   fontsize=fs)
 
     # increase the horizontal and vertical space between the panels
-    plt.subplots_adjust(hspace=0.5, wspace=0.5)
+    plt.subplots_adjust(hspace=0.6, wspace=0.6)
 
     # save the plot as a pdf
     pdfout = outprefix.rstrip(".pdf") + ".pdf"
@@ -400,9 +416,9 @@ def plot_intensity_of_extinction(outprefix, count_df, intensity_of_extinction_fi
         fig, ax = plt.subplots(num_rows, 4, figsize=(20, 20))
         fontsize = 8
         for coli in [0,1,2,3]:
-            ylabel1 = "Changes/branch"
-            ylabel2 = "Fusions/branch"
-            ylabel3 = "Losses/branch"
+            ylabel1 = "Changes/million years"
+            ylabel2 = "Fusions/million years"
+            ylabel3 = "Losses/million years"
             ylabel4 = "Changes/million years"
             ylabel5 = "Fusions/million years"
             ylabel6 = "Losses/million years"
@@ -414,12 +430,12 @@ def plot_intensity_of_extinction(outprefix, count_df, intensity_of_extinction_fi
             if coli < 2:
                 xlabel = "Extinction Intensity (%)"
                 x      = plotdf["intensity_of_extinction"]
-                title1 = "Fusions and Losses/branch vs Extinction Intensity"
-                title2 = "Fusions/branch vs Extinction Intensity"
-                title3 = "Losses/branch vs Extinction Intensity"
-                title4 = "Fusions and Losses/million years vs Extinction Intensity"
-                title5 = "Fusions/million years vs Extinction Intensity"
-                title6 = "Losses/million years vs Extinction Intensity"
+                title1 = "Fusions or Losses/My vs Extinction Intensity"
+                title2 = "Fusions/My vs Extinction Intensity"
+                title3 = "Losses/My vs Extinction Intensity"
+                title4 = "Fusions or Losses/My vs Extinction Intensity"
+                title5 = "Fusions/My vs Extinction Intensity"
+                title6 = "Losses/My vs Extinction Intensity"
                 stattext1 = gen_stat_string(fusion_spearman_corr,      fusion_spearman_p,      fusion_spearman_n,      fusion_kendalltau_corr,      fusion_kendalltau_p,      fusion_kendalltau_n     ,      fusion_pearson_corr,      fusion_pearson_p,      fusion_pearson_n)
                 stattext2 = gen_stat_string(loss_spearman_corr,        loss_spearman_p,        loss_spearman_n,        loss_kendalltau_corr,        loss_kendalltau_p,        loss_kendalltau_n       ,        loss_pearson_corr,        loss_pearson_p,        loss_pearson_n)
                 stattext3 = gen_stat_string(rate_fusion_spearman_corr, rate_fusion_spearman_p, rate_fusion_spearman_n, rate_fusion_kendalltau_corr, rate_fusion_kendalltau_p, rate_fusion_kendalltau_n, rate_fusion_pearson_corr, rate_fusion_pearson_p, rate_fusion_pearson_n)
@@ -427,12 +443,12 @@ def plot_intensity_of_extinction(outprefix, count_df, intensity_of_extinction_fi
             else:
                 xlabel = "Origination Intensity (%)"
                 x      = plotdf["intensity_of_origination"]
-                title1 = "Fusions and Losses/branch vs Origination Intensity"
-                title2 = "Fusions/branch vs Origination Intensity"
-                title3 = "Losses/branch vs Origination Intensity"
-                title4 = "Fusions and Losses/million years vs Origination Intensity"
-                title5 = "Fusions/million years vs Origination Intensity"
-                title6 = "Losses/million years vs Origination Intensity"
+                title1 = "Fusions or Losses/My vs Origination Intensity"
+                title2 = "Fusions/My vs Origination Intensity"
+                title3 = "Losses/My vs Origination Intensity"
+                title4 = "Fusions or Losses/My vs Origination Intensity"
+                title5 = "Fusions/My vs Origination Intensity"
+                title6 = "Losses/My vs Origination Intensity"
                 stattext1 = gen_stat_string(ofusion_spearman_corr,      ofusion_spearman_p,      ofusion_spearman_n,      ofusion_kendalltau_corr,      ofusion_kendalltau_p,      ofusion_kendalltau_n     ,      ofusion_pearson_corr,      ofusion_pearson_p,      ofusion_pearson_n )
                 stattext2 = gen_stat_string(oloss_spearman_corr,        oloss_spearman_p,        oloss_spearman_n,        oloss_kendalltau_corr,        oloss_kendalltau_p,        oloss_kendalltau_n       ,        oloss_pearson_corr,        oloss_pearson_p,        oloss_pearson_n )
                 stattext3 = gen_stat_string(rate_ofusion_spearman_corr, rate_ofusion_spearman_p, rate_ofusion_spearman_n, rate_ofusion_kendalltau_corr, rate_ofusion_kendalltau_p, rate_ofusion_kendalltau_n, rate_ofusion_pearson_corr, rate_ofusion_pearson_p, rate_ofusion_pearson_n )
@@ -556,41 +572,44 @@ def get_edge_stats_single_taxid(taxid, edgedf) -> pd.DataFrame:
         if np.isnan(num_losses_my_this_branch) or np.isinf(num_losses_my_this_branch):
             num_losses_my_this_branch = 0
         # now update the count_struct for each date
-        for j in range(int(row['child_age']), int(row['parent_age'])+1):
-            count_struct[j]['total_branches_at_this_age'] += 1
-            # if value is nan or inf, set to 0
-            count_struct[j]['fusion_rate_at_this_age_list'].append(num_fusions_my_this_branch)
-            count_struct[j]['loss_rate_at_this_age_list'].append(num_losses_my_this_branch)
+        # I need to iterate from the child age to the parent age, includsive.
+        start = row["child_age"]
+        end   = row["parent_age"]
+        start_bin = int(row['child_age'])
+        end_bin   = int(row['parent_age'])
 
-            # increment the total number of fusions and losses
-            if row["num_fusions_this_branch"] > 0:
-                count_struct[j]['total_fusions_at_this_age'] += row["num_fusions_this_branch"]
-                total_fusions_in_this_branch += row["num_fusions_this_branch"]
-            if row["num_losses_this_branch"] > 0:
-                count_struct[j]['total_losses_at_this_age'] += row["num_losses_this_branch"]
-                total_losses_in_this_branch += row["num_losses_this_branch"]
+        for bin_index in range(start_bin, end_bin+1):
+            # Calculate the overlapping segment length within the bin
+            overlap_start = max(start, bin_index)
+            overlap_end   = min(end,   bin_index + 1)
+            overlap_length = overlap_end - overlap_start
+
+            # accumulate changes and lengths
+            if overlap_length > 0:
+                count_struct[bin_index]['total_branches_at_this_age'] += overlap_length
+                count_struct[bin_index]['total_fusions_at_this_age']  += overlap_length * num_fusions_my_this_branch
+                count_struct[bin_index]['total_losses_at_this_age']   += overlap_length * num_losses_my_this_branch
+            elif overlap_length > 1:
+                raise IOError("The overlap length is greater than 1. This should not happen. We are doing bins of 1 million years.")
+
+            # if value is nan or inf, set to 0
+            count_struct[bin_index]['fusion_rate_at_this_age_list'].append(num_fusions_my_this_branch)
+            count_struct[bin_index]['loss_rate_at_this_age_list'].append(num_losses_my_this_branch)
 
     # now calculate the mean rate for each position
     for i in range(oldest_age + 1):
-        # make sure that the lists are the same lengths as the total_branches_at_this_age
-        #print("this age: {}".format(i))
-        #print("this branch: {}".format(taxid))
-        #print("Len of total branches at this age: {}".format(count_struct[i]['total_branches_at_this_age']))
-        #print("Len of fusion rate at this age list: {}".format(len(count_struct[i]['fusion_rate_at_this_age_list'])))
-        #print("Len of loss rate at this age list: {}".format(len(count_struct[i]['loss_rate_at_this_age_list'])))
-        if not count_struct[i]['total_branches_at_this_age'] == len(count_struct[i]['fusion_rate_at_this_age_list']):
-            raise ValueError("The number of branches at this age does not match the number of fusions at this age.")
-        if not count_struct[i]['total_branches_at_this_age'] == len(count_struct[i]['loss_rate_at_this_age_list']):
-            raise ValueError("The number of branches at this age does not match the number of losses at this age.")
-        count_struct[i]['fusion_rate_at_this_age_mean']   = np.mean(count_struct[i]['fusion_rate_at_this_age_list'])
+        count_struct[i]['fusion_rate_at_this_age_mean']   = np.mean(  count_struct[i]['fusion_rate_at_this_age_list'])
         count_struct[i]['fusion_rate_at_this_age_median'] = np.median(count_struct[i]['fusion_rate_at_this_age_list'])
-        count_struct[i]['loss_rate_at_this_age_mean']     = np.mean(count_struct[i]['loss_rate_at_this_age_list'])
-        count_struct[i]['loss_rate_at_this_age_median']   = np.median(count_struct[i]['loss_rate_at_this_age_list'])
+        count_struct[i]['loss_rate_at_this_age_mean']     = np.mean(  count_struct[i]['loss_rate_at_this_age_list'  ])
+        count_struct[i]['loss_rate_at_this_age_median']   = np.median(count_struct[i]['loss_rate_at_this_age_list'  ])
         #del count_struct[i]['fusion_rate_at_this_age_list']
         #del count_struct[i]['loss_rate_at_this_age_list']
 
     # all of the data should be in the struct now. Turn it into a pandas df
     resultsdf = pd.DataFrame(count_struct).T
+    # remove the rows where total_branches_at_this_age is 0
+    resultsdf = resultsdf[resultsdf['total_branches_at_this_age'] > 0]
+    #print(resultsdf)
 
     for event in ["fusions", "losses"]:
         resultsdf[f"{event}_ratio"] = resultsdf[f"total_{event}_at_this_age"] / resultsdf["total_branches_at_this_age"]
@@ -705,8 +724,28 @@ def main():
     nodedf["fusions_in_this_clade_div_dist_crown_plus_root"] = -1.00000000001
     nodedf["losses_in_this_clade_div_dist_crown_plus_root"]  = -1.00000000001
 
+    # Mapping dict will have strings as keys that will become column names.
+    #  The values will be another dict in which the keys are the ages(negative integers)
+    #  and the values are the counts. These dicts will then be iterated through to, so we
+    #  can add multiple columns to the dataframe in case there are multiple things we want
+    #  to measure.
+    mapping_dict = {}
+    # intensity of extinction
+    if args.intensity_of_extinction is not None:
+        IOEdf = pd.read_csv(args.intensity_of_extinction, sep='\t')
+        # First do Rohde and Muller Intensities
+        TIME        = "Time (Ma)"
+        IOEdf[TIME] = IOEdf[TIME].astype(int) * -1
+        EXTINCTION  = "Extinction Intensity (%)"
+        ORIGINATION = "Origination Intensity (%)"
+        # zip together time as the key and the intensity as the value
+        mapping_dict["rohde_extinction"]  = dict(zip(IOEdf[TIME], IOEdf[EXTINCTION]))
+        mapping_dict["rohde_origination"] = dict(zip(IOEdf[TIME], IOEdf[ORIGINATION]))
+
     # We want some clade names
     NCBI = ete3.NCBITaxa()
+    ## just do Metazoa now
+    #for node in [33208]:
     for i, row in nodedf.iterrows():
         node = row["taxid"]
         clade_name = NCBI.get_taxid_translator([node])[node]
@@ -716,6 +755,9 @@ def main():
             clade_name = "".join([x.capitalize() for x in clade_name.split(" ")])
         print("  - We are processing node {} / {}".format(i, len(nodedf)))
         resultsdf, (fusions, losses) = get_edge_stats_single_taxid(node, edgedf)
+        if args.intensity_of_extinction is not None:
+            for thiscol in mapping_dict:
+                resultsdf[thiscol] = resultsdf["age"].map(mapping_dict[thiscol])
         outprefix0 = f"{clade_name}_{node}_changes_vs_age"
         resultsdf.to_csv(outprefix0 + ".tsv", sep='\t', index=False)
         # update the nodedf with the number of fusions and losses

@@ -54,6 +54,7 @@ from scipy.cluster import hierarchy
 
 # import odp-specific functions
 import rbh_tools
+from taxid_tools import NCBI_taxid_to_taxdict
 
 # import the stuff to work with lineages
 from ete3 import NCBITaxa,Tree
@@ -942,7 +943,13 @@ def rbh_files_to_locdf_and_perspchrom(rbh_files, ALGrbhfile, minsig, ALGname) ->
     locdf = pd.concat(entries).reset_index(drop=True)
 
     # Now that we know the NCBI taxid for each sample, generate the taxid_to_lineagestring
-    sample_to_taxidstring = taxids_to_taxidstringdict([sample_to_taxid[k] for k in sample_to_taxid])
+    NCBI = NCBITaxa()
+    sample_to_taxidstring = {}
+    for k in sample_to_taxid:
+        taxid = sample_to_taxid[k]
+        taxdict = NCBI_taxid_to_taxdict(NCBI, taxid)
+        lineage_string = ";".join([str(x) for x in taxdict["taxid_list"]])
+        sample_to_taxidstring[k] = lineage_string
 
     # now make a pandas dataframe of the sample_to_taxidstring. The columns are "sample", "taxid"
     perspchrom = pd.DataFrame.from_dict(sample_to_taxid, orient='index')
