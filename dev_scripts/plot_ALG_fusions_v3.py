@@ -1181,19 +1181,43 @@ class SplitLossColocTree:
                    1215728:  "#2ECAC8", # Scalidophora
                    6231:     "#9F2ECA", # Nematodes
                    88770:    "#BF2424", # Panarthropoda
-                    32341:   "#F93AD5", # Sophophora - these are the fruit flies
+                    43845:   "#F93AD5", # Drosophilinae - these are the fruit flies
                     41084:   "#F1890D", # Polyphaga - these are the beetles
                     3042114: "#EBB836", # Anthophila - these are the bees
+                    7147:    "#C02424", # Diptera
+                      43741:  "#7373E6", # Acalyptratae - acalpytrate muscoid flies
+                      43742:  "#314006", # Calyptratae - calyptrate muscoid flies
+                      43838:  "#7EBB27", # Syrphidae-Syrphinae   (hoverflies)
+                      115244: "#2654BB", # Syrphidae-Eristalinae (hoverflies)
+                      52735:  "#35B2ED", # Tipulinae (craneflies)
+                      7157:   "#E2BE64", # Culicidae
+                      7158:   "#A8FF2E", # genus Aedes
+                      7164:   "#FAA42C", # Anopheles
+                      7174:   "#FA2213", # Culex
+                      46207:  "#FBEF2F", # Toxorhynchites
+                      53549:  "#AB9C01", # Tribe Sabethini
+                      139055: "#C231FF", # Uranotaenia
                    2697495:  "#2432BF", # Spiralia
                     6178:    "#24ED54", # Trematoda
                     6447:    "#0CD6F2", # Mollusca
-                     6606:   "#F2B70C", # Coleoidea
+                      6563:       "#2451B8", # Ostreidae (true oysters)
+                      32584:      "#338FEF", # Scaphopoda (tusk shells)
+                      6544:     "#3B9110", # Bivalvia
+                        6547:     "#304C1F", # Mytilidae
+                        278205:   "#57D076", # Myida
+                        6592:     "#41BF97", # Veneridae
+                      6448:     "#BD47EA", # Gastropoda
+                        6463:     "#691CAF", # Patella
+                        6579:     "#1FE21D", # Pecten maximus
+                      6605:   "#F2B70C", # Cephalopod
+                        215450:  "#FA9420", # Decapodiformes
+                        215451:  "#B2991D", # Octopodiformes
                     6340:    "#0CF247", # Annelida
                    2697496:  "#7624BF", # Gnathifera
                   33511:   "#78A6AF", # Deuterostomes
                    # Chordates 7711
                     # Vertebrates 7742
-                     # Cyclostomes 
+                     # Cyclostomes
                      1476529: "#F23341", # Jawless fishes - hagfish lampreys
                      # Gnathostomes
                       # Cartilaginous fishes - Condrichthyes
