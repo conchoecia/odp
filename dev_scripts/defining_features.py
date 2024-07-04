@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 
-from collections import Counter
 import argparse
+from collections import Counter
+import ete3
+
 
 # get the path of this script, so we know where to look for the plotdfs file
 # This block imports fasta-parser as fasta
@@ -21,11 +23,13 @@ def parse_args():
       - a path to a coo file
       - a path to a sample df
       - a path to the coo combination file
+      - a list of the taxids for which we want to save the unique pairs tsv file
     """
     parser = argparse.ArgumentParser(description="Define features" )
     parser.add_argument("--coo_path",             type=str, help="Path to the coo file", required=True)
     parser.add_argument("--sample_df_path",       type=str, help="Path to the sample df", required=True)
     parser.add_argument("--coo_combination_path", type=str, help="Path to the coo combination file", required=True)
+    parser.add_argument("--taxid_list",           type=str, help="Comma-separated list of taxids for which we want to save the unique pairs tsv file", required=False, default = "")
 
     args = parser.parse_args()
     # check that both the coo file and the df file exist. Same with coo combination file
@@ -35,7 +39,20 @@ def parse_args():
         raise FileNotFoundError(f"{args.sample_df_path} does not exist")
     if not os.path.exists(args.coo_combination_path):
         raise FileNotFoundError(f"{args.coo_combination_path} does not exist")
-    return parser.parse_args()
+
+    # The taxid list will be provided to us as a list of strings.
+    # Here, we clean up the comma-separated list of taxids and convert it to a list of integers
+    # If the taxid_list is empty, we will return an empty list.
+    outlist = []
+    if args.taxid_list != "":
+        for taxid in args.taxid_list.split(","):
+            if not taxid.isdigit():
+                raise ValueError(f"taxid {taxid} is not an integer. Exiting.")
+            outlist.append(int(taxid))
+        args.taxid_list = outlist
+    else:
+        args.taxid_list = []
+    return args
 
 # Function to get column names of the lowest 1% values for each row
 def get_lowest_1_percent_columns(row, percentage=1):
@@ -76,8 +93,40 @@ def load_coo(cdf, coofile, ALGcomboix, missing_value_as):
     matrix[matrix == -1] = 0
     return matrix
 
+def compute_statistics(col, inindex, outindex):
+    """
+    This function is applied pairwise to the columns of the matrix.
+    It computes the statistics for the in and out samples.
+    This could probably be done more efficiently in the future by using a DFS, but who knows really without optimizing.
+        This is fine for now. :)
+    """
+    len_inindex = len(inindex)
+    len_outindex = len(outindex)
+    invals    = col.loc[inindex]
+    outvals   = col.loc[outindex]
+    notna_in  = invals.notna().sum()
+    notna_out = outvals.notna().sum()
+
+    mean_in   = invals.mean()
+    sd_in     = invals.std()
+
+    mean_out  = outvals.mean()
+    sd_out    = outvals.std()
+
+    return {
+        "pair":          col.name,
+        "notna_in":      notna_in,
+        "notna_out":     notna_out,
+        "mean_in":       mean_in,
+        "sd_in":         sd_in,
+        "mean_out":      mean_out,
+        "sd_out":        sd_out,
+        "occupancy_in":  notna_in  / len_inindex,
+        "occupancy_out": notna_out / len_outindex}
+
 def process_coo_file(sampledffile, ALGcomboixfile, coofile,
-                     dfoutfilepath, missing_value_as = np.nan):
+                     dfoutfilepath, missing_value_as = np.nan,
+                     taxid_list = []):
     """
     Handles loading in the coo file and transforms it to a matrix that we can work with.
 
@@ -102,6 +151,10 @@ def process_coo_file(sampledffile, ALGcomboixfile, coofile,
     # check that the file ending for the df outfile is .df
     if not dfoutfilepath.endswith(".df"):
         raise ValueError(f"The dfoutfilepath {dfoutfilepath} does not end with '.df'. Exiting.")
+
+    # check that the type of taxid_list is a list
+    if not isinstance(taxid_list, list):
+        raise ValueError(f"taxid_list must be a list. Got {taxid_list} instead. Exiting.")
 
     # read in the sample dataframe. We will need this later
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
@@ -174,51 +227,124 @@ def process_coo_file(sampledffile, ALGcomboixfile, coofile,
     for i, row in cdf.iterrows():
         all_taxids.update(row["taxid_list"])
 
+    # we should delete the columns from the df that are all nan for each taxid
+    print("We are deleting the columns that are full of nans for each taxid. shape: ", df.shape)
+    df = df.dropna(axis = 1, how = "all")
+    print("New shape: ", df.shape)
+
+    # If the user specified some taxids, we will only iterate over those taxids
+    # Otherwise, go through all of the taxids in the cdf
+    if len(taxid_list) > 0:
+        iterate_taxids = taxid_list
+        # make sure that all of the taxids that we want to iterate through are in all_taxids.
+        for taxid in iterate_taxids:
+            if taxid not in all_taxids:
+                raise ValueError(f"taxid {taxid} is not in the taxids in the cdf. Exiting.")
+    else:
+        iterate_taxids = all_taxids
+
     entries = []
-    # For each taxid, get the pairs that are unique to this taxid
-    for taxid in all_taxids:
-        # get the samples that have this taxid
+    # precompute the "in" and "out" indices
+    # Precompute the inindex and outindex for each taxid
+    # innan_dict is a dictionary that stores the columns that are nan for each taxid
+    inindex_dict = {}
+    outindex_dict = {}
+    innan_dict   = {}
+
+    start = time.time()
+    print("Starting the precomputation of inindex and outindex")
+    for taxid in iterate_taxids:
         inindex  = cdf[cdf["taxid_list"].apply(lambda x: taxid in x)].index
+        outindex = cdf.index.difference(inindex)
+        inindex_dict[ taxid ] = inindex
+        outindex_dict[taxid ] = outindex
+        # give me all of the colnames that are only nan for this taxid
+        innan_dict[   taxid]  = df.loc[inindex,  df.columns].isna().all()
+    print("  - Time to precompute inindex and outindex: ", time.time() - start)
+
+    # load NCBI now that we know we will use it. Past the "taxid not in dataset" check
+    NCBI = ete3.NCBITaxa()
+    # For each taxid, get the pairs that are unique to this taxid
+    counter = 1
+    for taxid in iterate_taxids:
+        nodename = NCBI.get_taxid_translator([taxid])[taxid]
+        print(f"Starting taxid {taxid}, {nodename} ({counter} of {len(iterate_taxids)})")
+        replace_dict = {" ": "", ",": "", ";": "", "(": "", ")": "", ".": "", "-": "", "_": ""}
+        for k, v in replace_dict.items():
+            nodename = nodename.replace(k, v)
+        outprefix = f"{nodename}_{taxid}"
+        outfile = outprefix + "_unique_pair_df.tsv.gz"
+        if os.path.exists(outfile):
+            print(f"{outfile} already exists. Skipping.")
+            counter += 1
+            continue
+
+        # get the samples that have this taxid
+        inindex  = inindex_dict[taxid]
         # if there are at least two samples, we should continue to analyze this
         if len(inindex) < 2:
             continue
         # get everything that isn't in inindex
-        outindex = cdf[~cdf.index.isin(inindex)].index
+        outindex = outindex_dict[taxid]
         # if the size of this is zero, we don't analyze it
         if len(outindex) == 0:
             continue
-        # get all the pairs in the "in" samples. We should make a set with the cdf["lowest_1_percent_columns"] column
-        inpairs = set()
-        for index in inindex:
-            inpairs.update(cdf.loc[index, "lowest_1_percent_columns"])
-        outpairs = set()
-        for index in outindex:
-            outpairs.update(cdf.loc[index, "lowest_1_percent_columns"])
-        # get the things that are unique to this taxid
-        unique_pairs = inpairs - outpairs
-        # for each unique pair, get the median value of the pairs for the inindex rows
-        unique_pair_entries = [{"pair": pair, "mean_value": df.loc[inindex, pair].mean(),
-                                "median_value": df.loc[inindex, pair].median(),
-                                # for occupancy, count the things that aren't nan
-                                "occupancy": df.loc[inindex, pair].notna().sum() / len(inindex)} \
-                               for pair in unique_pairs]
+        ## get all the pairs in the "in" samples. We should make a set with the cdf["lowest_1_percent_columns"] column
+        #inpairs = set()
+        #for index in inindex:
+        #    inpairs.update(cdf.loc[index, "lowest_1_percent_columns"])
+        #outpairs = set()
+        #for index in outindex:
+        #    outpairs.update(cdf.loc[index, "lowest_1_percent_columns"])
+        ## get the things that are unique to this taxid
+        #unique_pairs = inpairs - outpairs
+        ## for each unique pair, get the median value of the pairs for the inindex rows
+        #print(f"taxid is {taxid}")
+        #print(f"number of samples in taxid: {len(inindex)}")
+        #print(f"number of samples outside taxid: {len(outindex)}")
+        #unique_pair_entries = []
+        #len_inindex  = len(inindex)
+        #len_outindex = len(outindex)
+        ##for pair in unique_pairs:
+        #for pair in df.columns:
+        #    notna_in  = df.loc[inindex,  pair].notna().sum()
+        #    notna_out = df.loc[outindex, pair].notna().sum()
+        #    unique_pair_entries.append(
+        #        {"pair":          pair,
+        #         "notna_in":      notna_in,
+        #         "notna_out":     notna_out,
+        #         "mean_in":       df.loc[inindex, pair].mean(),
+        #         "sd_in":         df.loc[inindex, pair].std(),
+        #         "mean_out":      df.loc[outindex, pair].mean(),
+        #         "sd_out":        df.loc[outindex, pair].std(),
+        #         "occupancy_in":  notna_in  / len_inindex,
+        #         "occupancy_out": notna_out / len_outindex})
         # make this into a df so we can sort
-        unique_pair_df = pd.DataFrame(unique_pair_entries)
-        # log of low occupancy is a smaller number. 1/mean value means larger numbers are smaller.
-        # This means we need to sort descending, to get larger values first
-        occweight = 1
-        unique_pair_df['composite_score'] = np.log1p((unique_pair_df['occupancy']+0.000000000000000001) * occweight) + np.log1p(1/(unique_pair_df['mean_value'] + 1))
-        # sort by composite score
-        unique_pair_df = unique_pair_df.sort_values("composite_score", ascending = False)
+        # Apply function to each column. Only do it on the columns that are not all nan
+        ignore_columns = innan_dict[taxid][innan_dict[taxid]].index
+        # set everything after the first 50 columns to True
+        #ignore_columns = df.columns[50:]
+        print("  - We are filtering out ", len(ignore_columns), " columns.")
+        stats = df.loc[:, df.columns.difference(ignore_columns)].apply(
+            lambda col: compute_statistics(col, inindex, outindex)
+        )
+        print("This is stats")
+        # turn this list of dictionaries into a df
+        unique_pair_df = pd.DataFrame(stats.tolist())
+        #unique_pair_df["mean_in_out_ratio"] = unique_pair_df["mean_in"] / unique_pair_df["mean_out"]
+        # The following distribution is close to normal in log space, if not a little skewed.
+        #  Because it has this property, for each pair we can measure where it falls in the distribution.
+        #  If sd_in_out_ratio is nan, that is because the value does not appear in the out samples, meaning this is a new feature for this taxid.
+        #  If sd_in_out_ratio is 0, this means that the variance was 0 for the in samples. This probably means that this pair was only measured twice?
+        #  So from this number we can rank the pairs based on that ratio, then filter even more for well-represented pairs.
+        #  From the other information we can get the things that do not occur in other samples, and that have a small SD or a small mean.
+        #unique_pair_df["sd_in_out_ratio"]   = unique_pair_df["sd_in"]   / unique_pair_df["sd_out"]
+        print("This is unique_pair_df")
+        print(unique_pair_df)
+        # save this so we can play with it
+        unique_pair_df.to_csv(outfile, sep = "\t", index = False, compression = "gzip")
+        counter += 1
 
-        # sort these by the median value
-        entries.append({"taxid": taxid,
-                        "num_samples_in_taxid":      len(inindex),
-                        "num_samples_outside_taxid": len(outindex),
-                        "num_unique_pairs": len(unique_pairs),
-                        "unique_pairs": [(int(row["pair"]), int(row["mean_value"]), row["occupancy"]) \
-                                           for i, row in unique_pair_df.iterrows()]
-                        })
     # convert entries to a df
     entries_df = pd.DataFrame(entries)
     # save this to a gzipped tsv
@@ -226,9 +352,31 @@ def process_coo_file(sampledffile, ALGcomboixfile, coofile,
 
 def main():
     args = parse_args()
+    print(args)
     #process_coo_file(sampledffile, ALGcomboixfile, coofile,
     #                 dfoutfilepath, missing_value_as = 9999999999)
-    process_coo_file(args.sample_df_path, args.coo_combination_path, args.coo_path, "test.df")
+    if len(args.taxid_list) > 0:
+        process_coo_file(args.sample_df_path, args.coo_combination_path, args.coo_path, "test.df", taxid_list = args.taxid_list)
+    else:
+        process_coo_file(args.sample_df_path, args.coo_combination_path, args.coo_path, "test.df")
 
 if __name__ == "__main__":
     main()
+
+
+## Plot distribution of sd_in_out_ratio
+#plt.figure(figsize=(10, 6))
+## tempdf2 transforms the sd_in_out_ratio column to log and removes the nan and -inf values and is plottable
+#tempdf2 = tempdf[np.isfinite(tempdf["sd_in_out_ratio"])]
+#minval = min(tempdf2[tempdf2["sd_in_out_ratio"] > 0]["sd_in_out_ratio"])
+## replace the 0 values with the minimum value
+#tempdf2["sd_in_out_ratio"] = [minval if x == 0 else x for x in tempdf2["sd_in_out_ratio"]]
+#
+#plt.hist(np.log(tempdf2["sd_in_out_ratio"]), bins=100, edgecolor='k', alpha=0.7)
+#plt.title('Distribution of sd_in_out_ratio')
+#plt.xlabel('sd_in_out_ratio')
+#plt.ylabel('Frequency')
+#plt.grid(True)
+#
+## Save plot to PDF
+#plt.savefig('sd_in_out_ratio_distribution.pdf')

@@ -138,8 +138,8 @@ def main():
             # Normalize the data
             #minval = 1/9999999999 # the minval is the value that we use for high-distance encoding. This is like a 10Gb chromosome
             #maxval = np.max([x for x in values if not np.isnan(x)])
-            minval = 1000 # the minval is the value that we use for high-distance encoding. This is like a 10Gb chromosome
-            maxval = np.max([x for x in values if not np.isnan(x)])
+            minval = np.min([x for x in values if not np.isnan(x)]) # the minval is the value that we use for high-distance encoding. This is like a 10Gb chromosome
+            maxval = 9999999999
             print("the min of values is {}".format(minval))
             print("the max of values is {}".format(maxval))
             norm = Normalize(vmin=minval, vmax=maxval)

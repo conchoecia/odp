@@ -121,10 +121,10 @@ def taxids_of_interest_to_analyses():
                [[6606],    []],     # Decapodiformes
                [[215451],  []],     # Octopodiformes
                [[10197, 6040, 6073], []], #ctenos, sponges, cnidarians
-              ]
-    taxids = [ [[7147],    []],    # Diptera
-               #[[33340],   []],    # Neoptera
-              ]
+             ]
+    #taxids = [ #[[7147],    []],    # Diptera
+    #           [[33340],   []],    # Neoptera
+    #          ]
 
     return taxids_to_analyses(taxids)
 
