@@ -4,6 +4,8 @@
 For this plot, we will plot an oxford dot plot of the RBHs, we will also use the
  unique pairs file to plot the strongest connections between the genomes. We will
  use arcs to draw those.
+
+# TODO - make the arcs not change in a gradient, but instead be colored by three arcs, left, right, middle(black)
 """
 
 import argparse
@@ -35,7 +37,7 @@ import fasta
 def parse_args():
     """
     We need the following files:
-      - a plottable rbh file
+      - a plottable rbh file - this is from a specific species rather than being from a 
       - a unique pairs tsv file
       - a genome assembly file
       - the taxid of the clade to plot
@@ -73,11 +75,15 @@ def interpolate_color(start_color, end_color, factor):
     end_rgba = np.array(to_rgba(end_color))
     return start_rgba + (end_rgba - start_rgba) * factor
 
-def calculate_bezier_points(P0, P1, P2, P3, num_points=100):
-    """Calculate points on a bezier curve given four control points."""
-    t = np.linspace(0, 1, num_points).reshape(num_points, 1)  # Reshape t for broadcasting
-    points = (1-t)**3 * P0 + 3 * (1-t)**2 * t * P1 + 3 * (1-t) * t**2 * P2 + t**3 * P3
-    return points
+def de_casteljau(P0, P1, P2, P3, t):
+    """ De Casteljau's algorithm to split a cubic Bezier curve at t """
+    P01 = (1 - t) * P0 + t * P1
+    P12 = (1 - t) * P1 + t * P2
+    P23 = (1 - t) * P2 + t * P3
+    P012 = (1 - t) * P01 + t * P12
+    P123 = (1 - t) * P12 + t * P23
+    P0123 = (1 - t) * P012 + t * P123
+    return P01, P12, P23, P012, P123, P0123
 
 def plot_bezier_arc(panel, startx, starty, stopx, stopy, height, color, alpha,
                     color_gradient = False, lw = 0.25):
@@ -99,8 +105,9 @@ def plot_bezier_arc(panel, startx, starty, stopx, stopy, height, color, alpha,
     diffx = abs(startx - stopx)
     middlex = min([startx, stopx]) + (diffx/2)
 
-    second = (startx,  height)
-    third  = (stopx,   height)
+    second            = (startx,  height)
+    second_point_five = (middlex, height)
+    third             = (stopx,   height)
     path_data = [
         (Path.MOVETO, (startx, starty)),
         (Path.CURVE4, second),
@@ -126,35 +133,56 @@ def plot_bezier_arc(panel, startx, starty, stopx, stopy, height, color, alpha,
     else:
         # In this case, we plot an arc that is a gradient between the two colors
         # how many segments to use to change the color?
-        segments = 100
-        # Calculate bezier curve points
+        # Previously we used a graduent, but now we don't like that because it makes too many lines. Now, just use 3 max
         P0 = np.array([startx, starty])
         P1 = np.array([startx, height])
-        P2 = np.array([stopx, height])
-        P3 = np.array([stopx, stopy])
-        bezier_points = calculate_bezier_points(P0, P1, P2, P3, segments)
-        # Determine indices for the middle 10% of the curve
-        black_start_index = int(0.44 * len(bezier_points))
-        black_end_index = int(0.54 * len(bezier_points))
+        P2 = np.array([stopx,  height])
+        P3 = np.array([stopx,  stopy])
 
-        for i in range(len(bezier_points) - 1):
-            segment_start = bezier_points[i]
-            segment_end = bezier_points[i + 1]
-            segment_path_data = [
-                (Path.MOVETO, segment_start),
-                (Path.LINETO, segment_end),
-            ]
-            segment_codes, segment_verts = zip(*segment_path_data)
-            segment_path = Path(segment_verts, segment_codes)
-            factor = i / (len(bezier_points) - 2)
-            if black_start_index <= i <= black_end_index:
-                color = "#000000"
-                templw = lw * 2
-            else:
-                color = interpolate_color(start_color, end_color, factor)
-                templw = lw
-            patch = patches.PathPatch(segment_path, fill=False, lw=templw, alpha=alpha, edgecolor=color)
-            panel.add_patch(patch)
+        # Plot first half of the bezier arc in the start color
+        # Split the bezier curve at t = 0.5
+        P01, P12, P23, P012, P123, P0123 = de_casteljau(P0, P1, P2, P3, 0.5)
+
+        # Plot the left half of the Bezier arc
+        left_path_data = [
+            (mpath.Path.MOVETO, P0),
+            (mpath.Path.CURVE4, P01),
+            (mpath.Path.CURVE4, P012),
+            (mpath.Path.CURVE4, P0123),
+        ]
+        left_codes, left_verts = zip(*left_path_data)
+        left_path = mpath.Path(left_verts, left_codes)
+        left_patch = patches.PathPatch(left_path, fill=False, lw=lw, alpha=alpha, edgecolor=start_color)
+        panel.add_patch(left_patch)
+
+        # Plot the right half of the Bezier arc
+        right_path_data = [
+            (mpath.Path.MOVETO, P0123),
+            (mpath.Path.CURVE4, P123),
+            (mpath.Path.CURVE4, P23),
+            (mpath.Path.CURVE4, P3),
+        ]
+        right_codes, right_verts = zip(*right_path_data)
+        right_path = mpath.Path(right_verts, right_codes)
+        right_patch = patches.PathPatch(right_path, fill=False, lw=lw, alpha=alpha, edgecolor=end_color)
+        panel.add_patch(right_patch)
+
+        # Add a thicker black "handle" in the middle of the arc
+        # Split the bezier curve at t = 0.42 and t = 0.58 for the handle
+        P01_42, P12_42, P23_42, P012_42, P123_42, P0123_42 = de_casteljau(P0, P1, P2, P3, 0.42)
+        P01_58, P12_58, P23_58, P012_58, P123_58, P0123_58 = de_casteljau(P0, P1, P2, P3, 0.58)
+
+        handle_path_data = [
+            (mpath.Path.MOVETO, P0123_42),
+            (mpath.Path.CURVE4, P123_42),
+            (mpath.Path.CURVE4, P012_58),
+            (mpath.Path.CURVE4, P0123_58),
+        ]
+        handle_codes, handle_verts = zip(*handle_path_data)
+        handle_path = mpath.Path(handle_verts, handle_codes)
+        handle_patch = patches.PathPatch(handle_path, fill=False, lw=lw * 2, alpha=alpha, edgecolor="#000000")
+        panel.add_patch(handle_patch)
+
     return panel
 
 def legal_color(color):
@@ -208,7 +236,7 @@ def plot_arcs(arc_panel, genome1, pairtype, rbh, unique_pairs, fontsize,
     arc_panel.spines["left"].set_visible(False)
 
     # Now let's plot the stable pairs
-    stable_pairs = unique_pairs[unique_pairs["node_type"] == pairtype]
+    stable_pairs = unique_pairs[unique_pairs[pairtype] == 1]
     # For each stable pair, find if that stable pair is present in BCnSSimakov2022_gene,
     #  and plot an arc between the two points on the top marginal plot, the height is relative
     #  to the distance between the two points divided by the max distance of any pair
@@ -250,7 +278,7 @@ def plot_arcs(arc_panel, genome1, pairtype, rbh, unique_pairs, fontsize,
         color = "#000000"
         if blastdf is not None:
             if row["ortholog1"] in blast_rbh_list or row["ortholog2"] in blast_rbh_list:
-                #print("PLOT STABLE")
+                #print("These are two stable OGs that will be plotted below: ", row["ortholog1"], row["ortholog2"])
                 #print(row)
                 modulo = -1
                 color = "#FF0000"
@@ -262,10 +290,10 @@ def plot_arcs(arc_panel, genome1, pairtype, rbh, unique_pairs, fontsize,
         if attempt_to_gradient_color:
             startcolor = rbh_to_color[row["ortholog1"]]
             stopcolor  = rbh_to_color[row["ortholog2"]]
-            arc_panel = plot_bezier_arc(arc_panel, row["x1"], 0, row["x2"], 0, modulo * row["xD"]/max_xD, color, 0.75,
+            arc_panel = plot_bezier_arc(arc_panel, row["x1"], 0, row["x2"], 0, modulo * row["xD"]/max_xD, color, 0.6,
                                         color_gradient=(startcolor, stopcolor))
         else:
-            arc_panel = plot_bezier_arc(arc_panel, row["x1"], 0, row["x2"], 0, modulo * row["xD"]/max_xD, color, 0.75)
+            arc_panel = plot_bezier_arc(arc_panel, row["x1"], 0, row["x2"], 0, modulo * row["xD"]/max_xD, color, 0.6)
 
     # plot the blast results
     if len(rbhs_to_plot) > 0:
@@ -390,7 +418,6 @@ def main():
     unique_pairs = pd.read_csv( args.unique_pairs_path, sep="\t" )
     unique_pairs = unique_pairs[unique_pairs["taxid"] == args.clade_for_pairs]
     print(unique_pairs)
-    print(unique_pairs["node_type"].unique())
     if len(unique_pairs) == 0:
         print(f"Could not find any unique pairs for clade {args.clade_for_pairs}")
         sys.exit()
@@ -561,7 +588,7 @@ def main():
 
     # change the fontsize of the ticks on the arc plot
     if args.blast_file is not None:
-        ax_arcx_stable = plot_arcs(ax_arcx_stable, genome1, "stable_in_clade",
+        ax_arcx_stable = plot_arcs(ax_arcx_stable, genome1,     "stable_in_clade",
                                    rbh, unique_pairs, fontsize,
                                    blastdf = blastdf, blast_rbh_list = blast_rbh_list,
                                    chromdf = chromdf,
@@ -573,20 +600,20 @@ def main():
                                    chromdf = chromdf,
                                    scaf_order = xlabels, scaf_to_len = scaf_to_len,
                                    window = window, attempt_to_gradient_color=True)
-        ax_arcx_close    = plot_arcs(ax_arcx_close, genome1, "close_in_clade",
+        ax_arcx_close    = plot_arcs(ax_arcx_close, genome1,    "close_in_clade",
                                    rbh, unique_pairs, fontsize,
                                    blastdf = blastdf, blast_rbh_list = blast_rbh_list,
                                    chromdf = chromdf,
                                    scaf_order = xlabels, scaf_to_len = scaf_to_len,
                                    window = window, attempt_to_gradient_color=True)
     else:
-        ax_arcx_stable   = plot_arcs(ax_arcx_stable, genome1, "stable_in_clade",
+        ax_arcx_stable   = plot_arcs(ax_arcx_stable, genome1,   "stable_in_clade",
                                    rbh, unique_pairs, fontsize,
                                    attempt_to_gradient_color = True)
         ax_arcx_unstable = plot_arcs(ax_arcx_unstable, genome1, "unstable_in_clade",
                                    rbh, unique_pairs, fontsize,
                                    attempt_to_gradient_color = True)
-        ax_arcx_close    = plot_arcs(ax_arcx_close, genome1, "unstable_in_clade",
+        ax_arcx_close    = plot_arcs(ax_arcx_close, genome1,    "close_in_clade",
                                    rbh, unique_pairs, fontsize,
                                    attempt_to_gradient_color = True)
     # save to a pdf

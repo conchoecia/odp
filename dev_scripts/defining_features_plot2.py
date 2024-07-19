@@ -15,14 +15,13 @@ import numpy as np
 import os
 import pandas as pd
 import rbh_tools
+import scipy.stats as stats
 import sys
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 sns.set_theme(style="ticks")
-
-
 
 def parse_args():
     """
@@ -36,6 +35,7 @@ def parse_args():
     parser.add_argument('--clade_stats_dir', type=str, help='Directory containing .tsv.gz files with stats for clades')
     parser.add_argument("--rbh_file", type=str, help="Path to the rbh file", required=True)
     parser.add_argument("--pair_combination_path", type=str, help="Path to the pair combination file", required=True)
+    parser.add_argument("--sigma",                type=int, help="For the left-side of the distribution, what sigma cutoff to use", default=2)
 
     args = parser.parse_args()
     # make sure that the rbh file exists
@@ -46,31 +46,79 @@ def parse_args():
         raise ValueError(f"{args.pair_combination_path} does not exist")
     return parser.parse_args()
 
-def make_marginal_plot(x, y, xlabel, ylabel, outpdf,
-                       xrange = [], yrange = [], vertical_lines = []):
+def make_marginal_plot(x, y, xlabel, ylabel, max_points = 1000, fontsize = 6,
+                       xrange = [], yrange = [], vertical_lines = [], vertical_line_labels = []):
     """
     Just a lil plot to make a marginal plot of an x and y
     """
     # Start with a square Figure.
-    fig = plt.figure(figsize=(6, 6))
+    fig = plt.figure(figsize=(10, 10))
+
+    # make a title with the xlabel and ylabel on the top of the title
+    figtitle = f"{xlabel} (x) vs {ylabel} (y)"
+    fig.suptitle(figtitle, fontsize=fontsize+2)
     # Add a gridspec with two rows and two columns and a ratio of 1 to 4 between
     # the size of the marginal Axes and the main Axes in both directions.
     # Also adjust the subplot parameters for a square plot.
-    gs = fig.add_gridspec(2, 2,  width_ratios=(4, 1), height_ratios=(1, 4),
+    gs = fig.add_gridspec(3, 3,  width_ratios=(4, 1, 4), height_ratios=(4, 1, 4),
                           left=0.1, right=0.9, bottom=0.1, top=0.9,
-                          wspace=0.05, hspace=0.05)
+                          wspace=0.15, hspace=0.15)
     # Create the Axes.
-    ax = fig.add_subplot(gs[1, 0])
-    ax_histx = fig.add_subplot(gs[0, 0], sharex=ax)
-    ax_histy = fig.add_subplot(gs[1, 1], sharey=ax)
+    ax = fig.add_subplot(gs[2, 0])
+    ax_histx = fig.add_subplot(gs[1, 0], sharex=ax)
+    ax_histy = fig.add_subplot(gs[2, 1], sharey=ax)
     # Draw the scatter plot and marginals.
     scatter_hist(x, y, xlabel, ylabel, ax, ax_histx, ax_histy,
-                 xrange = xrange, yrange = yrange, vertical_lines = vertical_lines)
-    # return this as a fig
+                 xrange = xrange, yrange = yrange,
+                 vertical_lines = vertical_lines,
+                 vertical_line_labels = vertical_line_labels,
+                 fontsize = fontsize)
+
+    # we also want to plot the theoretical vs the emperical for the x-axis, because it should be Gaussian
+    # theoretical ax
+    tax = fig.add_subplot(gs[0, 0])
+    qq_plot(tax, x, xlabel, max_points = max_points, fontsize = fontsize)
+
+    # make a qq plot for the other variable too, even though it may not be normally distributed
+    tax2 = fig.add_subplot(gs[2, 2])
+    qq_plot(tax2, y, ylabel, max_points = max_points, fontsize = fontsize)
+
     return fig
 
+def qq_plot(ax, x, xlabel, max_points = 1000, fontsize = 6):
+    """
+    This makes a qqplot in an axis
+    """
+    ax.set_xlabel("Theoretical Quantiles", fontsize=fontsize)
+    ax.set_ylabel("Observed Quantiles", fontsize=fontsize)
+    ax.set_title(f"Q-Q Plot of {xlabel}", fontsize=fontsize)
+    # set the tick label sizes
+    ax.tick_params(axis='both', which='major', labelsize=fontsize)
+
+    if np.std(x) == 0:
+        pass
+    else:
+        # Calculate the z-scores for x
+        z_scores = (x - np.mean(x)) / np.std(x)
+
+        # Subset the z-scores if the number of points is too large
+        if len(z_scores) > max_points:
+            z_scores = np.random.choice(z_scores, size=max_points, replace=False)
+
+        # Get theoretical quantiles
+        quantiles = np.linspace(0, 1, len(z_scores))
+        theoretical_quantiles = stats.norm.ppf(quantiles)
+
+        # Sort z-scores to get observed quantiles
+        observed_quantiles = np.sort(z_scores)
+
+        # Plot the theoretical vs observed quantiles
+        ax.scatter(theoretical_quantiles, observed_quantiles, alpha=0.5)
+        ax.plot(theoretical_quantiles, theoretical_quantiles, color='red', linestyle='--')  # y=x line
+
 def scatter_hist(x, y, xlabel, ylabel, ax, ax_histx, ax_histy,
-                 xrange =[], yrange=[], vertical_lines = []):
+                 fontsize = 6, xrange =[], yrange=[],
+                 vertical_lines = [], vertical_line_labels = []):
     # no labels
     ax_histx.tick_params(axis="x", labelbottom=False)
     ax_histy.tick_params(axis="y", labelleft=False)
@@ -85,12 +133,22 @@ def scatter_hist(x, y, xlabel, ylabel, ax, ax_histx, ax_histy,
     if len(yrange) == 2:
         ax.set_ylim(yrange[0], yrange[1])
     # add the labels
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
+    ax.set_xlabel(xlabel, fontsize=fontsize)
+    ax.set_ylabel(ylabel, fontsize=fontsize)
 
+    # make sure that the vertical lines and the vertical line labels are the same length
+    if len(vertical_lines) != len(vertical_line_labels):
+        raise ValueError("The vertical lines and the vertical line labels are not the same length")
     # plot vertical lines if they are given
-    for line in vertical_lines:
+    for i in range(len(vertical_lines)):
+        line      = vertical_lines[i]
+        linelabel = vertical_line_labels[i]
         ax.axvline(x=line, color='r', linestyle='--')
+        # add the label text
+        # get the top of the axis for y
+        ylim = ax.get_ylim()
+        ypos = ylim[1] - 0.05
+        ax.text(line, ypos, linelabel, rotation=90, fontsize=fontsize)
 
     # use ax limits to determine bins for histograms
     xlim = ax.get_xlim()
@@ -106,6 +164,11 @@ def scatter_hist(x, y, xlabel, ylabel, ax, ax_histx, ax_histy,
     ax_histx.hist(x, bins=binsx)
     ax_histy.hist(y, bins=binsy, orientation='horizontal')
 
+    # change the tick label sizes
+    ax.tick_params(axis='both', which='major', labelsize=fontsize)
+    ax_histx.tick_params(axis='both', which='major', labelsize=fontsize)
+    ax_histy.tick_params(axis='both', which='major', labelsize=fontsize)
+
 def main():
     args = parse_args()
 
@@ -116,8 +179,11 @@ def main():
     # ALGcomboix
     # the type of the key is a tuple with two strings, the type of the value is an int
     ALGcomboix = algcomboix_file_to_dict(args.pair_combination_path)
+    # print the first 10 items
+    print(list(ALGcomboix.items())[:10])
     # the type of the key is an int, the type of the value is a tuple with two strings
     ALGcomboix_reverse = {v:k for k,v in ALGcomboix.items()}
+    print(list(ALGcomboix_reverse.items())[:10])
 
     # make sure that the directory exists
     if not os.path.isdir(args.clade_stats_dir):
@@ -125,16 +191,18 @@ def main():
     # find all of the files in the director that end in unique_pair_df.tsv.gz
     filelist = [x for x in os.listdir(args.clade_stats_dir) if x.endswith('unique_pair_df.tsv.gz')]
 
-    # First, let's make an out table that will contain the information about the pairs
+    # Let's set up a list to store the dfs
     summary_stats = []
-    entries       = []
-    sd_number = 3
+    clade_to_unique_paircount = {}
+    sd_number = args.sigma
     for file in filelist:
         nodename = file.split('_')[0]
         taxid    = file.split('_')[1]
         print(f"Looking at the node {nodename} and the file {file}")
         filepath = os.path.join(args.clade_stats_dir, file)
         df       = pd.read_csv(filepath, sep='\t')
+        df["nodename"]  = nodename
+        df["taxid"]     = taxid
         # make sure that the type of "pair", "notna_in", and "notna_out" is an int
         df["pair"] = df["pair"].astype(str)
         df["notna_in"] = df["notna_in"].astype(int)
@@ -146,50 +214,22 @@ def main():
         # do it for num_species_out
         maxoutix = df["notna_out"].idxmax()
         num_species_out = round(df["notna_out"][maxoutix] / df["occupancy_out"][maxoutix])
+        df["num_species_in"]  = num_species_in
+        df["num_species_out"] = num_species_out
         print(f"  - The number of species in the clade is {num_species_in} and outside is {num_species_out}")
-        # first, get the things that are unique to the clade
-        tempdf = df[df["notna_out"] == 0]
-        summary_entry = {
-            "nodename": nodename,
-            "taxid": taxid,
-            "num_species_in": num_species_in,
-            "num_species_out": num_species_out,
-            "num_pairs_unique_to_clade": len(tempdf)}
-        # The point of this is adding all of the pairs that are unique to this clade.
-        for i, row in tempdf.iterrows():
-            thispairix = eval(row["pair"])
-            thispair   = ALGcomboix_reverse[thispairix]
-            ortholog1  = thispair[0]
-            rbh1       = rbh_to_ALG[ortholog1]
-            ortholog2  = thispair[1]
-            rbh2       = rbh_to_ALG[ortholog2]
-            entry = {
-                "nodename": nodename,
-                "taxid": taxid,
-                "pair_type": "unique_to_clade",
-                "pair": row["pair"],
-                # put the new info here
-                "ortholog1": ortholog1,
-                "rbh1":      rbh1,
-                "ortholog2": ortholog2,
-                "rbh2":      rbh2,
-                "mean_in": row["mean_in"],
-                "mean_out": row["mean_out"],
-                "sd_in": row["sd_in"],
-                "sd_out": row["sd_out"],
-                "num_species_in": num_species_in,
-                "num_species_out": num_species_out}
-            entries.append(entry)
+        df["unique_to_clade"] = np.where(df["notna_out"] == 0, 1, 0)
+        clade_to_unique_paircount[nodename] = df["unique_to_clade"].sum()
+        print("The unique pairs for this clade are:\n", df[df["unique_to_clade"] == 1])
         # add a 1 to all the values that could cause a return ratio of 0
-        df["mean_in"] = df["mean_in"] + 1
+        df["mean_in"]  = df["mean_in"]  + 1
         df["mean_out"] = df["mean_out"] + 1
-        df["sd_in"] = df["sd_in"] + 1
-        df["sd_out"] = df["sd_out"] + 1
+        df["sd_in"]    = df["sd_in"]    + 1
+        df["sd_out"]   = df["sd_out"]   + 1
         # now that we have some pseudocounts, the logs will not fail
-        df["sd_in_out_ratio"]       = df["sd_in"]   / df["sd_out"]
-        df["sd_in_out_ratio_log"]   = np.log10(df["sd_in_out_ratio"])
-        df["mean_in_out_ratio"]     = df["mean_in"] / df["mean_out"]
-        df["mean_in_out_ratio_log"] = np.log10(df["mean_in_out_ratio"])
+        df["sd_in_out_ratio"]             = df["sd_in"]   / df["sd_out"]
+        df["sd_in_out_ratio_log"]         = np.log10(df["sd_in_out_ratio"])
+        df["mean_in_out_ratio"]           = df["mean_in"] / df["mean_out"]
+        df["mean_in_out_ratio_log"]       = np.log10(df["mean_in_out_ratio"])
 
         print("  - Plotting the sd_in_out_ratio_log vs occupancy in")
         outjointplot = f"{nodename}_{taxid}_sdratiolog_occupancy.pdf"
@@ -201,7 +241,7 @@ def main():
             plotdf = plotdf.dropna()
             x = plotdf[xcol].to_list()
             y = plotdf[ycol].to_list()
-            fig = make_marginal_plot(x, y, xcol, ycol, outjointplot, yrange=[0, 1])
+            fig = make_marginal_plot(x, y, xcol, ycol, yrange=[0, 1])
             pdf.savefig(fig)
             plt.close(fig)
             # now plot the same thing, but subset the dataframe s.t. occupancy is g.t.e.q. 0.5
@@ -210,51 +250,9 @@ def main():
             print("the sd cutoff is")
             x = plotdf[xcol].to_list()
             y = plotdf[ycol].to_list()
-            fig = make_marginal_plot(x, y, xcol, ycol, outjointplot, yrange=[0.5, 1], vertical_lines=[sd_cutoff])
+            fig = make_marginal_plot(x, y, xcol, ycol, yrange=[0.5, 1], vertical_lines=[sd_cutoff], vertical_line_labels=[f"-{sd_number} sigma"])
             pdf.savefig(fig)
             plt.close(fig)
-
-        # figure out why the sd is 0
-        df = df.sort_values("sd_in_out_ratio", ascending=True)
-
-        # only get the things that are greater than or equal to  0.5
-        tempdf = df[df["occupancy_in"] >= 0.5]
-        sd_cutoff = tempdf["sd_in_out_ratio_log"].mean() - (sd_number * tempdf["sd_in_out_ratio_log"].std())
-        # get the cutoff for the occupancy, too
-        occupancy_cutoff = 0.5
-        print("The cutoff for the sd_in_out_ratio_log is", sd_cutoff)
-        print("The cutoff for the occupancy is", occupancy_cutoff)
-        print("filtering")
-        # get the rows where sd_in_out_ratio_log is less than the cutoff
-        #   and the occupancy_in is greater than the cutoff
-        tempdf = tempdf[tempdf["sd_in_out_ratio_log"] < sd_cutoff]
-        print("Clade filtered for sd_in_out_ratio_log and occupancy_in (stable)")
-        print(tempdf)
-        summary_entry["num_pairs_stable_in_clade"] = len(tempdf)
-        for i, row in tempdf.iterrows():
-            thispairix = eval(row["pair"])
-            thispair   = ALGcomboix_reverse[thispairix]
-            ortholog1  = thispair[0]
-            rbh1       = rbh_to_ALG[ortholog1]
-            ortholog2  = thispair[1]
-            rbh2       = rbh_to_ALG[ortholog2]
-            entry = {
-                "nodename": nodename,
-                "taxid": taxid,
-                "pair_type": "stable_in_clade",
-                "pair": row["pair"],
-                # put the new info here
-                "ortholog1": ortholog1,
-                "rbh1":      rbh1,
-                "ortholog2": ortholog2,
-                "rbh2":      rbh2,
-                "mean_in": row["mean_in"],
-                "mean_out": row["mean_out"],
-                "sd_in": row["sd_in"],
-                "sd_out": row["sd_out"],
-                "num_species_in": num_species_in,
-                "num_species_out": num_species_out}
-            entries.append(entry)
 
         print("  - Plotting the sd_in_out_ratio_log vs occupancy in")
         outjointplot = f"{nodename}_{taxid}_sdratiolog_occupancy.pdf"
@@ -266,7 +264,7 @@ def main():
             plotdf = plotdf.dropna()
             x = plotdf[xcol].to_list()
             y = plotdf[ycol].to_list()
-            fig = make_marginal_plot(x, y, xcol, ycol, outjointplot, yrange=[0, 1])
+            fig = make_marginal_plot(x, y, xcol, ycol,  yrange=[0, 1])
             pdf.savefig(fig)
             plt.close(fig)
             # now plot the same thing, but subset the dataframe s.t. occupancy is g.t.e.q. 0.5
@@ -276,8 +274,8 @@ def main():
             print(f"the sd cutoff is: {sd_cutoff}")
             x = plotdf[xcol].to_list()
             y = plotdf[ycol].to_list()
-            fig = make_marginal_plot(x, y, xcol, ycol, outjointplot,
-                                     yrange=[0.5, 1], vertical_lines=[sd_cutoff, sd_high])
+            fig = make_marginal_plot(x, y, xcol, ycol,
+                                     yrange=[0.5, 1], vertical_lines=[sd_cutoff, sd_high], vertical_line_labels=[f"-{sd_number} sigma", f"{sd_number} sigma"])
             pdf.savefig(fig)
             plt.close(fig)
 
@@ -291,7 +289,7 @@ def main():
             plotdf = plotdf.dropna()
             x = plotdf[xcol].to_list()
             y = plotdf[ycol].to_list()
-            fig = make_marginal_plot(x, y, xcol, ycol, outjointplot, yrange = [0, 1])
+            fig = make_marginal_plot(x, y, xcol, ycol, yrange = [0, 1])
             pdf.savefig(fig)
             plt.close(fig)
             # now plot the same thing, but subset the dataframe s.t. occupancy is g.t.e.q. 0.5
@@ -300,7 +298,7 @@ def main():
             print(f"the sd cutoff is: {sd_cutoff}")
             x = plotdf[xcol].to_list()
             y = plotdf[ycol].to_list()
-            fig = make_marginal_plot(x, y, xcol, ycol, outjointplot, yrange=[0.5, 1], vertical_lines=[sd_cutoff])
+            fig = make_marginal_plot(x, y, xcol, ycol, yrange=[0.5, 1], vertical_lines=[sd_cutoff], vertical_line_labels=[f"-{sd_number} sigma"])
             pdf.savefig(fig)
             plt.close(fig)
 
@@ -314,7 +312,7 @@ def main():
             plotdf = plotdf.dropna()
             x = plotdf[xcol].to_list()
             y = plotdf[ycol].to_list()
-            fig = make_marginal_plot(x, y, xcol, ycol, outjointplot)
+            fig = make_marginal_plot(x, y, xcol, ycol)
             pdf.savefig(fig)
             plt.close(fig)
 
@@ -328,7 +326,7 @@ def main():
             plotdf = plotdf.dropna()
             x = plotdf[xcol].to_list()
             y = plotdf[ycol].to_list()
-            fig = make_marginal_plot(x, y, xcol, ycol, outjointplot, yrange = [0, 1])
+            fig = make_marginal_plot(x, y, xcol, ycol, yrange = [0, 1])
             pdf.savefig(fig)
             plt.close(fig)
             # now plot the same thing, but subset the dataframe s.t. occupancy is g.t.e.q. 0.5
@@ -337,90 +335,67 @@ def main():
             print(f"the sd cutoff is: {sd_cutoff}")
             x = plotdf[xcol].to_list()
             y = plotdf[ycol].to_list()
-            fig = make_marginal_plot(x, y, xcol, ycol, outjointplot,
-                                     yrange=[0.5, 1], vertical_lines=[sd_cutoff])
+            fig = make_marginal_plot(x, y, xcol, ycol,
+                                     yrange=[0.5, 1], vertical_lines=[sd_cutoff], vertical_line_labels=[f"-{sd_number} sigma"])
             pdf.savefig(fig)
             plt.close(fig)
 
-        # get the pairs that are especially unstable in the clade
-        occupancy_cutoff = 0.5
-        tempdf = df[df["occupancy_in"] >= occupancy_cutoff]
-        sd_cutoff = tempdf["sd_in_out_ratio_log"].mean() + (sd_number * tempdf["sd_in_out_ratio_log"].std())
-        print("filtering")
-        # get the rows where sd_in_out_ratio_log is less than the cutoff
-        #   and the occupancy_in is greater than the cutoff
-        tempdf = tempdf[tempdf["sd_in_out_ratio_log"] > sd_cutoff]
-        print("Clade filtered for sd_in_out_ratio_log and occupancy_in (unstable)")
-        print(tempdf)
-        summary_entry["num_pairs_unstable_in_clade"] = len(tempdf)
-        for i, row in tempdf.iterrows():
-            thispairix = eval(row["pair"])
-            thispair   = ALGcomboix_reverse[thispairix]
-            ortholog1  = thispair[0]
-            rbh1       = rbh_to_ALG[ortholog1]
-            ortholog2  = thispair[1]
-            rbh2       = rbh_to_ALG[ortholog2]
-            entry = {
-                "nodename": nodename,
-                "taxid": taxid,
-                "pair_type": "unstable_in_clade",
-                "pair": row["pair"],
-                # put the new info here
-                "ortholog1": ortholog1,
-                "rbh1":      rbh1,
-                "ortholog2": ortholog2,
-                "rbh2":      rbh2,
-                "mean_in": row["mean_in"],
-                "mean_out": row["mean_out"],
-                "sd_in": row["sd_in"],
-                "sd_out": row["sd_out"],
-                "num_species_in": num_species_in,
-                "num_species_out": num_species_out}
-            entries.append(entry)
+        # get the df down to where occupancy_in is at least 0.5
+        df = df[df["occupancy_in"] >= 0.5]
+        df["sd_in_out_ratio_log_sigma"]   = (df["sd_in_out_ratio_log"] - df["sd_in_out_ratio_log"].mean()) / df["sd_in_out_ratio_log"].std()
+        df["mean_in_out_ratio_log_sigma"] = (df["mean_in_out_ratio_log"] - df["mean_in_out_ratio_log"].mean()) / df["mean_in_out_ratio_log"].std()
+        # if the sd_in_out_ratio_log_sigma is less than -2, and the occupancy_in is at least 0.5, then it is stable, append "stable_in_clade" to the pair_type
+        df["stable_in_clade"]   = np.where((df["sd_in_out_ratio_log_sigma"]   < -sd_number) & (df["occupancy_in"] >= 0.5), 1, 0)
+        df["unstable_in_clade"] = np.where((df["sd_in_out_ratio_log_sigma"]   >  sd_number) & (df["occupancy_in"] >= 0.5), 1, 0)
+        df["close_in_clade"]    = np.where((df["mean_in_out_ratio_log_sigma"] < -sd_number) & (df["occupancy_in"] >= 0.5), 1, 0)
+        df["distant_in_clade"]  = np.where((df["mean_in_out_ratio_log_sigma"] >  sd_number) & (df["occupancy_in"] >= 0.5), 1, 0)
+        columns_of_interest = ["close_in_clade", "distant_in_clade", "stable_in_clade", "unstable_in_clade", "unique_to_clade"]
+        # filter the df to only keep the rows where at least one of the clades of interest is 1
+        df = df[df[columns_of_interest].sum(axis=1) > 0]
+        summary_stats.append(df)
 
-        # now find the ones that are close in a lot of the clade
-        occupancy_cutoff = 0.5
-        tempdf = df[df["occupancy_in"] >= occupancy_cutoff]
-        mean_cutoff = tempdf["mean_in"].mean() - (sd_number * tempdf["mean_in"].std())
-        print("filtering")
-        tempdf = tempdf[tempdf["mean_in"] < mean_cutoff]
-        print("Clade filtered for mean_in and occupancy_in (close means)")
-        print(tempdf)
-        summary_entry["especially close pairs"] = len(tempdf)
-        for i, row in tempdf.iterrows():
-            thispairix = eval(row["pair"])
-            thispair   = ALGcomboix_reverse[thispairix]
-            ortholog1  = thispair[0]
-            rbh1       = rbh_to_ALG[ortholog1]
-            ortholog2  = thispair[1]
-            rbh2       = rbh_to_ALG[ortholog2]
-            entry = {
-                "nodename": nodename,
-                "taxid": taxid,
-                "pair_type": "close_in_clade",
-                "pair": row["pair"],
-                # put the new info here
-                "ortholog1": ortholog1,
-                "rbh1":      rbh1,
-                "ortholog2": ortholog2,
-                "rbh2":      rbh2,
-                "mean_in":  row["mean_in"],
-                "mean_out": row["mean_out"],
-                "sd_in":    row["sd_in"],
-                "sd_out":   row["sd_out"],
-                "num_species_in": num_species_in,
-                "num_species_out": num_species_out}
-            entries.append(entry)
-        summary_stats.append(summary_entry)
-
-    # convert the entries to a df
-    df = pd.DataFrame(entries)
-    # save as a tsv
-    outpath = "unique_pairs.tsv"
-    df.to_csv(outpath, sep='\t', index=False)
+    # make a composite df
+    df = pd.concat(summary_stats)
+    df["ortholog1"] = df["pair"].apply(lambda x: ALGcomboix_reverse[int(x)][0])
+    df["rbh1"]      = df["ortholog1"].apply(lambda x: rbh_to_ALG[x])
+    df["ortholog2"] = df["pair"].apply(lambda x: ALGcomboix_reverse[int(x)][1])
+    df["rbh2"]      = df["ortholog2"].apply(lambda x: rbh_to_ALG[x])
+    # move these columns to the front:
+    priority_cols = ["nodename", "taxid", "ortholog1", "rbh1", "ortholog2", "rbh2"] + columns_of_interest
+    df = df[priority_cols + [x for x in df.columns if x not in priority_cols]]
     print(df)
-    # now save the summary stats
-    summary_stats_df = pd.DataFrame(summary_stats)
+    outpdf = "unique_pairs.tsv"
+    df.to_csv(outpdf, sep='\t', index=False)
+
+    # for each nodename, taxid, num_species_in, num_species_out, get the stats of the pairs
+    summary = []
+    groupcols = ["nodename", "taxid", "num_species_in", "num_species_out"]
+    gb = df.groupby(groupcols)
+    # iterate through the groupby object
+    for name, group in gb:
+        nodename, taxid, num_species_in, num_species_out = name
+        # get the number of unique pairs
+        num_unique_pairs = clade_to_unique_paircount[nodename]
+        num_close_pairs  = group["close_in_clade"].sum()
+        num_distant_pairs = group["distant_in_clade"].sum()
+        num_stable_pairs = group["stable_in_clade"].sum()
+        num_unstable_pairs = group["unstable_in_clade"].sum()
+        # get the number of pairs
+        num_pairs = len(group)
+        # get the number of pairs that are close
+        entry = {"nodename": nodename,
+                 "taxid":    taxid,
+                 "num_species_in":  num_species_in,
+                 "num_species_out": num_species_out,
+                 "num_pairs_all_types":         num_pairs,
+                 "num_pairs_unique_to_clade":   num_unique_pairs,
+                 "num_pairs_close_in_clade":    num_close_pairs,
+                 "num_pairs_distant_in_clade":  num_distant_pairs,
+                 "num_pairs_stable_in_clade":   num_stable_pairs,
+                 "num_pairs_unstable_in_clade": num_unstable_pairs}
+        summary.append(entry)
+    # make a df
+    summary_stats_df = pd.DataFrame(summary)
     outpath = "summary_stats.tsv"
     summary_stats_df.to_csv(outpath, sep='\t', index=False)
 

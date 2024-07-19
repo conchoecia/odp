@@ -30,6 +30,7 @@ def parse_args():
     parser.add_argument("--sample_df_path",       type=str, help="Path to the sample df", required=True)
     parser.add_argument("--coo_combination_path", type=str, help="Path to the coo combination file", required=True)
     parser.add_argument("--taxid_list",           type=str, help="Comma-separated list of taxids for which we want to save the unique pairs tsv file", required=False, default = "")
+    parser.add_argument("--sigma",                type=int, help="For the left-side of the distribution, what sigma cutoff to use", default=2)
 
     args = parser.parse_args()
     # check that both the coo file and the df file exist. Same with coo combination file
@@ -125,7 +126,8 @@ def compute_statistics(col, inindex, outindex):
         "occupancy_out": notna_out / len_outindex}
 
 def process_coo_file(sampledffile, ALGcomboixfile, coofile,
-                     dfoutfilepath, missing_value_as = np.nan,
+                     dfoutfilepath, sigma = 2,
+                     missing_value_as = np.nan,
                      taxid_list = []):
     """
     Handles loading in the coo file and transforms it to a matrix that we can work with.
@@ -356,9 +358,9 @@ def main():
     #process_coo_file(sampledffile, ALGcomboixfile, coofile,
     #                 dfoutfilepath, missing_value_as = 9999999999)
     if len(args.taxid_list) > 0:
-        process_coo_file(args.sample_df_path, args.coo_combination_path, args.coo_path, "test.df", taxid_list = args.taxid_list)
+        process_coo_file(args.sample_df_path, args.coo_combination_path, args.coo_path, "test.df", sigma = args.sigma, taxid_list = args.taxid_list)
     else:
-        process_coo_file(args.sample_df_path, args.coo_combination_path, args.coo_path, "test.df")
+        process_coo_file(args.sample_df_path, args.coo_combination_path, args.coo_path, "test.df", sigma = args.sigma)
 
 if __name__ == "__main__":
     main()
