@@ -164,8 +164,8 @@ def process_coo_file(sampledffile, ALGcomboixfile, coofile,
     # convert the matrix to a df, where species are labeled with the cdf samples, and the combinations are labeled with the ALGcomboix
     # we have to transpose the matrix to get the species as the rows
     print(cdf)
-    df = pd.DataFrame(matrix, index = cdf.index,
-                      columns = [i for i in range(matrix.shape[1])])
+    df = pd.DataFrame(matrix, index=cdf.index,
+                      columns=[i for i in range(matrix.shape[1])])
 
     # now find the things that define the species
     # convert the column "taxid_list" to a list of ints. use eval

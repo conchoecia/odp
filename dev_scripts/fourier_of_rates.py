@@ -351,9 +351,9 @@ def r_simulations(time, values, peaks_to_test, magnitudes, polynomial, outprefix
         elif "fusions" in outprefix:
             changetype = "fusions"
         treatment = ""
-        if "padded" in outprefix:
+        if "_padded" in outprefix:
             treatment = "padded"
-        elif "unpadded" in outprefix:
+        elif "_unpadded" in outprefix:
             treatment = "unpadded"
         # Clade	change_type	treatment	period	support_min	support_max	support_mean	support_median	support_std	polynomial
         # calculate the mean, median, and std of the support columns.

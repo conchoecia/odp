@@ -193,7 +193,7 @@ def main():
 
     # Let's set up a list to store the dfs
     summary_stats = []
-    clade_to_unique_paircount = {}
+    clade_to_unique_paircount_any = {}
     sd_number = args.sigma
     for file in filelist:
         nodename = file.split('_')[0]
@@ -210,15 +210,15 @@ def main():
         # Infer the number of species in the clade using the notna_in and occupancy_in columns.
         # Get the index of the max value of the notna_in column, divide that value by the occupancy_in column
         maxinix = df["notna_in"].idxmax()
-        num_species_in = round(df["notna_in"][maxinix] / df["occupancy_in"][maxinix])
-        # do it for num_species_out
+        num_genomes_in = round(df["notna_in"][maxinix] / df["occupancy_in"][maxinix])
+        # do it for num_genomes_out
         maxoutix = df["notna_out"].idxmax()
-        num_species_out = round(df["notna_out"][maxoutix] / df["occupancy_out"][maxoutix])
-        df["num_species_in"]  = num_species_in
-        df["num_species_out"] = num_species_out
-        print(f"  - The number of species in the clade is {num_species_in} and outside is {num_species_out}")
+        num_genomes_out = round(df["notna_out"][maxoutix] / df["occupancy_out"][maxoutix])
+        df["num_genomes_in"]  = num_genomes_in
+        df["num_genomes_out"] = num_genomes_out
+        print(f"  - The number of species in the clade is {num_genomes_in} and outside is {num_genomes_out}")
         df["unique_to_clade"] = np.where(df["notna_out"] == 0, 1, 0)
-        clade_to_unique_paircount[nodename] = df["unique_to_clade"].sum()
+        clade_to_unique_paircount_any[nodename] = df["unique_to_clade"].sum()
         print("The unique pairs for this clade are:\n", df[df["unique_to_clade"] == 1])
         # add a 1 to all the values that could cause a return ratio of 0
         df["mean_in"]  = df["mean_in"]  + 1
@@ -342,6 +342,7 @@ def main():
 
         # get the df down to where occupancy_in is at least 0.5
         df = df[df["occupancy_in"] >= 0.5]
+        print("The unique pairs for this clade are:\n", df[df["unique_to_clade"] == 1])
         df["sd_in_out_ratio_log_sigma"]   = (df["sd_in_out_ratio_log"] - df["sd_in_out_ratio_log"].mean()) / df["sd_in_out_ratio_log"].std()
         df["mean_in_out_ratio_log_sigma"] = (df["mean_in_out_ratio_log"] - df["mean_in_out_ratio_log"].mean()) / df["mean_in_out_ratio_log"].std()
         # if the sd_in_out_ratio_log_sigma is less than -2, and the occupancy_in is at least 0.5, then it is stable, append "stable_in_clade" to the pair_type
@@ -367,15 +368,16 @@ def main():
     outpdf = "unique_pairs.tsv"
     df.to_csv(outpdf, sep='\t', index=False)
 
-    # for each nodename, taxid, num_species_in, num_species_out, get the stats of the pairs
+    # for each nodename, taxid, num_genomes_in, num_genomes_out, get the stats of the pairs
     summary = []
-    groupcols = ["nodename", "taxid", "num_species_in", "num_species_out"]
+    groupcols = ["nodename", "taxid", "num_genomes_in", "num_genomes_out"]
     gb = df.groupby(groupcols)
     # iterate through the groupby object
     for name, group in gb:
-        nodename, taxid, num_species_in, num_species_out = name
+        nodename, taxid, num_genomes_in, num_genomes_out = name
         # get the number of unique pairs
-        num_unique_pairs = clade_to_unique_paircount[nodename]
+        num_unique_pairs_any     = clade_to_unique_paircount_any[nodename]
+        num_unique_pairs_highocc = group["unique_to_clade"].sum()
         num_close_pairs  = group["close_in_clade"].sum()
         num_distant_pairs = group["distant_in_clade"].sum()
         num_stable_pairs = group["stable_in_clade"].sum()
@@ -385,14 +387,15 @@ def main():
         # get the number of pairs that are close
         entry = {"nodename": nodename,
                  "taxid":    taxid,
-                 "num_species_in":  num_species_in,
-                 "num_species_out": num_species_out,
-                 "num_pairs_all_types":         num_pairs,
-                 "num_pairs_unique_to_clade":   num_unique_pairs,
-                 "num_pairs_close_in_clade":    num_close_pairs,
-                 "num_pairs_distant_in_clade":  num_distant_pairs,
-                 "num_pairs_stable_in_clade":   num_stable_pairs,
-                 "num_pairs_unstable_in_clade": num_unstable_pairs}
+                 "num_genomes_in":  num_genomes_in,
+                 "num_genomes_out": num_genomes_out,
+                 "num_pairs_unique_to_clade":   num_unique_pairs_any,
+                 "num_pairs_highocc_all_types":         num_pairs,
+                 "num_pairs_unique_to_clade_highocc":   num_unique_pairs_highocc,
+                 "num_pairs_close_in_clade_highocc":    num_close_pairs,
+                 "num_pairs_distant_in_clade_highocc":  num_distant_pairs,
+                 "num_pairs_stable_in_clade_highocc":   num_stable_pairs,
+                 "num_pairs_unstable_in_clade_highocc": num_unstable_pairs}
         summary.append(entry)
     # make a df
     summary_stats_df = pd.DataFrame(summary)
