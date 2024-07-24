@@ -656,7 +656,9 @@ class TaxIDtree:
         """
         potential_roots = []
         for node in self.nodes:
-            if (self.nodes[node].parent is None) or (self.nodes[node].parent == -1):
+            if node == 1:
+                print(self.nodes[node])
+            if (self.nodes[node].parent is None) or (self.nodes[node].parent == -1) or (self.nodes[node].parent == np.nan):
                 potential_roots.append(node)
         if len(potential_roots) == 0:
             raise ValueError("There is no root in this tree.")

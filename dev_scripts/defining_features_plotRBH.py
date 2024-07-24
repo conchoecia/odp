@@ -37,7 +37,7 @@ import fasta
 def parse_args():
     """
     We need the following files:
-      - a plottable rbh file - this is from a specific species rather than being from a 
+      - a plottable rbh file - this is from a specific species rather than being from a
       - a unique pairs tsv file
       - a genome assembly file
       - the taxid of the clade to plot
@@ -214,7 +214,11 @@ def plot_arcs(arc_panel, genome1, pairtype, rbh, unique_pairs, fontsize,
       - a rbh df
       - a unique pairs df
       - an optional blastdf that can be interpreted to color the arcs
+
+    Outputs the panel, and a list of indices of the unique_pairs that are stable or close in the clade that are
+      within the window of the blast results
     """
+    row_indices_of_interest = set()
     if attempt_to_gradient_color is True:
         # we need to check if there is a color column in the blastdf
         # if there is, make a rbh_to_color dict
@@ -255,7 +259,8 @@ def plot_arcs(arc_panel, genome1, pairtype, rbh, unique_pairs, fontsize,
                 y2 = rbh[rbh["BCnSSimakov2022_gene"] == row["ortholog2"]]["BCnSSimakov2022_plotpos"].values[0]
                 xD = abs(x2 - x1)
                 yD = abs(y2 - y1)
-                entry = {"ortholog1": row["ortholog1"],
+                entry = {"unique_pairs_index": i,
+                         "ortholog1": row["ortholog1"],
                          "ortholog2": row["ortholog2"],
                          "x1": x1,
                          "x2": x2,
@@ -281,6 +286,8 @@ def plot_arcs(arc_panel, genome1, pairtype, rbh, unique_pairs, fontsize,
                 #print("These are two stable OGs that will be plotted below: ", row["ortholog1"], row["ortholog2"])
                 #print(row)
                 modulo = -1
+                # add this plot_stable index to the set of indices of interest
+                row_indices_of_interest.add(row["unique_pairs_index"])
                 color = "#FF0000"
                 if row["ortholog1"] in blast_rbh_list:
                     rbhs_to_plot.add(row["ortholog1"])
@@ -370,7 +377,7 @@ def plot_arcs(arc_panel, genome1, pairtype, rbh, unique_pairs, fontsize,
     arc_panel.spines["bottom"].set_visible(False)
     arc_panel.spines["right"].set_visible(False)
     arc_panel.spines["top"].set_visible(False)
-    return arc_panel
+    return arc_panel, list(row_indices_of_interest)
 
 def main():
     fontsize = 6
@@ -587,20 +594,26 @@ def main():
     ax.set_yticklabels(labels, fontsize = fontsize)
 
     # change the fontsize of the ticks on the arc plot
+    stable_row_indices   = []
+    unstable_row_indices = []
+    close_row_indices    = []
     if args.blast_file is not None:
-        ax_arcx_stable = plot_arcs(ax_arcx_stable, genome1,     "stable_in_clade",
+        ax_arcx_stable, stable_row_indices = plot_arcs(
+                                   ax_arcx_stable, genome1,     "stable_in_clade",
                                    rbh, unique_pairs, fontsize,
                                    blastdf = blastdf, blast_rbh_list = blast_rbh_list,
                                    chromdf = chromdf,
                                    scaf_order = xlabels, scaf_to_len = scaf_to_len,
                                    window = window, attempt_to_gradient_color=True)
-        ax_arcx_unstable = plot_arcs(ax_arcx_unstable, genome1, "unstable_in_clade",
+        ax_arcx_unstable, unstable_row_indices = plot_arcs(
+                                   ax_arcx_unstable, genome1, "unstable_in_clade",
                                    rbh, unique_pairs, fontsize,
                                    blastdf = blastdf, blast_rbh_list = blast_rbh_list,
                                    chromdf = chromdf,
                                    scaf_order = xlabels, scaf_to_len = scaf_to_len,
                                    window = window, attempt_to_gradient_color=True)
-        ax_arcx_close    = plot_arcs(ax_arcx_close, genome1,    "close_in_clade",
+        ax_arcx_close, close_row_indices = plot_arcs(
+                                   ax_arcx_close, genome1,    "close_in_clade",
                                    rbh, unique_pairs, fontsize,
                                    blastdf = blastdf, blast_rbh_list = blast_rbh_list,
                                    chromdf = chromdf,
@@ -616,6 +629,8 @@ def main():
         ax_arcx_close    = plot_arcs(ax_arcx_close, genome1,    "close_in_clade",
                                    rbh, unique_pairs, fontsize,
                                    attempt_to_gradient_color = True)
+
+    #flatten the list of lists
     # save to a pdf
     outfile = f"{genome1}_pairsfrom_{cladename}_{args.clade_for_pairs}"
     if args.blast_file is not None:
@@ -628,6 +643,57 @@ def main():
     outfile += ".pdf"
     plt.savefig(outfile)
     plt.close()
+
+    print("the indices of interest are:")
+    print(stable_row_indices  )
+    print(unstable_row_indices)
+    print(close_row_indices   )
+
+    # Save all the pairs that are stable, unstable, and close in the clade
+    unique_pairs = pd.read_csv( args.unique_pairs_path, sep="\t" )
+    unique_pairs = unique_pairs[unique_pairs["taxid"] == args.clade_for_pairs]
+
+    # stable row indices
+    stable_pairs_df = unique_pairs.loc[  stable_row_indices]
+    print("stable pairs df is ")
+    print(stable_pairs_df)
+    stable_pairs_df.to_csv(outfile.replace(".pdf", ".stable_by_blast.tsv"), sep="\t", index=False)
+    # unstable
+    unstable_pairs_df = unique_pairs.loc[unstable_row_indices]
+    print("unstable pairs df is ")
+    print(unstable_pairs_df)
+    unstable_pairs_df.to_csv(outfile.replace(".pdf", ".unstable_by_blast.tsv"), sep="\t", index=False)
+    # close
+    close_pairs_df = unique_pairs.loc[   close_row_indices]
+    print("close pairs df is ")
+    print(close_pairs_df)
+    close_pairs_df.to_csv(outfile.replace(".pdf", ".close_by_blast.tsv"), sep="\t", index=False)
+
+    # Here, for this genome we want to count how many types of pairs are on each scaffold in this genome
+    #  We want to know this to see if anything is higher or lower than expected for this chromosome
+    entries = []
+    print(unique_pairs)
+    unique_pairs = pd.read_csv( args.unique_pairs_path, sep="\t" )
+    unique_pairs = unique_pairs[unique_pairs["taxid"] == args.clade_for_pairs]
+
+    # go through each chromosome of the genome
+    for scaf in xlabels:
+        # get the genes that are on this scaffold
+        genes = rbh[rbh[f"{genome1}_scaf"] == scaf][f"rbh"]
+        # get the genes that are on this scaffold and are in the stable pairs
+        stable_genes   = unique_pairs[(unique_pairs["ortholog1"].isin(genes) & unique_pairs["ortholog2"].isin(genes)) & (unique_pairs["stable_in_clade"] == 1)]
+        # get the genes that are on this scaffold and are in the unstable pairs
+        unstable_genes = unique_pairs[(unique_pairs["ortholog1"].isin(genes) & unique_pairs["ortholog2"].isin(genes)) & (unique_pairs["unstable_in_clade"] == 1)]
+        # get the genes that are on this scaffold and are in the close pairs
+        close_genes    = unique_pairs[(unique_pairs["ortholog1"].isin(genes) & unique_pairs["ortholog2"].isin(genes)) & (unique_pairs["close_in_clade"] == 1)]
+        entry = {"scaffold": scaf,
+                 "num_genes": len(genes),
+                 "num_stable_pairs": len(stable_genes),
+                 "num_unstable_pairs": len(unstable_genes),
+                 "num_close_pairs": len(close_genes)}
+        entries.append(entry)
+    df = pd.DataFrame(entries)
+    df.to_csv(outfile.replace(".pdf", ".scaffold_summary.tsv"), sep="\t", index=False)
 
 if __name__ == "__main__":
     main()
