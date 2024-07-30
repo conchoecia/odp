@@ -69,12 +69,14 @@ diagrams of conserved linkages between genomes.
 - [Quick Start](#quickstart)
 - [Users' Guide](#uguide)
   - [Installation](#install)
+    - [Operating System Requirements](#osreq)
     - [Python Requirements](#python)
     - [Other Requirements](#otherreq)
   - [General usage](#general)
     - [Input File Requirements](#inputspec)
     - [`.chrom` file specifications](#chromspec)
     - [Help generating `.chrom` files](#chromhelp)
+    - [Typical runtime](#runtime)
   - [Use cases](#cases)
     - [If you want to analyze chordate linkage groups](#clgsection)
     - [Make macrosynteny plots between two or more genomes](#macrosynuse)
@@ -82,9 +84,9 @@ diagrams of conserved linkages between genomes.
     - [Find and characterize ancestral linkage groups](#alganalysis)
       - [ALGs part 1 - Ortholog finding in 3+ species](#nwayreciprocalbest)
       - [ALGs part 2 - Find significantly numerous groups of orthologs](#groupby)
-      - [ALGs part 3 - Filter groups of orthologs](#groupbyfilter)  
+      - [ALGs part 3 - Filter groups of orthologs](#groupbyfilter)
       - [ALGs part 4 - Annotate groups of orthologs](#groupbyannotate)
-      - [ALGs part 5 - Merge groupby files](#groupbymerge) 
+      - [ALGs part 5 - Merge groupby files](#groupbymerge)
       - [ALGs part 6 - Find orthologs in more species](#groupbytohmm)
       - [ALGs part 7 - Plot mixing of select linkage groups](#plotmixing)
     - [Determine which clade is sister](#4speciesphylogeny)
@@ -123,6 +125,16 @@ git clone https://github.com/conchoecia/odp.git
 cd odp && make
 ```
 
+The installation launches a snakemake job that uses all available cores to compile the hidden markov models (HMMs) for the ALG orthologs. This process typically takes 2-4 hours when allowed 8 cores.
+
+### <a name="osreq"></a>Operating System Requirements
+
+This software is developed for a Linux environments only. It has been tested on Oracle Linux 9.4, and Ubuntu Linux 22.04.4 LTS. It is likely to work on other Linux distributions, but has not been tested on them. It is not likely to work on Windows or Mac OS X.
+
+Complete functionality benefits from, but is not required to have, jobs submitted to a SLURM cluster.
+
+We have no plans to support errors that come from running this software on Windows or Mac OS X.
+
 ### <a name="python"></a>Python Requirements
 
 Your active python environment must be python 3. This software is implemented in
@@ -152,6 +164,10 @@ these requirements.
 - [diamond](https://github.com/bbuchfink/diamond)
 - [blastp](https://blast.ncbi.nlm.nih.gov/Blast.cgi?CMD=Web&PAGE_TYPE=BlastDocs&DOC_TYPE=Download)
 - awk
+
+### <a name="runtime"></a>Runtime
+
+Typically running time for one HMM-species analysis takes 1 hour with 4 cores, and occupies approximately 1 Gb of RAM. Species-species analyses take approximately 2 minutes per pairwise comparison, and approximately 3 Gb of RAM. These processes scale linearly with the number of comparisons. Performing species-species analyses are all-versus-all, so the time complexity is exponential for every additional species added to the analysis.
 
 ## <a name="general"></a>General Usage
 
