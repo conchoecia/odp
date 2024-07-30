@@ -603,6 +603,10 @@ The output of this program is histograms showing the different measured paramete
 
 If you use `odp` in your work, please cite the following papers:
 
-Schultz, D.T., Haddock, S.H.D., Bredeson, J.V., Green, R.E., Simakov, O & Rokhsar, D.S. (2023) Ancient gene linkages support ctenophores as sister to other animals. *Nature*, 618 (7963):110-117. [https://doi.org/10.1038/s41586-023-05936-6](https://www.nature.com/articles/s41586-023-05936-6)
+> Schultz, D.T., Haddock, S.H.D., Bredeson, J.V., Green, R.E., Simakov, O & Rokhsar, D.S. (2023)
+> Ancient gene linkages support ctenophores as sister to other animals.
+> *Nature*, **618** (7963):110-117. [https://doi.org/10.1038/s41586-023-05936-6](https://www.nature.com/articles/s41586-023-05936-6)
 
-Schultz, D.T., Blümel, A., Destanović, D., Sarigol, F., & Simakov, O. (2024). Topological mixing and irreversibility in animal chromosome evolution. *bioRxiv*, 2024.07.29.605683. [https://doi.org/10.1101/2024.07.29.605683](https://doi.org/10.1101/2024.07.29.605683)
+> Schultz, D.T., Blümel, A., Destanović, D., Sarigol, F., & Simakov, O. (2024).
+> Topological mixing and irreversibility in animal chromosome evolution.
+> *bioRxiv*, 2024.07.29.605683. [https://doi.org/10.1101/2024.07.29.605683](https://doi.org/10.1101/2024.07.29.605683)
