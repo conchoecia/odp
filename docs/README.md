@@ -287,28 +287,28 @@ ignore_autobreaks: True       # Skip steps to find breaks in synteny blocks
 diamond_or_blastp: "diamond"  # "diamond" or "blastp"
 plot_LGs: True                # Plot the ALGs based on the installed databases
 plot_sp_sp: True              # Plot the synteny between two species, if False just generates .rbh files
-  
+
 species:
   Celegans:
     proteins: /path/to/proteins_in_Cel_genome.fasta # required field
     chrom:    /path/to/Cel_annot.chrom              # required field
-    genome:   /path/to/Cel_genome_assembly.fasta    # required field 
+    genome:   /path/to/Cel_genome_assembly.fasta    # required field
 
     genus: "Caenorhabditis" # This is an optional field
-    species: "elegans" # This is an optional field 
+    species: "elegans" # This is an optional field
 
-    minscafsize: 1000000 # optional field. Sets minimum scaffold size to plot. 
+    minscafsize: 1000000 # optional field. Sets minimum scaffold size to plot.
 
     manual_breaks:    # optional field, tells the software to treat breaks
       - "I:50000"     #  as separate units for calculating the homology p-values
       - "IV:9000000"  #  with Fisher's exact test. Useful for plotting centromeres.
-      - "II:99009"    #  Here, we tell the software that Cel chroms I, IV, II have breaks.      
+      - "II:99009"    #  Here, we tell the software that Cel chroms I, IV, II have breaks.
 
     plotorder:    # This optional field tells the software to only plot the scaffolds
       - "I"       #  listed here, and to do it in this order. This is useful for plotting
       - "II"      #  comparisons between two species where you want a specific order for
       - "III"     #  both species.
-    
+
   Homosapiens:
     proteins: /path/to/Human_prots.fasta
     chrom:    /path/to/Human_annotation.chrom
@@ -452,7 +452,7 @@ analyses:
   - ["Celegans", "Homosapiens", "Mmus"]
   - ["Celegans", "Dmel", "Mmus"]
   # - ["Homosapiens", "Dmel", "Mmus"]   # You can comment out lines if you would like
-  
+
 species:
   Celegans:
     proteins: /path/to/proteins_in_Cel_genome.fasta
@@ -601,6 +601,8 @@ The output of this program is histograms showing the different measured paramete
 
 ## <a name="cite"></a>Citing odp
 
-If you use `odp` in your work, please cite the following paper:
+If you use `odp` in your work, please cite the following papers:
 
-[Schultz, D.T., Haddock, S.H.D., Bredeson, J.V., Green, R.E., Simakov, O & Rokhsar, D.S. Ancient gene linkages support ctenophores as sister to other animals. Nature (2023). https://doi.org/10.1038/s41586-023-05936-6](https://www.nature.com/articles/s41586-023-05936-6)
+Schultz, D.T., Haddock, S.H.D., Bredeson, J.V., Green, R.E., Simakov, O & Rokhsar, D.S. (2023) Ancient gene linkages support ctenophores as sister to other animals. *Nature*, 618 (7963):110-117. [https://doi.org/10.1038/s41586-023-05936-6](https://www.nature.com/articles/s41586-023-05936-6)
+
+Schultz, D.T., Blümel, A., Destanović, D., Sarigol, F., & Simakov, O. (2024). Topological mixing and irreversibility in animal chromosome evolution. *bioRxiv*, 2024.07.29.605683. [https://doi.org/10.1101/2024.07.29.605683](https://doi.org/10.1101/2024.07.29.605683)
