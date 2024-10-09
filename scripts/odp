@@ -1856,8 +1856,10 @@ rule get_chromsize_of_one_species:
             line = line.strip()
 
             if line.startswith('>'):
-                # Header line indicating a new scaffold
-                current_scaffold = line[1:].split(" ")[0]
+                # Header line indicating a new scaffold. We cannot simply split the header on a space character,
+                #  because we have found some fasta files where the user/the software introduced tab characters
+                #  in the header. (WHY?). I.E. Do not use this code to split: current_scaffold = line[1:].split(" ")[0]
+                current_scaffold = line[1:].split()[0]
                 scaffold_lengths[current_scaffold] = 0
             else:
                 # Sequence line, update scaffold length
