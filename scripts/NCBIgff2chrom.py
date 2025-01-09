@@ -28,7 +28,7 @@ for line in handle:
         scaf = splitd[0]
         strand = splitd[6]
         start = int(splitd[3])
-        stop = int(splitd[3])
+        stop = int(splitd[4])
         if pid not in prots:
             prots[pid] = {"scaf": scaf, "strand": strand,
                           "start": start, "stop": stop}
