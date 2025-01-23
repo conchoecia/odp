@@ -252,7 +252,6 @@ def plot_paramsweep(args):
     # close the figure
     plt.close(fig)
 
-
 def interpolate_color(value, vmin, vmax, start_color, end_color):
     """
     Interpolates between two colors based on a given value and a range.
