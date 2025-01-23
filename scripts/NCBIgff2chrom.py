@@ -282,7 +282,7 @@ def gff_to_chrom(gffhandle, genome_headers_to_size,
                     scaf = splitd[0]
                     strand = splitd[6]
                     start = int(splitd[3])
-                    stop = int(splitd[3])
+                    stop = int(splitd[4])
                     add_entry = False # use this to determine if we should add the entry to the prots dictionary
 
                     # For both the union_mode True and union_mode False,
