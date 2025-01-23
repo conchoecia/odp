@@ -62,6 +62,11 @@ def plot_paramsweep(args):
         # Get all the dataframes from the filelist
         df_filelist = args.filelist.split(" ")
 
+    # we need to change how to address the axes when there is just one axis.
+    onefile = False
+    if len(df_filelist) == 1:
+        onefile = True
+
     print("df_filelist is {}".format(df_filelist))
 
     # There filenames are formatted like this:
@@ -85,7 +90,7 @@ def plot_paramsweep(args):
     print("num_neighbors is {}".format(num_neighbors))
     # get the min_dist
     min_dist = [os.path.basename(x).split(".mind_")[1].split(".missing_")[0] for x in df_filelist]
-    # check that all min_dist can be cast to a floar
+    # check that all min_dist can be cast to a float
     for x in min_dist:
         try:
             float(x)
@@ -107,122 +112,145 @@ def plot_paramsweep(args):
                        "size":          miss_size})
     # sort by num_neighbors and min_dist, ascending both
     df = df.sort_values(["num_neighbors", "min_dist"], ascending=[True, True])
-    # groupby size and make one plot for each size
-    gb = df.groupby("size")
-    for name, group in gb:
-        # make subplots.
-        # The number of unique things in num_neighbors is the number of rows
-        # the numer of unique things in min_dist is the number of columns
-        num_rows = len(group["num_neighbors"].unique())
-        num_cols = len(group["min_dist"].unique())
-        # make a grid of squares to plot each of these on
-        # reduce the space between all the plots
-        # make the figure size such that all the plots are square
-        square_size = 1.5
-        fig, axes = plt.subplots(num_rows, num_cols,
-                                 figsize=(num_cols*square_size, num_rows*square_size))
-        plt.subplots_adjust(wspace=0.1, hspace=0.1)
+    # get the sorted order of the unique num_neighbors
+    num_neighbors_list = sorted(df["num_neighbors"].unique())
+    num_neighbors_to_index = {x: i for i, x in enumerate(num_neighbors_list)}
+    # get the sorted order of the unique min_dist
+    min_dist_list = sorted(df["min_dist"].unique())
+    min_dist_to_index = {x: i for i, x in enumerate(min_dist_list)}
 
-        # turn off all the ticks
-        # Turn off the axes
-        for i in range(num_rows):
-            for j in range(num_cols):
-                axes[i, j].set_xticks([])
-                axes[i, j].set_yticks([])
-                # Turn off the lines around the plot
-                for spine in ['top', 'right', 'bottom', 'left']:
-                    axes[i, j].spines[spine].set_visible(False)
+    print(df)
+    print("This is the df we are working with.")
+    print(num_neighbors_list)
+    print(num_neighbors_to_index)
+    print(min_dist_list)
+    print(min_dist_to_index)
 
-        # set the title as samplename and the whether it is small or large
-        fig.suptitle(f"{samplename} {name} NaNs")
-        # set absolute left label as the number of neighbors
-        fig.text(0.06, 0.5, 'Number of Neighbors', va='center', rotation='vertical')
-        fig.text(0.5, 0.92, 'Min Distance', ha='center')
-        for i, row in enumerate(sorted(group["num_neighbors"].unique(), reverse = False)):
-            # for the left-most plot in each row, set the ylabel as the number of neighbors
-            axes[i, 0].set_ylabel(f"{row}", rotation=0, ha='right')
-            for j, col in enumerate(sorted(group["min_dist"].unique(), reverse = False)):
-                #for the top-most plot in each column, set the xlabel as the min_dist
-                # put the xlabel on the top
-                axes[0, j].xaxis.set_label_position('top')
-                axes[0, j].set_xlabel(f"{col}")
-                # get the df file for this row and column from the dffile
-                dffile = group[(group["num_neighbors"] == row) & (group["min_dist"] == col)]["dffile"].values[0]
-                # if the type of dffile is NoneType, then we didn't find the file
-                if type(dffile) == type(None):
-                    # write into the ax[i, j] that we didn't find the file
-                    axes[i, j].text(0.5, 0.5, f"Missing file", fontsize=6, ha='center')
-                elif type(dffile) == str:
-                    # now we try to find the file
-                    if os.path.exists(dffile):
-                        # if the file is empty, then we write into the ax[i, j] that the file is empty
-                        if os.path.getsize(dffile) == 0:
-                            axes[i, j].text(0.5, 0.5, f"Empty file", fontsize=6, ha='center')
-                        else:
-                            tempdf = pd.read_csv(dffile, sep="\t", index_col=0)
-                            # Plot the UMAP1 UMAP2 with the color column as the color.
-                            # Make the dot size small
-                            axes[i, j].scatter(tempdf["UMAP1"], tempdf["UMAP2"],
-                                             s=0.5, lw = 0, alpha=0.5,
-                                             color=list(tempdf["color"]))
-                    else:
-                        # The user provided the path to this file, but it doesn't exist.
-                        # This means that the user made a mistake in writing the file name.
-                        raise ValueError(f"The file {dffile} does not exist.")
-                else:
-                    raise ValueError(f"Type of dffile is not a string or NoneType. It is {type(dffile)}")
-        # make sure that the aspect ratio for all of these is the same
-        # Iterate over each axis and set aspect ratio to 'equal'
-        for row in axes:
-            for col in row:
-                col.set_aspect('equal', adjustable='box')
+    # setup the plot based on what we know the parameters will be
+    # These are the the magic numbers! We only need to adjust the size of each panel and how big the margins will be
+    text_size = 10
+    panel_width = 1
+    margin = 0.25
 
-        # Now make vertical and horizontal lines to separate the plots. Make them medium gray.
-        # The lines will be on the figure, and not in the plots.
-        # Draw horizontal lines between rows
-        # Get the bounding boxes of the axes including text decorations
+    # The rest of the numbers are calculated based on these two
+    #     x   0 1 2 3 4
+    #  y +-----------------+
+    #    |
+    #    |
+    #  0 |    o o o o o
+    #  1 |    o o o o o
+    #  2 |    o o o o o
+    #  3 |    o o o o o
+    #    |
+    #    |
+    #    +-----------------+
+    #
+    panel_height = panel_width
+    # the width will have 4 margins, plot, margin, plot... 4 margins
+    fig_width = (margin * 4) + (panel_width * len(min_dist_list)) + (margin * (len(min_dist_list) - 1)) + (margin * 4)
+    # the height will have the same thing, but for the number of neighbors
+    fig_height = (margin * 4) + (panel_height * len(num_neighbors_list)) + (margin * (len(num_neighbors_list) - 1)) + (margin * 4)
+    fig = plt.figure(figsize=(fig_width, fig_height))
 
-        # Get the bounding boxes of the axes including text decorations
-        r = fig.canvas.get_renderer()
-        get_bbox = lambda ax: ax.get_tightbbox(r).transformed(fig.transFigure.inverted())
-        bbox_list = [get_bbox(ax) for ax in axes.flat]
+    ## make a point at (0.25/fig_width, 0.25/fig_height)
+    #fig.text((0.25 * fig_width)/fig_width, (0.25 * fig_height)/fig_height,
+    #         "This is a test(0.25,0.25)", fontsize=text_size * 2, color="red")
+    # both figures should be squares and be in the middle of the plot
+    # the first plot should be on top
+    # the second plot should be on the bottom
+    axes = [[] for x in range(len(min_dist_list))]
+    # make all the axes in their correct places
+    for min_dist in min_dist_list:
+        x_index = min_dist_to_index[min_dist]
+        for num_neighbors in num_neighbors_list:
+            y_index = num_neighbors_to_index[num_neighbors]
+            # format is fig.add_axes([left, bottom, width, height])
+            left   = (4 * margin) + (x_index * panel_width)  + (x_index * margin)
+            bottom = fig_height - ((4 * margin) + ((y_index+1) * panel_height) + (y_index * margin))
+            axes[x_index].append(fig.add_axes([left         / fig_width,
+                                               bottom       / fig_height,
+                                               panel_width  / fig_width,
+                                               panel_height / fig_height]))
+            # Turn off the ticks and the lines
+            axes[x_index][-1].set_xticks([])
+            axes[x_index][-1].set_yticks([])
+            # Turn off the lines around the plot
+            for spine in ['top', 'right', 'bottom', 'left']:
+                axes[x_index][-1].spines[spine].set_visible(False)
 
-        # Create an empty array with the correct shape and dtype
-        bboxes = np.empty(axes.shape, dtype=object)
+    # set the title as samplename and the whether it is small or large
+    sizeunique = df["size"].unique()[0]
+    fig.suptitle(f"{samplename}, {sizeunique} values for non-colocalized")
+    # set absolute left label as the number of neighbors
+    left_x = margin * 2
+    top_y = fig_height - (margin * 3)
+    fig.text(left_x/fig_width, 0.5, 'Number of Neighbors', va='center', rotation='vertical', fontsize=text_size)
+    fig.text(0.5, top_y/fig_height, 'Min Distance', ha='center', fontsize=text_size)
 
-        # Fill the array with the bounding boxes
-        for idx, bbox in np.ndenumerate(bboxes):
-            bboxes[idx] = bbox_list[idx[0] * axes.shape[1] + idx[1]]
+    # go through each row of the dataframe and plot it
+    for i, row in df.iterrows():
+        x_index = min_dist_to_index[row["min_dist"]]
+        y_index = num_neighbors_to_index[row["num_neighbors"]]
+        #if we're at the absolute left or right make a label
+        if y_index == 0:
+                axes[x_index][0].xaxis.set_label_position('top')
+                axes[x_index][0].set_xlabel(row["min_dist"], fontsize=text_size)
+        if x_index == 0:
+                axes[0][y_index].yaxis.set_label_position('left')
+                axes[0][y_index].set_ylabel(row["num_neighbors"], rotation=0, ha='right', fontsize=text_size)
+        # get the dataframe of the file we're working with
+        dffile = row["dffile"]
+        if not os.path.exists(dffile):
+            # The user provided the path to this file, but it doesn't exist.
+            # This means that the user made a mistake in writing the file name.
+            raise ValueError(f"The file {dffile} does not exist.")
+        else:
+            # if the file is empty, then we write into the ax[i, j] that the file is empty
+            if os.path.getsize(dffile) == 0:
+                axes[i, j].text(0.5, 0.5, f"Empty file", fontsize=3, ha='center')
+            else:
+                tempdf = pd.read_csv(dffile, sep="\t", index_col=0)
+                # Plot the UMAP1 UMAP2 with the color column as the color.
+                # Make the dot size small
+                axes[x_index][y_index].scatter(
+                    tempdf["UMAP1"], tempdf["UMAP2"],
+                    s=0.5, lw = 0, alpha=0.5,
+                    color=list(tempdf["color"]))
+                # get the absolute min and max of the UMAP1 and UMAP2
+                # get the bounding box of the axes
+                minval = min([tempdf["UMAP1"].min(), tempdf["UMAP2"].min()])
+                maxval = max([tempdf["UMAP1"].max(), tempdf["UMAP2"].max()])
+                xlims = [minval - abs(.05 * minval), 1.05 * maxval]
+                ylims = xlims
+                axes[x_index][y_index].set_xlim(xlims)
+                axes[x_index][y_index].set_ylim(ylims)
 
-        # Get the minimum and maximum extent, get the coordinate half-way between those
-        ymax = np.array(list(map(lambda b: b.y1, bboxes.flat))).reshape(axes.shape).max(axis=1)
-        ymin = np.array(list(map(lambda b: b.y0, bboxes.flat))).reshape(axes.shape).min(axis=1)
-        ys = np.c_[ymax[1:], ymin[:-1]].mean(axis=1)
-
-        # Draw horizontal lines at those coordinates
-        for y in ys:
-            line = plt.Line2D([0.125, 0.9], [y, y], transform=fig.transFigure, color="#BBBBBB")
-            fig.add_artist(line)
-
-        # Get the minimum and maximum extent, get the coordinate half-way between those for vertical lines
-        xmax = np.array(list(map(lambda b: b.x1, bboxes.flat))).reshape(axes.shape).max(axis=0)
-        xmin = np.array(list(map(lambda b: b.x0, bboxes.flat))).reshape(axes.shape).min(axis=0)
-        xs = np.c_[xmax[1:], xmin[:-1]].mean(axis=1)
-
+    # Now make vertical and horizontal lines to separate the plots. Make them medium gray.
+    # The lines will be on the figure, and not in the plots.
+    # Draw horizontal lines between rows
+    # We know the exact coordinates to draw them, as we know the exact coordinates of the axes
+    for x_index in range(1, len(min_dist_list)):
         # Draw vertical lines at those coordinates
-        for xi in range(len(xs)):
-            x = xs[xi]
-            if xi == 0:
-                x = x + 0.0125
-            line = plt.Line2D([x, x], [0.1, 0.875], transform=fig.transFigure, color="#BBBBBB")
-            fig.add_artist(line)
+        x1 = ((4 * margin) + (x_index * panel_width) + (x_index * margin) - (margin/2) ) / fig_width
+        x2 = x1
+        y1 = (fig_height - (4 * margin)) / fig_height
+        y2 = (4 * margin) / fig_height
+        line = plt.Line2D([x1, x2], [y1, y2], transform=fig.transFigure, color="#BBBBBB")
+        fig.add_artist(line)
 
-        # save the figure as f"{samplename}_{name}.pdf"
-        # name is just the size, small or large
-        print("saving the file to {}".format(args.outpdf))
-        plt.savefig(args.outpdf)
-        # close the figure
-        plt.close(fig)
+    for y_index in range(1, len(num_neighbors_list)):
+        # Draw horizontal lines at those coordinates
+        x1 = (4 * margin) / fig_width
+        x2 = (fig_width - (4 * margin)) / fig_width
+        y1 = (fig_height - ((4 * margin) + (y_index * panel_height) + (y_index * margin) - (margin/2))) / fig_height
+        y2 = y1
+        line = plt.Line2D([x1, x2], [y1, y2], transform=fig.transFigure, color="#BBBBBB")
+        fig.add_artist(line)
+
+    print("saving the file to {}".format(args.outpdf))
+    plt.savefig(args.outpdf)
+    # close the figure
+    plt.close(fig)
 
 def interpolate_color(value, vmin, vmax, start_color, end_color):
     """
