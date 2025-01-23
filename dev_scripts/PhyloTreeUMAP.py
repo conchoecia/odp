@@ -93,34 +93,42 @@ def taxids_of_interest_to_analyses():
     """
     # 33317 is protostomes
     # 33213 is bilateria
-    taxids = [ [[10197], []],      # ctenophores
-               [[6040],  [60882]], # porifera minus Hexactinellida
-               [[6073],  []],      # cnidaria
-               [[6340],  [42113]], # annelida minus clitellata
-               [[42113], []],      # clitellata
-               [[6606],  []],      # coleoida
-               #[[50557], []],      # insecta
-               [[32341], []],      # Sophophora - subset of drosophilids
-               #[[61985], []],     # myriapoda
-               [[6231],  []],      # nematoda
-               [[7586],  []],      # echinodermata
+    taxids = [ #[[10197], []],      # ctenophores
+               #[[6040],  [60882]], # porifera minus Hexactinellida
+               #[[6073],  []],      # cnidaria
+               #[[33213], []],   # bilateria
+               #[[33511],  []],      # Deuterostomia
+               #[[], []],           # ambulacraria. There is no NCBI taxid for ambulacraria
+               #[[7586],  []],      # echinodermata
+               #[[7711],  []],          # Chordata
                #[[7742],  []],      # Vertebrata
-               #[[33317],[]]
-               # special analyses to look at cephalopods
-               [[6447],    [6606]], # mollusca minus coleoida
-               [[6447],    []],     # mollusca
-               #[[47122],   []],     # Aplacophora
-               [[6544],    []],     # Bivalvia
-               [[6448],    []],     # Gastropoda
-               #[[358446],  []],     # Monoplacophora # there are currently no samples here
-               #[[6650],    []],     # Polyplacophora
-               [[7147],    []],    # Diptera
-               [[32584],    []],    # Scaphopoda
-               [[215450],  []],     # Coleoida
-               #[[32577],   []],     # Nautiloidea
-               [[6606],    []],     # Decapodiformes
-               [[215451],  []],     # Octopodiformes
-               [[10197, 6040, 6073], []], #ctenos, sponges, cnidarians
+               #[[33317],[]]        # Protostomia
+               # [[6340],  [42113]], # annelida minus clitellata
+               # [[6340],  []],      # annelida
+               # [[42113], []],      # clitellata
+               # [[42113], [6392]],      # clitellata minus lumbricidae
+               # [[2697495], []],      # spiralia
+               [[6606],  []],      # coleoida
+               ##[[50557], []],      # insecta
+               #[[32341], []],      # Sophophora - subset of drosophilids
+               ##[[61985], []],     # myriapoda
+               #[[6231],  []],      # nematoda
+               ## special analyses to look at cephalopods
+               #[[6447],    [6606]], # mollusca minus coleoida
+               #[[6447],    [6563, 32584]], # mollusca minus oysters and scaphopods
+               #[[6447],    []],     # mollusca
+               ##[[47122],   []],     # Aplacophora
+               #[[6544],    []],     # Bivalvia
+               #[[6448],    []],     # Gastropoda
+               ##[[358446],  []],     # Monoplacophora # there are currently no samples here
+               ##[[6650],    []],     # Polyplacophora
+               #[[7147],    []],    # Diptera
+               #[[32584],    []],    # Scaphopoda
+               #[[215450],  []],     # Coleoida
+               ##[[32577],   []],     # Nautiloidea
+               #[[6606],    []],     # Decapodiformes
+               #[[215451],  []],     # Octopodiformes
+               #[[10197, 6040, 6073], []], #ctenos, sponges, cnidarians
              ]
     #taxids = [ #[[7147],    []],    # Diptera
     #           [[33340],   []],    # Neoptera
@@ -645,6 +653,9 @@ def sampleToRbhFileDict_to_sample_matrix(sampleToRbhFileDict, ALGname,
     but it does not calculate the distance matrix.
     """
 
+    print("The sampleToRbhFileDict is: ", sampleToRbhFileDict)
+    print(sampleToRbhFileDict)
+
     # We must check that all of the rbh files, when split on '-', have an integer as the 2nd element.
     # If not, the filename needs to be changed. Right now we parse the taxid from the filename.
     for thissample in sampleToRbhFileDict:
@@ -1153,7 +1164,7 @@ def rbh_to_samplename(rbhfile, ALGname) -> str:
     # strip the ALGname and first _ from the front of the rbhfile
     # check that the filename starts with the ALGname
     if not filename.startswith(f"{ALGname}_"):
-        raise ValueError(f"The filename {filename} does not start with the ALGname {ALGname}_. Exiting.")
+       raise ValueError(f"The filename {filename} does not start with the ALGname {ALGname}_. Exiting.")
     # split on the first ALGname and _
     filename = filename.split(f"{ALGname}_")[1]
     # try to split on _ and return the first element
@@ -1522,7 +1533,8 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
 
 def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
                       outdir, smalllargeNaN, n_neighbors, min_dist,
-                      outdffilepath, outbokehfilepath, outjpegfilepath):
+                      outdffilepath, outbokehfilepath, outjpegfilepath = None,
+                      plot_jpeg = False):
     """
     This all-in-one plotting method makes UMAPs for the locus distance ALGs
         constructed by averaging across multiple species.
@@ -1590,22 +1602,37 @@ def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
         plot_title = f"(Disconnected) Topo UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
     else:
         plot_title = f"Topo UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
+    print("   - Running the function umap_mapper_to_bokeh_topoumap")
+    start   = time.time()
     umap_mapper_to_bokeh_topoumap(mapper, algrbhdf, UMAPbokeh,
       plot_title = plot_title)
+    stop    = time.time()
+    print("     - It took {} seconds to make the bokeh plot".format(stop - start))
+    print("   - Running the function umap_mapper_to_df")
+    start = time.time()
     umap_df = umap_mapper_to_df(mapper, algrbhdf)
+    stop  = time.time()
+    print("     - It took {} seconds to make the df".format(stop - start))
+    print("   - Running the function to_csv")
+    start = time.time()
     umap_df.to_csv(UMAPdf, sep = "\t", index = True)
+    stop  = time.time()
+    print("     - It took {} seconds to save the df".format(stop - start))
     # save the connectivity figure
-    try:
-        umap_mapper_to_connectivity(mapper, outjpegfilepath,
-                                    title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
-    except:
-        # save an empty jpeg file
-        print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivity}")
-        if not os.path.exists(outjpegfilepath):
-            with open(outjpegfilepath, "w") as f:
-                f.write("")
+    if plot_jpeg:
+        try:
+            umap_mapper_to_connectivity(mapper, outjpegfilepath,
+                                        title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}")
+        except:
+            # save an empty jpeg file
+            print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivity}")
+            if not os.path.exists(outjpegfilepath):
+                with open(outjpegfilepath, "w") as f:
+                    f.write("")
+    print("   - Done with the topoumap_plotumap function")
+    return 0
 
-def plot_umap_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, min_dist):
+def plot_umap_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, min_dist, color_by_clade = True):
     """
     Makes a UMAP plot from a .df file. Each row will have the samples, the UMAP coordinates,
     and the colors.
@@ -1616,6 +1643,9 @@ def plot_umap_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, 
       - smalllargeNaN - This will be included in the text of the plot.
       - n_neighbors   - This will be included in the text of the plot.
       - min_dist      - This will be included in the text of the plot.
+
+    The UMAP plot will be colored based on taxon-specific colors if this is MGT,
+      but will be colored with gene_group if this is MLT.
     """
     odp_plot.format_matplotlib()
     warnings.filterwarnings("ignore", message=".*findfont.*")
@@ -1634,39 +1664,71 @@ def plot_umap_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, 
         plt.tight_layout()
         plt.savefig(outpdf)
         return
-    # load in the df filepath
-    df_embedding = pd.read_csv(sampledfumapfile, sep = "\t", index_col = 0)
-    # make a matplotlib plot of the UMAP with the df_embedding, and the color_dict from SplitLossColocTree as the legend
-    # make a figure that is 5x5 inches
-    fig = plt.subplots(figsize=(5, 5))
+
+    # new stuff
+    # set up the figure
+    fig_width = 6
+    fig_height = 6
+    panel_width = 3.5
+    panel_height = panel_width
+    center_vertical = fig_width / 2
+    center_horizontal = fig_height / 2
+    margin = 0.5
+    bottom = 0
+    fig = plt.figure(figsize=(fig_width, fig_height))
+    # both figures should be squares and be in the middle of the plot
+    # the first plot should be on top
+    # the second plot should be on the bottom
+    ax = []
+    # first axis is a square on top in the middle. Each edge is 3.5 inches
+    # format is fig.add_axes([left, bottom, width, height])
+    ax.append(fig.add_axes([ margin       / fig_width,  # left
+                             margin       / fig_height, # bottom
+                             panel_width  / fig_width,  # width
+                             panel_height / fig_height  # height
+                           ]))
+    # make it a square
+    ax[0].set_aspect('equal', adjustable='datalim')
+
     # scatter the UMAP1 and UMAP2 columns of the df_embedding
-    scatter = plt.scatter(df_embedding["UMAP1"], df_embedding["UMAP2"], c = df_embedding["color"], lw = 0, s = 3)
-    # get the name of the ncbi taxid from the SplitLossColocTree color_dict
-    ncbi = NCBITaxa()
+    ax[0].scatter(df_embedding["UMAP1"], df_embedding["UMAP2"],
+                  c = df_embedding["color"], lw = 0, s = 2)
 
     legend_dict = {}
-    for key in SplitLossColocTree.color_dict_top:
-        taxid = int(key)
-        taxname = ncbi.get_taxid_translator([taxid])[taxid]
-        legend_dict[taxname] = SplitLossColocTree.color_dict_top[key]
-    print("This is the legend dict")
-    print(legend_dict)
-    legend_patches = [mpatches.Patch(color=color, label=label)
-                      for label, color in legend_dict.items()]
-    # add the entries to the legend
-    legend = plt.legend(handles=legend_patches, loc="upper right", bbox_to_anchor=(1.8, 1.5), fontsize = figfontsize)
+    if color_by_clade:
+        # here, if we're doing MGT we need to change the legend based on NCBI taxid
+        # get the name of the ncbi taxid from the SplitLossColocTree color_dict
+        ncbi = NCBITaxa()
+        for key in SplitLossColocTree.color_dict_top:
+            taxid = int(key)
+            taxname = ncbi.get_taxid_translator([taxid])[taxid]
+            legend_dict[taxname] = SplitLossColocTree.color_dict_top[key]
+        print("This is the legend dict")
+        print(legend_dict)
+        legend_patches = [mpatches.Patch(color=color, label=label)
+                          for label, color in legend_dict.items()]
+    else:
+        # If we're doing MLT, we just use the gene_group as the legend
+        # get the unique combinations of gene_group and color as a dict
+        gene_group_color_dict = dict(zip(df_embedding["gene_group"], df_embedding["color"]))
+        legend_patches = [mpatches.Patch(color=color, label=label)
+                            for label, color in gene_group_color_dict.items()]
+    # add the entries to the legend. The legend will be in the upper right of the figure, not the axis
+    fig.legend(handles = legend_patches, loc = "upper right", fontsize = figfontsize)
+
     # compose the title from the other arguments
     title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
-    plt.title(title, fontsize = figfontsize)
-    # Turn off the ticks
-    plt.tick_params(axis='both', which='both', bottom=False,
-                    top=False, left=False, right=False,
-                    labelbottom=False, labelleft=False)
-    plt.subplots_adjust(right=0.95)
-    # adjust the plot so that we can see to the right
+    ax[0].set_title(title, fontsize = figfontsize)
+
+    # change the tick size to be the same size as the other stuff
+    ax[0].tick_params(axis='both', which='major', labelsize=figfontsize)
+
+    # set the labels for the x and y axis
+    ax[0].set_xlabel("UMAP1 (do not use)", fontsize = figfontsize)
+    ax[0].set_ylabel("UMAP2 (do not use)", fontsize = figfontsize)
 
     # save the figure as a pdf
-    plt.savefig(outpdf, bbox_inches='tight')
+    plt.savefig(outpdf)
 
 class phylogeny_plotting:
     """
