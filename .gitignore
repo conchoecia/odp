@@ -21,9 +21,9 @@ temp.sh
 __pycache__
 *.pyc
 # specific ignore patterns for this project
-*.check
-*.hmm
-*.rbh
+LG_db/*/*.check
+LG_db/*/*.hmm
+LG_db/*/*.rbh
 LG_db/*/
 ._*
 slurm-*

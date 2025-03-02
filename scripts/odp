@@ -31,6 +31,11 @@ sys.path.insert(1, scripts_path)
 import odp_functions as odpf
 import odp_plotting_functions as odp_plot
 import odp_color_manager as oc
+source_path = os.path.join(snakefile_path, "../source")
+sys.path.insert(1, source_path)
+import rbh_tools
+
+scripts_path = os.path.join(snakefile_path, "../scripts")
 
 # We need to generate random colors
 from odp_color_manager import generate_random_color as grc
@@ -78,7 +83,6 @@ else:
 if "species" not in config:
     raise IOError("You must have a 'species' fields in the config file.")
 
-
 # make sure none of the sample names have underscores
 for thissample in config["species"]:
     if "_" in thissample:
@@ -92,6 +96,16 @@ if "duplicate_proteins" not in config:
 #    outstring = ", ".join(options_list)
 #    if config["duplicate_proteins"] not in options_list:
 #        raise IOError("duplicate_proteins must be set to one of the following: {}".format(outstring))
+
+# Check if we have specified a LG_db directory, if not, use the installed one.
+# This allows us to specify directories for testing, for example.
+if "LG_db" not in config:
+    config["LG_db"] = os.path.join(os.path.dirname(os.path.realpath(workflow.snakefile)), "../LG_db/")
+else:
+    # if it is specified, make sure it is a directory and exists
+    if not os.path.isdir(config["LG_db"]):
+        raise IOError("The LG_db directory does not exist: {}".format(config["LG_db"]))
+
 
 # see if we have included any illegal arguments
 illegal = set()
@@ -141,7 +155,7 @@ for this in check_these:
 if (config["prot_to_color"] == {}) and (config["prot_to_color_rbh"] == {}):
     # add the prot_to_color entries from the install directory
     filepath = os.path.dirname(os.path.realpath(workflow.snakefile))
-    colors_path=os.path.join(filepath, "../LG_db/")
+    colors_path = config["LG_db"]
     color_directories = [ os.path.abspath(f.path) for f in os.scandir(colors_path) if f.is_dir() ]
     for thisdir in color_directories:
         trim = os.path.split(thisdir)[1]
@@ -207,16 +221,14 @@ if "plot_LGs" not in config:
     config["plot_LGs"] = True
 
 if config["plot_LGs"]:
-    ## This set of files plots the installed LGs against all of the datasets
-    #file_targets += [config["tool"] + "/step0-blastp_results/{}_against_{}.hmmsearch.filt.blastp".format(hmm, sp)
-    #  for sp in config["analysisspecies"] for hmm in config["prot_to_color"]]
-    ## color by the things in the chrom settings
-    #file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
-    #  for x in config["analysispairs"] for y in config["prot_to_color"]]
-    #file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
-    #  for x in config["analysispairs"] for y in config["prot_to_color"]]
-    #file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
-    #  for x in config["analysispairs"] for y in config["prot_to_color"]]
+    # This set of files plots the installed LGs against all of the datasets
+    # color by the things in the chrom settings
+    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
+      for x in config["analysispairs"] for y in config["prot_to_color"]]
+    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
+      for x in config["analysispairs"] for y in config["prot_to_color"]]
+    file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
+      for x in config["analysispairs"] for y in config["prot_to_color"]]
 
     # We also want to plot the ALGs as if they were genomes, against the individual species
     # This line specifically is for testing the RBH-as-a-species analysis
@@ -891,7 +903,7 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
         prot_to_color_mode = True
 
     # read in the rbh file. This will already have the Dx, Dy, and FET
-    df = pd.read_csv(df_file, delimiter="\t")
+    df = rbh_tools.parse_rbh(df_file)
 
     # now make a df to figure out the sort order
     sort_df = df.copy()
@@ -1929,7 +1941,7 @@ rule analysis_D_and_FET:
         mem_mb = 5000  # 20231205 This usually uses 2.5Gb of RAM.
     run:
         # read in the rbh file
-        df = pd.read_csv(input.rbh, delimiter="\t")
+        df = rbh_tools.parse_rbh(input.rbh)
 
         s2c2s = chromsize_to_s2c2s(input.chromsize)
 
@@ -1967,7 +1979,7 @@ rule filtered_D_FET_rbh:
     threads: 1
     run:
         # read in the rbh file
-        df = pd.read_csv(input.rbh, delimiter="\t")
+        df = rbh_tools.parse_rbh(input.rbh)
         sp_order = wildcards.analysis.split("_")
 
         # filter out the rows where the whole_FET is less than or equal to 0.05
@@ -2015,7 +2027,7 @@ rule species_HMM_D_and_FET:
     threads: 1
     run:
         # read in the rbh file
-        df = pd.read_csv(input.rbh, delimiter="\t")
+        df = rbh_tools.parse_rbh(input.rbh)
 
         s2c2s = chromsize_to_s2c2s(input.chromsize)
 
@@ -2174,7 +2186,7 @@ rule hmm_1_against_prots:
     run:
         # GET THE PROTEIN IDS IN THE RBH FILE
         # first we load the .rbh file to process all of the possible protein IDs
-        rbhdf = pd.read_csv(input.rbh, sep = "\t")
+        rbhdf = rbh_tools.parse_rbh(input.rbh)
         # get all of the '*_gene' columns
         gene_columns = [x for x in rbhdf.columns if x.endswith("_gene")]
         # get all of the species prefixes, the first part of the '*_gene' columns. Keep everything up until the last _ character
@@ -2409,7 +2421,7 @@ rule hmm_4_hmm_to_rbh:
         # at this point the df is just the reciprocal best hits
 
         # now open the rbh file of the coloredby data and add the other columns
-        rbhdf = pd.read_csv(input.coloredby_rbh, sep = "\t")
+        rbhdf = rbh_tools.parse_rbh(input.coloredby_rbh)
         rbhdf = rbhdf[["rbh", "gene_group", "color"]]
         rbhdf["{}_gene".format(wildcards.coloredby)] = rbhdf["rbh"]
 
@@ -2593,7 +2605,7 @@ rule plot_synteny_of_ALGs_plus_species:
         # In this case we look in the dataframe and for each scaffold, just get the largest
         #  gene pos and use that as the size. TODO - this should be done in a smarter
         #  way at some point
-        df = pd.read_csv(input.rbh, delimiter="\t")
+        df = rbh_tools.parse_rbh(input.rbh)
 
         for thissp in [wildcards.hmm, wildcards.sp]:
             if thissp not in s2c2s:
@@ -2709,7 +2721,7 @@ rule ALG_decay_plot:
     threads: 1
     run:
         # read in the rbh dataframe
-        rbhdf = pd.read_csv(input.rbh, sep = "\t", header = 0)
+        rbhdf = rbh_tools.parse_rbh(input.rbh)
         # sort by the whole_FET value
         rbhdf = rbhdf.sort_values(by = "whole_FET")
         # groupby the HMM scaf 
