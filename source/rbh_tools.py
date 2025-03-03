@@ -22,6 +22,14 @@ Description:
 
 Usage instructions:
   - See https://github.com/conchoecia/odp#getting-started
+
+List of functions:
+    - hex_color_legal(hexstr) -> bool
+    - parse_rbh(rbhfilepath) -> pd.DataFrame
+    - combine_rbh(rbh_filepath1, rbh_filepath2) -> pd.DataFrame
+    - rbh_to_scafnum(df, samplename) -> int
+    - rbhdf_to_alglocdf(df, minsig, ALGname) -> (pd.DataFrame, str)
+    - parse_ALG_rbh_to_colordf(rbh_file) -> pd.DataFrame
 """
 
 import os
@@ -131,6 +139,170 @@ def parse_rbh(rbhfilepath) -> pd.DataFrame:
             df[thiscol] = df[thiscol].astype(float)
 
     # If we have not raised an error, then we return the dataframe
+    return df
+
+def combine_rbh_db(rbh_filepath1, rbh_filepath2) -> pd.DataFrame:
+    """
+    This combines two rbh database files.
+    In this file type, we only have these columns:
+
+    rbh                                             gene_group              color
+    Lachesis_group13:75073921_75074550-eupbe6       Lachesis_group13        #FF7F00
+    Lachesis_group22:8697662_8698153-eupbe17        Lachesis_group22        #FDBF6F
+    Lachesis_group18:41128667_41129120-eupbe25      Lachesis_group18        #FFC233
+    Lachesis_group21:100568739_100569082-eupbe34    Lachesis_group21        #80B1D3
+    Lachesis_group1:23733546_23733930-eupbe40       Lachesis_group1         #FB9A99
+    Lachesis_group15:42710712_42711059-eupbe55      Lachesis_group15        #BC80BD
+    """
+    # check that the two files exist
+    for thisfile in [rbh_filepath1, rbh_filepath2]:
+        if not os.path.exists(thisfile):
+            raise IOError(f"The file {thisfile} does not exist.")
+
+    # parse the two files
+    dfs = [parse_rbh(rbh_filepath1),
+           parse_rbh(rbh_filepath2)]
+
+    # check that both dataframes have the columns "rbh", "gene_group"
+    for thiscol in ["rbh", "gene_group"]:
+        for thisfile in [rbh_filepath1, rbh_filepath2]:
+            df = parse_rbh(thisfile)
+            if thiscol not in df.columns:
+                raise IOError(f"The rbh file, {thisfile} does not have a column named {thiscol}")
+
+    for thisdf in dfs:
+        # If there is no "color" column in either dataframe,
+        #   then add it and make the color black
+        if "color" not in thisdf.columns:
+            thisdf["color"] = "#000000"
+        # If there is a "color" column, then fill missing values to black
+        else:
+            thisdf["color"] = thisdf["color"].fillna("#000000")
+
+    # remove all columns except "rbh", "gene_group", "color"
+    for i in range(len(dfs)):
+        dfs[i] = dfs[i][["rbh", "gene_group", "color"]]
+
+    # Make sure that there are no duplicates in the two rbh columns
+    for i in range(len(dfs)):
+        for j in range(i+1, len(dfs)):
+            if len(set(dfs[i]["rbh"]).intersection(set(dfs[j]["rbh"]))) > 0:
+                raise IOError(f"The two rbh files, {rbh_filepath1} and {rbh_filepath2} have shared entries in the 'rbh' column. Exiting.")
+
+    # merge the two dataframes
+    df = pd.concat(dfs, ignore_index=True)
+    return df
+
+
+def combine_rbh(rbh_filepath1, rbh_filepath2) -> pd.DataFrame:
+    """
+    Description:
+      This takes two rbh files, probably from different sources of data, and combines them into a single dataframe.
+
+      The use case this was written for was to combine rbh files that come from different analyses,
+       for example one from CNEs and one from a set of ALGs.
+
+      Uses the columns from the first rbh file as the columns + sample for the dataframe.
+       (Basically a left join)
+
+    Column Information:
+      Columns that will be removed from both dataframes:
+        - *_FET         - Will be removed since these values will be outdated.
+        - *_D           - Values will be outdated after merge.
+        - *_ix          - No longer relevant
+        - *_break_ix    - No longer relevant
+
+      Optional columns that may be present in none, one, or both of the dataframes:
+        - color         - str    - object dtype
+        - *_breakchrom  - str    - object dtype
+
+      Mandatory columns that both dataframes must have, dtypes, pandas column type:
+        - rbh           - str    - object dtype
+        - gene_group    - str    - object dtype
+        - *_gene        - str    - object dtype
+        - *_scaf        - str    - object dtype
+        - *_pos         - int    - int64 dtype
+    """
+    # read in the two rbh files. This ensures that the files exist and are legal.
+    df1 = parse_rbh(rbh_filepath1)
+    df2 = parse_rbh(rbh_filepath2)
+
+    # Make sure that the samples present in the first file are present in the second file.
+    # There should only be one shared sample.
+    df1_samples = sorted([x.split("_")[0] for x in df1.columns if "_scaf" in x])
+    df2_samples = sorted([x.split("_")[0] for x in df2.columns if "_scaf" in x])
+    # make sure there are only two samples in the two files
+    if len(df1_samples) not in (1,2):
+        raise IOError(f"The first rbh file, {rbh_filepath1} does not have exactly one or two samples. Exiting.")
+    if len(df2_samples) not in (1,2):
+        raise IOError(f"The second rbh file, {rbh_filepath2} does not have exactly one or two samples. Exiting.")
+    # make sure that the two files have exactly one shared sample
+    shared = set(df1_samples).intersection(set(df2_samples))
+    if len(shared) != 1:
+        raise IOError(f"The two rbh files, {rbh_filepath1} and {rbh_filepath2} do not have exactly one shared sample. Exiting.")
+    shared_sample = shared.pop()
+
+    # remove the columns that are not needed
+    remove_cols = ["_FET", "_D", "_break_ix", "_ix",
+                   "_plotindex", "_breakchrom", "_plotpos"]
+    all_columns = list(set(df1.columns).union(set(df2.columns)))
+    for thiscol in list(df1.columns) + list(df2.columns):
+        for thissuffix in remove_cols:
+            if thiscol.endswith(thissuffix):
+                if thiscol in df1.columns:
+                    df1 = df1.drop(thiscol, axis=1)
+                if thiscol in df2.columns:
+                    df2 = df2.drop(thiscol, axis=1)
+
+    # get the unique samples in each file
+    df1_unique_list = [x for x in df1_samples if x != shared_sample]
+    # This list should just be one element long
+    if len(df1_unique_list) != 1:
+        raise IOError(f"The df1_unique list should only have one element. It has {len(df1_unique)} elements. Exiting.")
+    df2_unique_list = [x for x in df2_samples if x != shared_sample]
+    # This list should just be one element long
+    if len(df2_unique_list) != 1:
+        raise IOError(f"The df2_unique list should only have one element. It has {len(df2_unique)} elements. Exiting.")
+    df1_unique = df1_unique_list[0]
+    df2_unique = df2_unique_list[0]
+
+    # Now we need to rename the columns that are unique to each file
+    for thiscol in df1.columns:
+        if ("_" in thiscol) and (thiscol.split("_")[-1] in ["scaf", "gene", "pos"]):
+            newcolname = thiscol.replace(df1_unique, "MergedCol")
+            df1 = df1.rename(columns={thiscol: newcolname})
+    for thiscol in df2.columns:
+        if ("_" in thiscol) and (thiscol.split("_")[-1] in ["scaf", "gene", "pos"]):
+            newcolname = thiscol.replace(df2_unique, "MergedCol")
+            df2 = df2.rename(columns={thiscol: newcolname})
+
+    # Because we are merging, we need to make sure certain columns don't have shared strings.
+    #  This is because something like a CNE and an ALG should not share the same label.
+    #  The point of this whole function is to merge two unique forms of data into one analysis
+    #  framework.
+    for thiscol in ["rbh", "MergedCol_gene", f"{shared_sample}_gene"]:
+        # Make sure there are no matching entries in these two columns in df1 and df2
+        if len(set(df1[thiscol]).intersection(set(df2[thiscol]))) > 0:
+            raise IOError(f"The columns {thiscol} in df1 and df2 have shared entries. Exiting.")
+
+    # There are a few columns that SHOULD have matching values. Specifically, the columns
+    #  with the scaffolds of the shared sample should have matching values, meaning that these
+    #  markers fall on the same scaffolds. This is because the point of doing this is that
+    #  merging the rbh files is to get better resolution of markers.
+    for thiscol in [f"{shared_sample}_scaf"]:
+        # Make sure there is at least one matching entry. That is exceptionally forgiving
+        #  but at least it is a mark that these are derived from the same genome assembly.
+        if len(set(df1[thiscol]).intersection(set(df2[thiscol]))) == 0:
+            raise IOError(f"The columns {thiscol} in df1 and df2 have no shared entries. Exiting.")
+
+    # Now we can merge the two dataframes. We just stack them on top of each other, then sort by
+    #  the shared sample scaffold then position
+    #print("df1 before merge: \n", df1)
+    #print("df2 before merge: \n", df2)
+    df = pd.concat([df1, df2], ignore_index=True)
+    df = df.sort_values(by=[f"{shared_sample}_scaf", f"{shared_sample}_pos"]).reset_index(drop=True)
+    #print()
+    #print("df after merge: \n", df)
     return df
 
 def rbh_to_scafnum(df, samplename) -> int:

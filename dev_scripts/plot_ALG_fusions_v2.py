@@ -63,6 +63,9 @@ from sklearn.metrics.pairwise import cosine_similarity
 from scipy.cluster import hierarchy
 
 # import odp-specific functions
+thisfile_path = os.path.dirname(os.path.realpath(__file__))
+source_path = os.path.join(thisfile_path, "../source")
+sys.path.insert(1, source_path)
 import rbh_tools
 
 # import the stuff to work with lineages

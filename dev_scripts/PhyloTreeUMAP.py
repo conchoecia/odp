@@ -60,7 +60,11 @@ import odp_plotting_functions as odp_plot
 from plot_ALG_fusions_v3 import assign_colors_to_nodes, SplitLossColocTree, hex_to_rgb, rgb_255_float_to_hex
 
 # odp-specific imports
-from rbh_tools import parse_rbh
+source_path = os.path.join(thisfile_path, "../source")
+import rbh_tools
+sys.path.insert(1, source_path)
+import rbh_tools
+
 from plot_ALG_fusions_v2 import taxids_to_taxidstringdict
 
 from itertools import combinations
@@ -109,6 +113,8 @@ def taxids_of_interest_to_analyses():
                # [[42113], [6392]],      # clitellata minus lumbricidae
                # [[2697495], []],      # spiralia
                [[6606],  []],      # coleoida
+               [[215450], []],      # decapodiformes
+               [[215451], []],      # octopodiformes
                ##[[50557], []],      # insecta
                #[[32341], []],      # Sophophora - subset of drosophilids
                ##[[61985], []],     # myriapoda
@@ -229,7 +235,7 @@ class PhyloTree:
         # first check that the rbhfilepath exists
         if not os.path.exists(rbhfile):
             raise IOError(f"The file {rbhfile} does not exist.")
-        self.algrbhdf = parse_rbh(rbhfile)
+        self.algrbhdf = rbh_tools.parse_rbh(rbhfile)
         # for all the values in the rbh column, get all the possible combinations of the values, and assign them an index 
         self.alg_combo_to_ix = {tuple(sorted(x)): i
                                 for i, x in enumerate(list(combinations(
@@ -480,6 +486,20 @@ def umap_mapper_to_df(mapper, cdf):
 def rbh_to_gb(sample, rbhdf, outfile):
     """
     Converts the rbh dataframe to a groupby object. This is saved to a file for later consumption.
+    This gets the distances between all of the pairs of orthologs and saves it to another format.
+
+    The "merged" dfs have all the pairs of orthologs for each scaffold, then the
+     distances are calculated between the pairs in the merged["distance"] line.
+
+    The final output is a tsv file with this format with headers:
+    rbh1                               rbh2                               distance
+    Simakov2022BCnS_genefamily_3818    Simakov2022BCnS_genefamily_8135    33376
+    Simakov2022BCnS_genefamily_12967   Simakov2022BCnS_genefamily_9025    65374
+    Simakov2022BCnS_genefamily_11651   Simakov2022BCnS_genefamily_8979    999477
+    Simakov2022BCnS_genefamily_10541   Simakov2022BCnS_genefamily_11651   1185812
+    Simakov2022BCnS_genefamily_11651   Simakov2022BCnS_genefamily_5679    3158149
+
+    This is essentially a spare distance matrix, and is used downstream by other parts of the game.
     """
     # Initialize an empty DataFrame to store the results
     result_df = pd.DataFrame(columns=["rbh1", "rbh2", "distance"])
@@ -496,12 +516,20 @@ def rbh_to_gb(sample, rbhdf, outfile):
 
         # Calculate absolute distance and add to result DataFrame
         merged["distance"] = abs(merged[f"{sample}_pos_x"] - merged[f"{sample}_pos_y"])
-        result_df = pd.concat([result_df, merged[["rbh1", "rbh2", "distance"]]], ignore_index=True)
+
+        if result_df.empty:
+            result_df = merged[["rbh1", "rbh2", "distance"]].copy()
+        else:
+            # if len of result_df is not empty, append the new data to the end of the DataFrame
+            if not result_df.empty:
+                result_df = pd.concat([result_df, merged[["rbh1", "rbh2", "distance"]]],
+                                       ignore_index=True)
+
 
     # Swap the values of the rbh1 and rbh2 columns if they are not in alphabetical order.
-    result_df["rbh1"], result_df["rbh2"] = np.where(result_df["rbh1"] < result_df["rbh2"],
-                                                    (result_df["rbh1"], result_df["rbh2"]),
-                                                    (result_df["rbh2"], result_df["rbh1"]))
+    result_df["rbh1"], result_df["rbh2"] = np.where( result_df["rbh1"] < result_df["rbh2"],
+                                                    (result_df["rbh1"],  result_df["rbh2"]),
+                                                    (result_df["rbh2"],  result_df["rbh1"]))
     # verify that all of the values in the rbh1 column are lexicographically less than the values in the rbh2 column
     if not all(result_df["rbh1"] < result_df["rbh2"]):
         raise IOError("The values in the rbh1 column are not lexicographically less than the values in the rbh2 column. These need to be sorted.")
@@ -624,7 +652,7 @@ def rbh_to_distance_gbgz(rbhfile, outfile, ALGname):
     if not re.match(r"^[0-9]*$", str(taxid)):
         raise ValueError(f"There is a non-numeric character in the taxid string for file {rbhfile}. Exiting.")
 
-    df = parse_rbh(rbhfile)
+    df = rbh_tools.parse_rbh(rbhfile)
     print(df.columns)
     # make sure that ALG "_scaf", "_gene", and "_pos" are in the columns.
     for col in ["_scaf", "_gene", "_pos"]:
@@ -680,7 +708,7 @@ def sampleToRbhFileDict_to_sample_matrix(sampleToRbhFileDict, ALGname,
             raise ValueError("There is a non-numeric character in the taxid string")
         taxid = int(taxid)
 
-        df = parse_rbh(rbhfile)
+        df = rbh_tools.parse_rbh(rbhfile)
         # make sure that ALG "_scaf", "_gene", and "_pos" are in the columns.
         for col in ["_scaf", "_gene", "_pos"]:
             thiscol = f"{ALGname}{col}"
@@ -823,7 +851,7 @@ def rbh_directory_to_distance_matrix(rbh_directory, ALGname, unannotated_color =
             raise ValueError("There is a non-numeric character in the taxid string")
         taxid = int(taxid)
 
-        df = parse_rbh(rbhfile)
+        df = rbh_tools.parse_rbh(rbhfile)
         # make sure that ALG "_scaf", "_gene", and "_pos" are in the columns.
         for col in ["_scaf", "_gene", "_pos"]:
             thiscol = f"{ALGname}{col}"
@@ -1012,7 +1040,7 @@ def ALGrbh_to_algcomboix(rbhfile) -> dict:
     """
     Returns a dictionary of the unique ALG combinations to an index.
     """
-    df = parse_rbh(rbhfile)
+    df = rbh_tools.parse_rbh(rbhfile)
     alg_combo_to_ix = {tuple(sorted(x)): i
                             for i, x in enumerate(list(combinations(
                                 df["rbh"], 2)))}
@@ -1504,7 +1532,7 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
 
     # now we construct the matrix of distances
     # read in the rbhfile as a dataframe
-    rbhdf = parse_rbh(rbhfile)
+    rbhdf = rbh_tools.parse_rbh(rbhfile)
     rbhalg_to_ix = dict(zip(rbhdf["rbh"], range(len(rbhdf))))
     # load in the alg_combo_to_ix dict
     algcomboix = algcomboix_file_to_dict(ALGcomboixfile)
@@ -1551,7 +1579,7 @@ def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
     # read in the sample dataframe. We will need this later
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
     # read in the algrbh as a pandasdf
-    algrbhdf = parse_rbh(algrbhfile)
+    algrbhdf = rbh_tools.parse_rbh(algrbhfile)
     lil = load_npz(coofile).tolil()
 
     # check that the largest row index of the lil matrix is less than the largest index of cdf - 1
