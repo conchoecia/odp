@@ -904,6 +904,10 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     # read in the rbh file. This will already have the Dx, Dy, and FET
     df = rbh_tools.parse_rbh(df_file)
+    # Change the _ix columns to type float because later we take the mean of them.
+    # We first observed this error in 2025 after recent updates to pandas.
+    for thisspecies in [xsample, ysample]:
+        df["{}_ix".format(thisspecies)] = df["{}_ix".format(thisspecies)].astype(float)
 
     # now make a df to figure out the sort order
     sort_df = df.copy()
