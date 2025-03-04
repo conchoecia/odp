@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import os
 import pandas as pd
 import random
-from rbh_tools import parse_rbh
+from source.rbh_tools import parse_rbh
 import umap
 import umap.plot
 import warnings
@@ -332,7 +332,8 @@ def umapdf_reimbedding_bokeh_plot_one_species(blastdf, plot_title, output_html, 
         height = int(400 * scalar),
         tools  = ["lasso_select", "reset", "save"],
         title  = plot_title)
-    p.circle('UMAP1', 'UMAP2',
+    p.scatter('UMAP1', 'UMAP2',
+             marker = "circle",
              size=8, source=s1, alpha=0.4,
              line_color = None,
              fill_color="color",
