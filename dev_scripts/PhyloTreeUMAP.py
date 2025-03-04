@@ -71,8 +71,44 @@ from itertools import combinations
 
 def taxids_to_analyses(taxids):
     """
-    Takes a taxid list and turns it into a dictionary of analyses
+    Takes a taxid list and turns it into a dictionary of analyses.
+
+    Input:
+     [
+      [[6340],  [42113]], # annelida minus clitellata
+      [[6340],  []],      # annelida
+      [[10197, 6040, 6073], []], #ctenos, sponges, cnidarians
+     ]
+     ^ This list, of lists, of lists sets up the analyses to perform.
+
+    For example, if we feed it the taxid 6606 for Coleoidea
+     # [[6340],  [42113]], # annelida minus clitellata
+     # [[6340],  []],      # annelida
     """
+    # Failmodes
+    # If the len of taxids passed is 0, then raise an error that we received no taxids to parse
+    if len(taxids) == 0:
+        raise ValueError("There are no taxids to parse. Exiting.")
+
+    # Ensure that the length of each entry is 2: [[6340],  [42113]]
+    for entry in taxids:
+        if len(entry) != 2:
+            raise ValueError("Each entry must have two lists. The first list is those to include, the second is those to exclude. Exiting.")
+        # make sure the two entries are type list
+        if not isinstance(entry[0], list) or not isinstance(entry[1], list):
+            raise ValueError("Each entry must have two lists. The first list is those to include, the second is those to exclude. Exiting.")
+        # For each entry, make sure all the things in the lists are ints. No other type is acceptable.
+        for taxid in entry[0]:
+            if not isinstance(taxid, int):
+                raise ValueError("Each taxid in the first list must be an integer. Exiting.")
+
+    # Go through each entry, and ensure that the first entry is at least one taxid
+    #   one entry is like this: [[6340],  [42113]]
+    for entry in taxids:
+        if len(entry[0]) == 0:
+            raise ValueError("The first entry in the taxid list is empty. This is the position with the target taxid. This is necessary. Must be in this minimal format: [[6340],  []] Exiting.")
+
+
     # Come up with the taxid analyses. Each entry will have a string indicating what is in it and what is not.
     # Bilateria_33213_without_None if we want to plot all bilateria, and want to remove specific things
     # Bilateria_33213_without_33317_7652 if we want to plot all bilateria, but we don't want to plot the protostomes or lytechinus
@@ -80,13 +116,28 @@ def taxids_to_analyses(taxids):
     analyses = {}
     ncbi = NCBITaxa()
     for entry in taxids:
+        taxid_to_state = {}
+        for taxid in entry[0]:
+            taxid_to_state[taxid] = "include"
+        for taxid in entry[1]:
+            taxid_to_state[taxid] = "exclude"
+
         # get the clade name to make reading easier
-        clade = ncbi.get_taxid_translator([entry[0][0]])[entry[0][0]].replace(" ", "").replace("-", "").replace(".", "")
-        # make sure that the length of the 0th entry is at least length 1
-        if len(entry[0]) == 0:
-            raise IOError("There must be at least one taxid in the first entry of the taxids list.")
-        analysis_name = clade + "_" + "_".join([str(x) for x in entry[0]]) + "_without_"
-        analysis_name += "_".join([str(x) for x in entry[1]]) if len(entry[1]) > 0 else "None"
+        #clade = ncbi.get_taxid_translator([entry[0][0]])[entry[0][0]].replace(" ", "").replace("-", "").replace(".", "")
+        clade = ncbi.get_taxid_translator(list(taxid_to_state))
+        # clean up the strings
+        clade = {taxid: name.replace(" ", "").replace("-", "").replace(".", "")
+                    for taxid, name in clade.items()}
+        include_name_string  = "_".join([clade[taxid] for taxid in clade
+                                   if taxid_to_state[taxid] == "include"])
+        include_taxid_string = "_".join([str(taxid) for taxid in clade
+                                         if taxid_to_state[taxid] == "include"])
+        exclude_taxid_string = "_".join([str(taxid) for taxid in clade
+                                         if taxid_to_state[taxid] == "exclude"])
+        if exclude_taxid_string == "":
+            exclude_taxid_string = "None"
+        # string all the info together
+        analysis_name = f"{include_name_string}_{include_taxid_string}_without_{exclude_taxid_string}"
         analyses[analysis_name] = entry
     return analyses
 
