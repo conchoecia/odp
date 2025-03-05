@@ -18,7 +18,8 @@ from PhyloTreeUMAP import (algcomboix_file_to_dict,
                            taxids_to_analyses,
                            taxids_of_interest_to_analyses,
                            topoumap_genmatrix,
-                           topoumap_plotumap,
+                           mlt_umap,
+                           mlt_plot_HTML,
                            sampleToRbhFileDict_to_sample_matrix)
 
 # get the path of this script, so we know where to look for the plotdfs file
@@ -81,12 +82,12 @@ odog_n    = [150]
 odog_m    = [0.9]
 odog_size = ["large"]
 
-#odol_n    = [5, 10, 15, 25, 50]
-#odol_m    = [0.0, 0.01, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
+odol_n    = [2, 5, 10, 15, 25, 50]
+odol_m    = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
 #odol_n    = [5, 10]
 #odol_m    = [0.0, 0.01]
-odol_n    = [15]
-odol_m    = [0.1]
+#odol_n    = [15]
+#odol_m    = [0.1]
 odol_size = ["large"]
 weighting_methods = ["phylogenetic"]
 
@@ -109,13 +110,19 @@ rule all:
                 taxanalysis = config["taxids"],
                 weighting = weighting_methods,
                 sizeNaN = odol_size),
-        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.pdf",
+        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
                 n = odol_n,
                 m = odol_m,
                 taxanalysis = config["taxids"],
                 sizeNaN = odol_size,
                 weighting = weighting_methods),
-        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
+        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.bokeh.html",
+                n = odol_n,
+                m = odol_m,
+                taxanalysis = config["taxids"],
+                sizeNaN = odol_size,
+                weighting = weighting_methods),
+        expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.pdf",
                 n = odol_n,
                 m = odol_m,
                 taxanalysis = config["taxids"],
@@ -203,52 +210,6 @@ def is_valid_gzip(file_path):
         return True
     except (OSError, gzip.BadGzipFile):
         return False
-
-#rule samples_and_gzipped:
-#    """
-#    This version works in a for loop. I don't like this version because if it fails due to OOM or another reason,
-#      it will crash and snakemake will delete all the intermediate files. Instead, it is better that this runs once
-#      per file that we need to make.
-#
-#    The samples need to be converted to a different format before stiching them together into
-#      distance matrices in numpy. In an earlier version of this pipeline, I had this rule run once
-#      per file. This caused a high IO burden, so now I am running this in a for loop. This actually
-#      runs much faster, and each operation takes less than one second typically.
-#    """
-#    input:
-#        rbh_file = [config["sample_to_rbh_file"][sample] for sample in config["sample_to_rbh_file"]]
-#    output:
-#        gbgz = expand(results_base_directory + "/distance_matrices/{sample}.gb.gz",
-#                      sample = config["sample_to_rbh_file"].keys())
-#    threads: 1
-#    params:
-#        ALGname   = config["ALGname"],
-#        outprefix = results_base_directory + "/distance_matrices/",
-#        basedir   = results_base_directory
-#    retries: 4
-#    resources:
-#        mem_mb = generic_get_mem_mb,
-#        highio = 1,
-#        runtime = int(len(config["sample_to_rbh_file"]) * 1.5 / 60)
-#    run:
-#        if not os.path.exists(params.basedir):
-#            os.makedirs(params.basedir)
-#        if not os.path.exists(params.outprefix):
-#            os.makedirs(params.outprefix)
-#        num_samples = len(config["sample_to_rbh_file"])
-#        counter = 0
-#        for thissample in config["sample_to_rbh_file"]:
-#            print(f"Reading or converting {thissample} to a distance matrix in gzip format.  {counter}/{num_samples}    ", end = "\r", flush = True)
-#            counter += 1
-#            inputfile = config["sample_to_rbh_file"][thissample]
-#            outfile   = f"{params.outprefix}{thissample}.gb.gz"
-#            if os.path.exists(outfile):
-#                if is_valid_gzip(outfile):
-#                    # If the file is already there and is valid, then we don't need to do anything, and we skip to the next part of the for loop.
-#                    continue
-#            # print a one-line message to the screen that flushes left each time
-#            rbh_to_distance_gbgz(inputfile, outfile, params.ALGname)
-#        print()
 
 rule samples_and_gzipped:
     """
@@ -589,6 +550,7 @@ rule odogClSweep:
         python {input.plotdfs} -f "{input.dfs}" -o {output.pdf}
         """
 
+
 #    ┓  ┓
 # ┏┓┏┫┏┓┃ - One-Dot-One-Locus plots
 # ┗┛┗┻┗┛┗   Each dot represents a single locus, and the data vector is the distance to all other loci
@@ -646,7 +608,7 @@ def odol_plot_get_runtime(wildcards, attempt):
                    7: 270}
     return attemptdict[attempt]
 
-rule odolPlotUMAP:
+rule odolGenUMAP:
     """
     The jpeg option does not work well in that it takes a lot of RAM and time. Disabling for now.
 
@@ -659,6 +621,27 @@ rule odolPlotUMAP:
         ALGrbh = config["ALG_rbh_file"]
     output:
         df     = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
+    retries: 6
+    threads: 1
+    resources:
+        mem_mb = odol_plot_get_mem_mb,
+        highio = 1,
+        runtime = odol_plot_get_runtime
+    run:
+        mlt_umap(input.sampletsv, input.ALGrbh, input.coo,
+                 wildcards.sizeNaN, int(wildcards.n), float(wildcards.m),
+                 output.df)
+
+rule odolGenHTML:
+    """
+    The jpeg option does not work well in that it takes a lot of RAM and time. Disabling for now.
+
+    This is what it was:
+    #jpeg   = results_base_directory + "/subchrom/{weighting}/mixxing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.connectivity.jpeg"
+    """
+    input:
+        df     = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df"
+    output:
         html   = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.bokeh.html"
     params:
         outdir = results_base_directory + "/subchrom",
@@ -669,9 +652,8 @@ rule odolPlotUMAP:
         highio = 1,
         runtime = odol_plot_get_runtime
     run:
-        topoumap_plotumap(wildcards.taxanalysis, input.sampletsv, input.ALGrbh, input.coo,
-                          params.outdir, wildcards.sizeNaN, int(wildcards.n), float(wildcards.m),
-                          output.df, output.html)
+        plottitle = f"MLT plot of {wildcards.taxanalysis}, {wildcards.weighting} weighting, n = {wildcards.n} m={wildcards.m} NaN Size={wildcards.sizeNaN}"
+        mlt_plot_HTML(input.df, output.html, plot_title=plottitle)
 
 def odolPlotPdf_get_mem_mb(wildcards, attempt):
     """

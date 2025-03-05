@@ -956,84 +956,241 @@ def rbh_directory_to_distance_matrix(rbh_directory, ALGname, unannotated_color =
     print("Done parsing the rbh files")
     return sampledf
 
-def parse_args():
+def get_text_color(hex_color):
     """
-    This has all of the args that we need to parse.
-    The args that we need to parse are:
-      -d --directory : The directory that contains the RBH files. These RBH files
-      -V --overwrite : If this is set, then we will overwrite the files in the output directory.
-                       Otherwise, try to load the existing files. This is not required.
-      -a --ALGname   : The name of the ALG that we are looking at. This is required.
-      -r --rbhfile   : The ALG rbh file. This is required, as we will use this information later.
-      -c --cladestoplot : This is a list of the clades that we want to plot. This is not required. Use comma-separated values.
-      -q --qualitycontrol : If this is set, then we will run the quality control on the distance matrices. This is not required.
+    Returns 'white' or 'black' depending on hex color brightness.
+    - As input, takes a string starting with # (e.g., '#FF0000').
+    - As output, returns a hex string with the color name ('#FFFFFF' or '#000000').
     """
-    parser = argparse.ArgumentParser(description='This program takes in a list of RBH files. It constructs a phylogenetic tree with those files, and then uses UMAP to visualize the tree based on the distance of ALG ortholog pairs from each other.')
-    parser.add_argument('-d', '--directory',
-                        required = True,
-                        type=str,
-                        help='The directory that contains the RBH files. These RBH files')
-    parser.add_argument('-V', '--overwrite', action='store_true',
-                        help='If this is set, then we will overwrite the files in the output directory. Otherwise, try to load the existing files. This is not required.')
-    parser.add_argument('-a', '--ALGname', type=str,
-                        required = True,
-                        help='The name of the ALG that we are looking at. This is required.')
-    parser.add_argument('-r', '--rbhfile', type=str,
-                        required = True,
-                        help='The ALG rbh file. This is required, as we will use this information later.')
-    parser.add_argument('-c', '--cladestoplot', type=str, default = "33208,6605", # the default is Metazoa and Cephalopoda
-                        help='This is a list of the clades that we want to plot. This is not required. Use comma-separated values.')
-    parser.add_argument('-q', '--qualitycontrol', action='store_true',
-                        help='If this is set, then we will generate quality control plots of the data. This is not required.')
-    args = parser.parse_args()
+    hex_color = hex_color.lstrip("#")  # Remove '#' if present
+    r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))  # Convert to RGB
 
-    # check that the directory exists
-    if not os.path.exists(args.directory):
-        raise IOError(f"The directory {args.directory} does not exist. Exiting.")
-    # go through clades to plot, split on commas, check that everything can be parsed as an int, and reassign to args
-    fields = args.cladestoplot.split(",")
-    for thisfield in fields:
-        if not re.match(r"^[0-9]*$", thisfield):
-            raise ValueError(f"The field {thisfield} is not a number. Exiting.")
-    args.cladestoplot = [int(x) for x in fields]
+    # Calculate brightness (YIQ formula)
+    brightness = (r * 299 + g * 587 + b * 114) / 1000
+    return "#000000" if brightness > 128 else "#FFFFFF"  # Dark colors get white text, bright colors get black text
 
-    return args
 
-def umap_mapper_to_bokeh_topoumap(mapper, algrbhdf,
-                                  outhtml, plot_title = "UMAP"):
+def mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP"):
     """
-    This takes a UMAP mapper and an ALGRBHdf and returns a bokeh plot.
-    THIS IS SPECIFICALLY FOR ODOL PLOTS (one-dot-one-locus). We wouldn't need the algrbhdf otherwise.
+    This function takes the UMAPdf and generates an interactive Bokeh plot
+    with search functionality for RBH Ortholog and Gene Group.
+    It also displays a table below the figure, allowing toggling between OR (||) and AND (&&) searches
+    and enabling dataset export.
     """
     if not outhtml.endswith(".html"):
         raise ValueError(f"The output file {outhtml} does not end with '.html'. Exiting.")
 
-    #              ┓    •
-    # ┓┏┏┳┓┏┓┏┓  ┏┓┃┏┓╋╋┓┏┓┏┓
-    # ┗┻┛┗┗┗┻┣┛  ┣┛┗┗┛┗┗┗┛┗┗┫
-    #        ┛   ┛          ┛
-    hover_data = pd.DataFrame({
-                               "rbh_ortholog": algrbhdf["rbh"],
-                               "gene_group":   algrbhdf["gene_group"],
-                               "color":        algrbhdf["color"]
-                               })
-    # if the values in # TODO I never finished everything to the left of this
-    color_dict = {i: algrbhdf["color"][i] for i in algrbhdf.index}
+    # Ensure output directory exists
+    outhtml_dir = os.path.dirname(outhtml)
+    if not os.path.exists(outhtml_dir):
+        os.makedirs(outhtml_dir)
 
+    # Read in the UMAP data
+    plot_data = pd.read_csv(UMAPdf, sep="\t")
 
-    plot = umap.plot.interactive(mapper,
-                                 color_key = color_dict,
-                                 labels = algrbhdf["rbh"], # TODO this needs to be changd to a list comprehension
-                                 hover_data = hover_data,
-                                 tools=[], # this needs to be deleted, or else the zoom tool will not work.
-                                 point_size = 4
-                                 )
-    # add a title to the plot
-    plot.title.text = plot_title
-    # output to an HTML file
-    bokeh.io.output_file(outhtml)
-    # Save the plot to an HTML file
-    bokeh.io.save(plot)
+    # Ensure a 'size' column for dynamic updates
+    plot_data["size"] = 4  # Default dot size
+
+    # Store the original colors separately so they are never modified in the table
+    plot_data["original_color"] = plot_data["color"]
+
+    # Add a 'text_color' column based on original_color
+    plot_data["text_color"] = plot_data["original_color"].apply(get_text_color)
+
+    # Create a Bokeh ColumnDataSource (for scatter plot & full table)
+    source = bokeh.models.ColumnDataSource(plot_data)
+    filtered_source = bokeh.models.ColumnDataSource(plot_data)  # Initially holds full data
+
+    # Initialize Bokeh figure
+    plot = bokeh.plotting.figure(
+        title=plot_title,
+        tools="pan,wheel_zoom,box_zoom,reset,save",
+        width=800, height=600
+    )
+
+    # Add scatter plot
+    scatter = plot.scatter(x="UMAP1", y="UMAP2",
+                           source=source, size="size",
+                           color="color", alpha=0.7)
+
+    # Add hover tool for metadata display
+    hover = bokeh.models.HoverTool(tooltips=[
+        ("RBH Ortholog", "@rbh"),
+        ("Gene Group", "@gene_group"),
+    ])
+    plot.add_tools(hover)
+
+    # Text input fields for search (placed BELOW the plot)
+    search_rbh = bokeh.models.TextInput(title="Search RBH Ortholog:")
+    search_group = bokeh.models.TextInput(title="Search Gene Group:")
+
+    # Button to toggle between OR (||) and AND (&&) search logic
+    search_toggle = bokeh.models.Button(label="Search Type: OR (||)", button_type="primary")
+    search_mode = bokeh.models.Toggle(label="Search Mode")  # False = OR (||), True = AND (&&)
+
+    # Button to update the plot based on search terms
+    update_button = bokeh.models.Button(label="Update Plot", button_type="success")
+
+    # Dynamically determine the max width needed for RBH column
+    max_rbh_length = max(plot_data["rbh"].astype(str).apply(len))  # Get max string length
+    rbh_column_width = min(max(80, max_rbh_length * 5), 250)
+
+    # Create table columns with optimized widths
+    columns = [
+        bokeh.models.TableColumn(field="rbh", title="RBH Ortholog", width=rbh_column_width),  # Adjust width dynamically
+        bokeh.models.TableColumn(field="gene_group", title="Gene Group", width=1),  # Auto-fit
+        bokeh.models.TableColumn(field="UMAP1", title="UMAP1", width=1),  # Auto-fit
+        bokeh.models.TableColumn(field="UMAP2", title="UMAP2", width=1),  # Auto-fit
+        bokeh.models.TableColumn(
+            field="original_color", title="Color",
+            formatter=bokeh.models.HTMLTemplateFormatter(template="""
+                <span style="background-color:<%= original_color %>; 
+                            color:<%= text_color %>; 
+                            display:inline-block; 
+                            width:auto; 
+                            min-width:60px; 
+                            text-align:center; 
+                            padding:2px 5px;">
+                    <%= original_color %>
+                </span>
+            """),
+            width=75  # Just wide enough for hex code text
+        )
+    ]
+
+    # Create DataTable with properly adjusted column sizes
+    data_table = bokeh.models.DataTable(
+        source=filtered_source,
+        columns=columns,
+        width=800, height=300,
+        editable=True,
+        sizing_mode="stretch_width"
+    )
+
+    # Button to export the current table dataset
+    export_button = bokeh.models.Button(label="Export Data Below", button_type="success")
+
+    # JavaScript Callback for Update Button (Replaces need to press Enter)
+    update_callback = bokeh.models.CustomJS(args=dict(
+        source=source,
+        filtered_source=filtered_source,
+        search_rbh=search_rbh,
+        search_group=search_group,
+        search_mode=search_mode,
+        scatter=scatter
+    ), code="""
+        var data = source.data;
+        var filtered_data = filtered_source.data;
+        var rbh_input = search_rbh.value.trim().toLowerCase();
+        var group_input = search_group.value.trim().toLowerCase();
+        var colors = data['color'];
+        var sizes = data['size'];
+        var selected_indices = [];
+
+        var use_and_logic = search_mode.active; // True for AND (&&), False for OR (||)
+
+        // If no search term is provided, show all data in the table and reset colors
+        var show_all_data = (rbh_input === "" && group_input === "");
+
+        // Clear filtered source data
+        for (var key in filtered_data) {
+            filtered_data[key] = [];
+        }
+
+        for (var i = 0; i < colors.length; i++) {
+            var rbh_match = (rbh_input !== "" && data['rbh'][i].toLowerCase().includes(rbh_input));
+            var group_match = (group_input !== "" && data['gene_group'][i].toLowerCase().includes(group_input));
+
+            var match = (use_and_logic) ? (rbh_match && group_match) : (rbh_match || group_match);
+
+            if (match) {
+                colors[i] = "red";  // Highlight color in plot
+                sizes[i] = 8;       // Double the size
+                selected_indices.push(i);
+            } else {
+                colors[i] = data['original_color'][i]; // Keep original color
+                sizes[i] = 4;
+            }
+
+            // If no search, restore everything. Otherwise, only show matched rows in the table.
+            if (show_all_data || selected_indices.includes(i)) {
+                for (var key in filtered_data) {
+                    filtered_data[key].push(data[key][i]);
+                }
+            }
+        }
+
+        // Restore original colors if no search is active
+        if (show_all_data) {
+            for (var i = 0; i < colors.length; i++) {
+                colors[i] = data['original_color'][i];
+                sizes[i] = 4;
+            }
+        }
+
+        // Update sources
+        source.selected.indices = selected_indices;
+        source.change.emit();
+        filtered_source.change.emit();
+    """)
+
+    update_button.js_on_event("button_click", update_callback)
+
+    # Toggle search mode (OR <-> AND) and update the button label
+    toggle_callback = bokeh.models.CustomJS(args=dict(
+        search_toggle=search_toggle,
+        search_mode=search_mode
+    ), code="""
+        search_mode.active = !search_mode.active;
+        search_toggle.label = search_mode.active ? "Search Type: AND (&&)" : "Search Type: OR (||)";
+        search_toggle.change.emit();
+    """)
+
+    search_toggle.js_on_event("button_click", toggle_callback)
+    search_toggle.js_on_event("button_click", update_callback)
+
+    # Export Button Callback (Exports highlighted data or full dataset)
+    export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source), code="""
+        var active_data = filtered_source.data['rbh'].length > 0 ? filtered_source.data : source.data;
+        var keys = Object.keys(active_data);
+        var num_rows = active_data[keys[0]].length;
+
+        // Remove unwanted columns (size, color, Unnamed), but keep "original_color" and rename it to "color"
+        var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color");
+
+        // Rename "original_color" to "color"
+        var renamed_keys = filtered_keys.map(k => k === "original_color" ? "color" : k);
+
+        var csv_content = renamed_keys.join("\\t") + "\\n"; // Tab-separated column headers
+        for (var i = 0; i < num_rows; i++) {
+            var row = [];
+            for (var j = 0; j < filtered_keys.length; j++) {
+                row.push(active_data[filtered_keys[j]][i]);
+            }
+            csv_content += row.join("\\t") + "\\n";
+        }
+
+        var blob = new Blob([csv_content], { type: 'text/plain' });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = (filtered_source.data['rbh'].length > 0) ? "highlighted_data.tsv" : "full_data.tsv";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    """)
+
+    export_button.js_on_event("button_click", export_callback)
+
+    # Layout
+    search_row = bokeh.layouts.row(search_group, search_toggle, search_rbh, update_button, export_button, align="end")
+    layout = bokeh.layouts.column(plot, search_row, data_table)
+
+    # Output to HTML
+    bokeh.plotting.output_file(outhtml)
+    bokeh.io.save(layout)
+
+    return plot
+
 
 def umap_mapper_to_bokeh(mapper, sampledf, outhtml, plot_title = "UMAP"):
     """
@@ -1610,16 +1767,103 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
     # save the resulting coo file
     save_npz(outcoofile, resultscoo)
 
-def topoumap_plotumap(sample, sampledffile, algrbhfile, coofile,
-                      outdir, smalllargeNaN, n_neighbors, min_dist,
-                      outdffilepath, outbokehfilepath, outjpegfilepath = None,
-                      plot_jpeg = False):
+def mlt_umap(sampledffile, algrbhfile, coofile,
+             smalllargeNaN, n_neighbors, min_dist,
+             UMAPdfout):
     """
     This all-in-one plotting method makes UMAPs for the locus distance ALGs
         constructed by averaging across multiple species.
     Specifically, this is used for plotting the one-dot-one-locus UMAP plots.
 
-    Outputs:
+    Inputs:
+      - sampledffile:  The file that contains the sample dataframe.
+                        This is a tab-separated file that contains information on the
+                        genomes used in this analysis.
+      - algrbhfile:    The rbh database used for the markers in this analysis.
+      - coofile:       The file that contains the locus distance matrix.
+                        This is a .npz file.
+      - smalllargeNaN: This is a string that is either "small" or "large".
+                        This determines how the missing values are filled in.
+                        If "small", missing is set as 0, if "large", it is set
+                        as 999999999999. These missing values are averaged out in the
+                        phylogenetic weighting.
+      - n_neighbors:   This is the number of neighbors to use for the UMAP. This is an integer.
+      - min_dist:      This is the minimum distance to use for the UMAP. This is a float.
+      - UMAPdfout:     This is the file that contains the UMAP dataframe.
+                        This is a tab-separated file that contains the rbh db file, plus
+                        the UMAP1 and UMAP2 coordinates.
+    """
+    # check that the types are correct
+    if type(n_neighbors) not in [int, float]:
+        raise ValueError(f"The n_neighbors {n_neighbors} is not of type int or float. Exiting.")
+    if type(min_dist) not in [float]:
+        raise ValueError(f"The min_dist {min_dist} is not of type float. Exiting.")
+
+    # read in the sample dataframe. We will need this later
+    cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
+    # read in the algrbh as a pandasdf
+    algrbhdf = rbh_tools.parse_rbh(algrbhfile)
+    lil = load_npz(coofile).tolil()
+
+    # check that the largest row index of the lil matrix is less than the largest index of cdf - 1
+    if (lil.shape[0] != len(algrbhdf)) and (lil.shape[1] != len(algrbhdf)):
+        raise ValueError(f"The largest row index of the lil matrix, {lil.shape[0]}, is greater than the largest index of cdf, {max(cdf.index)}. Exiting.")
+    if n_neighbors >= len(algrbhdf):
+        raise ValueError(f"The number of samples, {len(cdf)}, is less than the number of neighbors, {n_neighbors}. Exiting.")
+    # If we pass these checks, we should be fine
+
+    # check that the smalllargeNaN is either small or large
+    if smalllargeNaN not in ["small", "large"]:
+        raise ValueError(f"The smalllargeNaN {smalllargeNaN} is not 'small' or 'large'. Exiting.")
+    if smalllargeNaN == "large":
+        # we have to flip the values of the lil matrix
+        lil.data[lil.data == 0] = 999999999999
+        #
+    # check that min_dist is between 0 and 1
+    if min_dist < 0 or min_dist > 1:
+        raise IOError(f"The min_dist {min_dist} is not between 0 and 1. Exiting.")
+
+    # We need a unique set of files for each of these
+    # In every case, we must produce a .df file and a .bokeh.html file
+    print(f"    PLOTTING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
+    reducer = umap.UMAP(low_memory=True, n_neighbors = n_neighbors, min_dist = min_dist)
+    start = time.time()
+    # Enter the context manager to catch warnings.
+    # For some of these parameters, namely small n_neighbors, the graph may not be fully connected.
+    #  This will cause a warning to be raised by UMAP.
+    with warnings.catch_warnings(record=True) as w:
+        # Ignore UserWarnings temporarily
+        warnings.filterwarnings("ignore", category=UserWarning)
+        # Your code that might raise the warning
+        mapper = reducer.fit(lil)
+        # Check if any warning was generated
+        if w:
+            for warning in w:
+                if issubclass(warning.category, UserWarning):
+                    disconnected = True
+                    print("Got the warning that the graph is not fully connected. This happens mostly in the case of clades with highly conserved genomes:", warning.message)
+                    # You can further process or log the warning here if needed
+    stop = time.time()
+    print("   - It took {} seconds to fit_transform the UMAP".format(stop - start))
+    print("   - Running the function umap_mapper_to_df")
+    start = time.time()
+    umap_df = umap_mapper_to_df(mapper, algrbhdf)
+    stop  = time.time()
+    print("     - It took {} seconds to make the df".format(stop - start))
+    print("   - Running the function to_csv")
+    start = time.time()
+    umap_df.to_csv(UMAPdfout, sep = "\t", index = True)
+    stop  = time.time()
+    print("     - It took {} seconds to save the df".format(stop - start))
+    print("   - Done with the topoumap_plotumap function")
+    return 0
+
+def mlt_umapHTML(sample, sampledffile, algrbhfile, coofile,
+             smalllargeNaN, n_neighbors, min_dist,
+             outdffilepath, outbokehfilepath, outjpegfilepath = None,
+             plot_jpeg = False):
+    """
+    This is used 
     """
     # check that the types are correct
     if type(n_neighbors) not in [int, float]:
@@ -2255,168 +2499,212 @@ def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
                 # If it's a different warning, re-raise it
                 raise e
 
-def main():
-    """
-    This program interprets many RBH files, and handles the way that they are visualized.
-
-    Steps:
-      1. Generate a sampledf from the RBH files. This dataframe contains important information.
-        - Columns:
-          - index: The index of the dataframe is important because this will be the order of the samples in the distance matrix. Everything will be ordered by this index.
-          - sample: This is the sample name. This is the same sample information that will be in the rbh file columns, and in the distance matrix.
-          - color: This is the color of the sample. This is based on a custom annotation from plot_ALG_fusions_v3.py
-          - taxid: This is the NCBI TAXid of the sample.
-          - taxname: This is the name of the taxid. For example 7777 is "Condrichthyes".
-          - taxid_list: This is a list of all the taxids in the lineage of the sample from closest to root to furthest.
-          - taxid_list_str: A string version of taxid_list joined together with ';' characters
-          - taxname_list: This is a list of all the taxnames in the lineage of the sample from closest to root to furthest. Matches the indices of taxid_list.
-          - taxname_list_str: A string version of taxname_list joined together with ';' characters
-          - level_1: Here, the level_1, level_2, et cetera are splits of the NCBI taxid for easy plotting. These go up to level_10.
-              - Some examples are:
-                ```
-                level_1: root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)
-                level_2: Metazoa (2); Eumetazoa (6072); Bilateria (33213); Protostomia (33317)
-                et cetera
-                ```
-          - printstring: This is the printstring of the taxid, like "root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)"
-          - #NOT YET annotation_method: This shows what method was used to annotate the sample, for example "BCnSSimakov2022_protmap" or "NCBI/Existing"
-          - genome_size: This is the size of the genome in base pairs.
-          - #NOT YET gc_content: This is the GC content of the genome. This is expressed as a value from 0 to 1.
-          - number_of_chromosomes: The haploid number of chromosomes that this species has.
-          - filepath: The filepath, as provided, of the rbh file that was used to generate this information.
-          - filepath_abs: The filepath, resolved, of the rbh file that was used to generate this information.
-          - filename: The filename of the rbh file that was used to generate this information.
-      2. Read in the RBH files and convert them to distance matrix files
-      (Steps 1 and 2 are combined in the function rbh_directory_to_distance_matrix)
-      3. Generate the LIL matrix of the data. Save this to disk.
-      4. Generate UMAP projections of the data. In this step we use different parameters to test how they affect the UMAP.
-      5. Visualize the data with plotly, bokeh, and matplotlib. For these plots, also generate QC plots.
-    """
-    args = parse_args()
-
-    results_base_directory = "GTUMAP"
-    # ┏┓┓ ┏┓  ┏┓┏┓┏┓┏┓┳┏┓┏┓  •  ┏
-    # ┣┫┃ ┃┓━━┗┓┃┃┣ ┃ ┃┣ ┗┓  ┓┏┓╋┏┓
-    # ┛┗┗┛┗┛  ┗┛┣┛┗┛┗┛┻┗┛┗┛  ┗┛┗┛┗┛
-    rbh_files = list(sorted([os.path.join(args.directory, f)
-                 for f in os.listdir(args.directory)
-                 if f.endswith('.rbh')], reverse = True))
-    # Generate the distance matrices. This is the part that saves the .gb.gz files.
-    outtsv = f"{results_base_directory}/sampledf.tsv"
-    outputdir = f"{results_base_directory}/distance_matrices/"
-    sampledf = None
-    if not os.path.exists(outtsv):
-        print("generating the distance matrices")
-        sampledf = rbh_directory_to_distance_matrix(args.directory, args.ALGname, outtsv = outtsv, outputdir = outputdir)
-    else:
-        print("The sampledf file already exists. Not overwriting it. Instead, we will read it in.")
-        print("If you would rather overwrite it, delete it in the file system and run this program again.")
-        sampledf = pd.read_csv(outtsv, sep = "\t", index_col = 0)
-
-    # We will need to calculate the rbh combo to index dictionary.
-    # DO NOT bother reading in the existing file. It takes 5x longer
-    #  to read in the file than it does to generate it.
-    outfile = f"{results_base_directory}/combo_to_index.txt"
-    alg_combo_to_ix = ALGrbh_to_algcomboix(args.rbhfile)
-    # save the dictionary pairs
-    with open(outfile, "w") as f:
-        for key, value in alg_combo_to_ix.items():
-            f.write(f"{key}\t{value}\n")
-
-    ncbi = NCBITaxa()
-    # Now we must construct a lil matrix from the distance matrices. This takes up significant disk space.
-    # We now parse through different sets of species and parameters to see how the UMAP is affected.
-    # Usage notes:
-    # For about 100 samples for molluscs, took up about 29Gb virtual memory and about 8Gb of RAM.
-    for thissp in args.cladestoplot:
-        thiscladename = ncbi.get_taxid_translator([thissp])[thissp]
-        sample_outfix = f"{thiscladename}_{thissp}"
-        sampleoutdir = f"{results_base_directory}/analyses/{sample_outfix}"
-        # safely make the dirs for the output files
-        create_directories_if_not_exist(sampleoutdir)
-        print(f"We are making a plot for this NCBI taxid: {thissp}")
+#def parse_args():
+#    """
+#    This has all of the args that we need to parse.
+#    The args that we need to parse are:
+#      -d --directory : The directory that contains the RBH files. These RBH files
+#      -V --overwrite : If this is set, then we will overwrite the files in the output directory.
+#                       Otherwise, try to load the existing files. This is not required.
+#      -a --ALGname   : The name of the ALG that we are looking at. This is required.
+#      -r --rbhfile   : The ALG rbh file. This is required, as we will use this information later.
+#      -c --cladestoplot : This is a list of the clades that we want to plot. This is not required. Use comma-separated values.
+#      -q --qualitycontrol : If this is set, then we will run the quality control on the distance matrices. This is not required.
+#    """
+#    parser = argparse.ArgumentParser(description='This program takes in a list of RBH files. It constructs a phylogenetic tree with those files, and then uses UMAP to visualize the tree based on the distance of ALG ortholog pairs from each other.')
+#    parser.add_argument('-d', '--directory',
+#                        required = True,
+#                        type=str,
+#                        help='The directory that contains the RBH files. These RBH files')
+#    parser.add_argument('-V', '--overwrite', action='store_true',
+#                        help='If this is set, then we will overwrite the files in the output directory. Otherwise, try to load the existing files. This is not required.')
+#    parser.add_argument('-a', '--ALGname', type=str,
+#                        required = True,
+#                        help='The name of the ALG that we are looking at. This is required.')
+#    parser.add_argument('-r', '--rbhfile', type=str,
+#                        required = True,
+#                        help='The ALG rbh file. This is required, as we will use this information later.')
+#    parser.add_argument('-c', '--cladestoplot', type=str, default = "33208,6605", # the default is Metazoa and Cephalopoda
+#                        help='This is a list of the clades that we want to plot. This is not required. Use comma-separated values.')
+#    parser.add_argument('-q', '--qualitycontrol', action='store_true',
+#                        help='If this is set, then we will generate quality control plots of the data. This is not required.')
+#    args = parser.parse_args()
+#
+#    # check that the directory exists
+#    if not os.path.exists(args.directory):
+#        raise IOError(f"The directory {args.directory} does not exist. Exiting.")
+#    # go through clades to plot, split on commas, check that everything can be parsed as an int, and reassign to args
+#    fields = args.cladestoplot.split(",")
+#    for thisfield in fields:
+#        if not re.match(r"^[0-9]*$", thisfield):
+#            raise ValueError(f"The field {thisfield} is not a number. Exiting.")
+#    args.cladestoplot = [int(x) for x in fields]
+#
+#    return args
 
 
-        # LIL FILE
-        # This whole thing could be sped up for repeated runs if I allowed the LIL matrix to be saved to disk.
-        # Right now it is not saved to disk, because it is a large file.
-        # This wouldn't be such a big deal if I compressed the output. I need to optimize this to make
-        #  sure that I understand the inputs for constructing the LIL matrix object, though.
-        print(f"  - Constructing the LIL matrix")
-        samplecdf1 = f"{sampleoutdir}/{sample_outfix}.sampledf.tsv"
-        samplecdf2 = f"{sampleoutdir}/{sample_outfix}.sampledf.matrixindices.tsv"
-        cdf = filter_sample_df_by_clades(sampledf, [thissp])
-        # Save the cdf as a tsv
-        cdf.to_csv(samplecdf1, sep = "\t", index = True)
-        # reset the indices, because that is what we need for the lil matrix
-        cdf = cdf.reset_index(drop = True)
-        cdf.to_csv(samplecdf2, sep = "\t", index = True)
-        # now get the lil matrix
-        lil = construct_lil_matrix_from_sampledf(cdf, alg_combo_to_ix, print_prefix = "  - ")
-
-        # UMAP section
-        # Levels for plotting text:
-        # We are making a plot for this NCBI taxid: 33208
-        #  - Constructing the LIL matrix for {sample_outfix}
-        for missing in ["small", "large"]:
-            if missing == "large":
-                # we have to flip the values of the lil matrix
-                lil.data[lil.data == 0] = 999999999999
-            for n in [2, 5, 10, 20, 50, 100, 250]: # this is the number of neighbors
-                for min_dist in [0.0, 0.1, 0.2, 0.5, 0.75, 0.9]:
-                    # We need a unique set of files for each of these
-                    if len(cdf) <= n:
-                        print(f"    The number of samples, {len(cdf)}, is less than the number of neighbors, {n}. Skipping.")
-                    if len(cdf) > n: # we have this condition for smaller datasets
-                        # First check if the UMAP exists
-                        UMAPdf           = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.df"
-                        UMAPbokeh        = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.bokeh.html"
-                        UMAPfit = None
-                        if os.path.exists(UMAPbokeh):
-                            print(f"    FOUND - UMAP with {missing} missing vals, with n_neighbors = {n}, and min_dist = {min_dist}")
-                        else:
-                            try:
-                                print(f"    PLOTTING - UMAP with {missing} missing vals, with n_neighbors = {n}, and min_dist = {min_dist}")
-                                reducer = umap.UMAP(low_memory=True, n_neighbors = n, min_dist = min_dist)
-                                start = time.time()
-                                mapper = reducer.fit(lil)
-                                stop = time.time()
-                                print("   - It took {} seconds to fit_transform the UMAP".format(stop - start))
-                                # save the UMAP as a bokeh plot
-                                umap_mapper_to_bokeh(mapper, cdf, UMAPbokeh,
-                                    plot_title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
-                                umap_df = umap_mapper_to_df(mapper, cdf)
-                                umap_df.to_csv(UMAPdf, sep = "\t", index = True)
-                                # save the connectivity figure
-                                if args.qualitycontrol:
-                                    UMAPconnectivity = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.connectivity.jpeg"
-                                    UMAPconnectivit2 = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.connectivity2.jpeg"
-                                    try:
-                                        umap_mapper_to_connectivity(mapper, UMAPconnectivity,
-                                                                    title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
-                                    except:
-                                        print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivity}")
-                                    try:
-                                        umap_mapper_to_connectivity(mapper, UMAPconnectivit2, bundled = True,
-                                                                    title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
-                                    except:
-                                        print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivit2}")
-                                    #QCplot = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.QC.jpeg"
-                                    ##try:
-                                    #umap_mapper_to_QC_plots(mapper, QCplot,
-                                    #                title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
-                                    ##except:
-                                    ##    print(f"    Warning: failed to make the QC plot for {QCplot}.")
-                            except UserWarning as e:
-                                # Catch the specific warning about graph not being fully connected
-                                if "Graph is not fully connected" in str(e):
-                                    print("    Warning: Graph is not fully connected. Can't run UMAP with these parameters.")
-                                    # we check for file UMAPbokeh, so write this message to it
-                                    with open(UMAPbokeh, "w") as f:
-                                        f.write("The graph is not fully connected. Can't run UMAP with these parameters.")
-                                else:
-                                    # If it's a different warning, re-raise it
-                                    raise e
-
-if __name__ == "__main__":
-    main()
+#def main():
+#    """
+#    This program interprets many RBH files, and handles the way that they are visualized.
+#
+#    Steps:
+#      1. Generate a sampledf from the RBH files. This dataframe contains important information.
+#        - Columns:
+#          - index: The index of the dataframe is important because this will be the order of the samples in the distance matrix. Everything will be ordered by this index.
+#          - sample: This is the sample name. This is the same sample information that will be in the rbh file columns, and in the distance matrix.
+#          - color: This is the color of the sample. This is based on a custom annotation from plot_ALG_fusions_v3.py
+#          - taxid: This is the NCBI TAXid of the sample.
+#          - taxname: This is the name of the taxid. For example 7777 is "Condrichthyes".
+#          - taxid_list: This is a list of all the taxids in the lineage of the sample from closest to root to furthest.
+#          - taxid_list_str: A string version of taxid_list joined together with ';' characters
+#          - taxname_list: This is a list of all the taxnames in the lineage of the sample from closest to root to furthest. Matches the indices of taxid_list.
+#          - taxname_list_str: A string version of taxname_list joined together with ';' characters
+#          - level_1: Here, the level_1, level_2, et cetera are splits of the NCBI taxid for easy plotting. These go up to level_10.
+#              - Some examples are:
+#                ```
+#                level_1: root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)
+#                level_2: Metazoa (2); Eumetazoa (6072); Bilateria (33213); Protostomia (33317)
+#                et cetera
+#                ```
+#          - printstring: This is the printstring of the taxid, like "root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)"
+#          - #NOT YET annotation_method: This shows what method was used to annotate the sample, for example "BCnSSimakov2022_protmap" or "NCBI/Existing"
+#          - genome_size: This is the size of the genome in base pairs.
+#          - #NOT YET gc_content: This is the GC content of the genome. This is expressed as a value from 0 to 1.
+#          - number_of_chromosomes: The haploid number of chromosomes that this species has.
+#          - filepath: The filepath, as provided, of the rbh file that was used to generate this information.
+#          - filepath_abs: The filepath, resolved, of the rbh file that was used to generate this information.
+#          - filename: The filename of the rbh file that was used to generate this information.
+#      2. Read in the RBH files and convert them to distance matrix files
+#      (Steps 1 and 2 are combined in the function rbh_directory_to_distance_matrix)
+#      3. Generate the LIL matrix of the data. Save this to disk.
+#      4. Generate UMAP projections of the data. In this step we use different parameters to test how they affect the UMAP.
+#      5. Visualize the data with plotly, bokeh, and matplotlib. For these plots, also generate QC plots.
+#    """
+#    args = parse_args()
+#
+#    results_base_directory = "GTUMAP"
+#    # ┏┓┓ ┏┓  ┏┓┏┓┏┓┏┓┳┏┓┏┓  •  ┏
+#    # ┣┫┃ ┃┓━━┗┓┃┃┣ ┃ ┃┣ ┗┓  ┓┏┓╋┏┓
+#    # ┛┗┗┛┗┛  ┗┛┣┛┗┛┗┛┻┗┛┗┛  ┗┛┗┛┗┛
+#    rbh_files = list(sorted([os.path.join(args.directory, f)
+#                 for f in os.listdir(args.directory)
+#                 if f.endswith('.rbh')], reverse = True))
+#    # Generate the distance matrices. This is the part that saves the .gb.gz files.
+#    outtsv = f"{results_base_directory}/sampledf.tsv"
+#    outputdir = f"{results_base_directory}/distance_matrices/"
+#    sampledf = None
+#    if not os.path.exists(outtsv):
+#        print("generating the distance matrices")
+#        sampledf = rbh_directory_to_distance_matrix(args.directory, args.ALGname, outtsv = outtsv, outputdir = outputdir)
+#    else:
+#        print("The sampledf file already exists. Not overwriting it. Instead, we will read it in.")
+#        print("If you would rather overwrite it, delete it in the file system and run this program again.")
+#        sampledf = pd.read_csv(outtsv, sep = "\t", index_col = 0)
+#
+#    # We will need to calculate the rbh combo to index dictionary.
+#    # DO NOT bother reading in the existing file. It takes 5x longer
+#    #  to read in the file than it does to generate it.
+#    outfile = f"{results_base_directory}/combo_to_index.txt"
+#    alg_combo_to_ix = ALGrbh_to_algcomboix(args.rbhfile)
+#    # save the dictionary pairs
+#    with open(outfile, "w") as f:
+#        for key, value in alg_combo_to_ix.items():
+#            f.write(f"{key}\t{value}\n")
+#
+#    ncbi = NCBITaxa()
+#    # Now we must construct a lil matrix from the distance matrices. This takes up significant disk space.
+#    # We now parse through different sets of species and parameters to see how the UMAP is affected.
+#    # Usage notes:
+#    # For about 100 samples for molluscs, took up about 29Gb virtual memory and about 8Gb of RAM.
+#    for thissp in args.cladestoplot:
+#        thiscladename = ncbi.get_taxid_translator([thissp])[thissp]
+#        sample_outfix = f"{thiscladename}_{thissp}"
+#        sampleoutdir = f"{results_base_directory}/analyses/{sample_outfix}"
+#        # safely make the dirs for the output files
+#        create_directories_if_not_exist(sampleoutdir)
+#        print(f"We are making a plot for this NCBI taxid: {thissp}")
+#
+#
+#        # LIL FILE
+#        # This whole thing could be sped up for repeated runs if I allowed the LIL matrix to be saved to disk.
+#        # Right now it is not saved to disk, because it is a large file.
+#        # This wouldn't be such a big deal if I compressed the output. I need to optimize this to make
+#        #  sure that I understand the inputs for constructing the LIL matrix object, though.
+#        print(f"  - Constructing the LIL matrix")
+#        samplecdf1 = f"{sampleoutdir}/{sample_outfix}.sampledf.tsv"
+#        samplecdf2 = f"{sampleoutdir}/{sample_outfix}.sampledf.matrixindices.tsv"
+#        cdf = filter_sample_df_by_clades(sampledf, [thissp])
+#        # Save the cdf as a tsv
+#        cdf.to_csv(samplecdf1, sep = "\t", index = True)
+#        # reset the indices, because that is what we need for the lil matrix
+#        cdf = cdf.reset_index(drop = True)
+#        cdf.to_csv(samplecdf2, sep = "\t", index = True)
+#        # now get the lil matrix
+#        lil = construct_lil_matrix_from_sampledf(cdf, alg_combo_to_ix, print_prefix = "  - ")
+#
+#        # UMAP section
+#        # Levels for plotting text:
+#        # We are making a plot for this NCBI taxid: 33208
+#        #  - Constructing the LIL matrix for {sample_outfix}
+#        for missing in ["small", "large"]:
+#            if missing == "large":
+#                # we have to flip the values of the lil matrix
+#                lil.data[lil.data == 0] = 999999999999
+#            for n in [2, 5, 10, 20, 50, 100, 250]: # this is the number of neighbors
+#                for min_dist in [0.0, 0.1, 0.2, 0.5, 0.75, 0.9]:
+#                    # We need a unique set of files for each of these
+#                    if len(cdf) <= n:
+#                        print(f"    The number of samples, {len(cdf)}, is less than the number of neighbors, {n}. Skipping.")
+#                    if len(cdf) > n: # we have this condition for smaller datasets
+#                        # First check if the UMAP exists
+#                        UMAPdf           = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.df"
+#                        UMAPbokeh        = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.bokeh.html"
+#                        UMAPfit = None
+#                        if os.path.exists(UMAPbokeh):
+#                            print(f"    FOUND - UMAP with {missing} missing vals, with n_neighbors = {n}, and min_dist = {min_dist}")
+#                        else:
+#                            try:
+#                                print(f"    PLOTTING - UMAP with {missing} missing vals, with n_neighbors = {n}, and min_dist = {min_dist}")
+#                                reducer = umap.UMAP(low_memory=True, n_neighbors = n, min_dist = min_dist)
+#                                start = time.time()
+#                                mapper = reducer.fit(lil)
+#                                stop = time.time()
+#                                print("   - It took {} seconds to fit_transform the UMAP".format(stop - start))
+#                                # save the UMAP as a bokeh plot
+#                                umap_mapper_to_bokeh(mapper, cdf, UMAPbokeh,
+#                                    plot_title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
+#                                umap_df = umap_mapper_to_df(mapper, cdf)
+#                                umap_df.to_csv(UMAPdf, sep = "\t", index = True)
+#                                # save the connectivity figure
+#                                if args.qualitycontrol:
+#                                    UMAPconnectivity = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.connectivity.jpeg"
+#                                    UMAPconnectivit2 = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.connectivity2.jpeg"
+#                                    try:
+#                                        umap_mapper_to_connectivity(mapper, UMAPconnectivity,
+#                                                                    title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
+#                                    except:
+#                                        print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivity}")
+#                                    try:
+#                                        umap_mapper_to_connectivity(mapper, UMAPconnectivit2, bundled = True,
+#                                                                    title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
+#                                    except:
+#                                        print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivit2}")
+#                                    #QCplot = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.QC.jpeg"
+#                                    ##try:
+#                                    #umap_mapper_to_QC_plots(mapper, QCplot,
+#                                    #                title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
+#                                    ##except:
+#                                    ##    print(f"    Warning: failed to make the QC plot for {QCplot}.")
+#                            except UserWarning as e:
+#                                # Catch the specific warning about graph not being fully connected
+#                                if "Graph is not fully connected" in str(e):
+#                                    print("    Warning: Graph is not fully connected. Can't run UMAP with these parameters.")
+#                                    # we check for file UMAPbokeh, so write this message to it
+#                                    with open(UMAPbokeh, "w") as f:
+#                                        f.write("The graph is not fully connected. Can't run UMAP with these parameters.")
+#                                else:
+#                                    # If it's a different warning, re-raise it
+#                                    raise e
+#
+#if __name__ == "__main__":
+#    main()
