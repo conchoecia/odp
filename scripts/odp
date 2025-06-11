@@ -372,6 +372,8 @@ rule make_diamond_and_blast_db:
         pin  = config["tool"] + "/db/{sample}_prots.pep.gz.pin",
         psq  = config["tool"] + "/db/{sample}_prots.pep.gz.psq"
     params:
+        outprefix1 = config["tool"],
+        outprefix2 = config["tool"] + "/db",
         outdir = config["tool"] + "/db/dmnd",
         title  = "{sample}_prots.pep.gz"
     benchmark: "benchmarks/make_diamond_and_blast_db/{sample}.make_diamond_and_blast_db.benchmark.txt"
@@ -382,6 +384,8 @@ rule make_diamond_and_blast_db:
     threads: 1 # No reason to have more than one thread
     shell:
         """
+        mkdir -p {params.outprefix1}
+        mkdir -p {params.outprefix2}
         mkdir -p {params.outdir}
         diamond makedb --in {input.pep} --db {output.dmnd}
         zcat {input.pep} | makeblastdb -in - -out {input.pep} -title {params.title} -dbtype prot
