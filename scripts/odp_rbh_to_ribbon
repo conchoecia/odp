@@ -53,11 +53,13 @@ if ("rbh_directory" in config) and ("rbh_files_in_order" not in config):
     # get the list of files from the directory
     fileslist = [x for x in os.listdir(config["rbh_directory"])
                  if x.endswith(".rbh")]
+    print(fileslist)
     files_list_in_order = []
     for i in range(len(config["species_order"])-1):
         sp =     config["species_order"][i]
         nextsp = config["species_order"][i+1]
         sortstring = "_".join(sorted([sp, nextsp]))
+        print(sortstring)
         # this gets the first file with the sortstring in it
         thisfile = [x for x in fileslist if x.startswith(sortstring)][0]
         absfile = os.path.join(config["rbh_directory"], thisfile)
@@ -131,14 +133,20 @@ def _optimize_spA_based_on_rbh(sp, prevsp, rbhdf, sp_to_chromorder, sp_to_gene_o
     rbhdf.reset_index(drop=True, inplace=True)
     return rbhdf["{}_scaf".format(sp)].tolist()
 
-def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy):
+def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy, plot_unassigned=True):
     """
     Plot bezier curves between chromosome coordinates of different species.
     - Returns the panel, but with the lines now
+
+    The flag at the end of plot_bezier_lines, plot_unassigned, is used to determine whether
+     to plot the unassigned lines or not. True means they're plotted (They will be black).
+     False means they are not plotted.
     """
     indent = 1.0
     # plot the indices
     for i in range(len(topxL)):
+        if (plot_unassigned is False) and (colors[i] == "#000000"):
+            continue  # skip unassigned lines if plot_unassigned is False
         topx     = topxL[i]
         bottomx  = bottomxL[i]
         diff = abs(topx - bottomx)
@@ -179,7 +187,8 @@ def subway_plot(species_order, rbh_filelist,
                 sp_min_chr_size, outfile,
                 sp_to_gene_order = None,
                 chr_sort_order   = "custom",
-                plot_all = False):
+                plot_all = False,
+                plot_unassigned_rbh = True):
     """
     Takes in a list of species as the plotting order,
      a list of rbh files, and a dict of species_to_chr_to_sizes
@@ -306,6 +315,7 @@ def subway_plot(species_order, rbh_filelist,
     for i in range(len(species_order) - 1):
         thissp = species_order[i]
         nextsp = species_order[i+1]
+
         # make a sp_to_chromorder dict entry
         for sp in [thissp, nextsp]:
             ########################################
@@ -372,10 +382,12 @@ def subway_plot(species_order, rbh_filelist,
 
     # set some parameters to make the font helvetica, and the output
     # more easily editable in illustrator or inkscape
-    #sns.set(rc={'text.usetex' : True})
-    sns.set_style("ticks", {'font.family': ['sans-serif'],
-                                'font.sans-serif': ['Helvetica'],
-                                'grid.color': '.95'})
+    matplotlib.rcParams.update({
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Helvetica", "Arial", "DejaVu Sans"],
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42
+    })
     logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
     # Preserve the vertical order of embedded images:
     matplotlib.rcParams['image.composite_image'] = False
@@ -558,14 +570,16 @@ def subway_plot(species_order, rbh_filelist,
                          tr["bottomIx_finalOffset"],
                          tr["color"],
                          tr["alpha"],
-                         i, i+1)
+                         i, i+1,
+                         plot_unassigned_rbh)
 
         pChr = plot_bezier_lines(pChr,
                          tr["topChr_finalOffset"],
                          tr["bottomChr_finalOffset"],
                          tr["color"],
                          tr["alpha"],
-                         i, i+1)
+                         i, i+1,
+                         plot_unassigned_rbh)
 
     # Now we plot all the chroms
     for i in range(len(species_order)):
@@ -652,4 +666,5 @@ rule make_plot:
                     sp_to_chr_to_size, min_chr_size, output.pdf,
                     config["chromorder"],
                     config["chr_sort_order"],
-                    config["plot_all"])
+                    config["plot_all"],
+                    plot_unassigned_rbh = config.get("plot_unassigned_rbh", True))
