@@ -6,13 +6,33 @@ import argparse
 import numpy as np
 import os
 import pandas as pd
+import random
 import sys
 
 import matplotlib.pyplot as plt
 import matplotlib.transforms as mtrans
 import matplotlib.colors as mcolors
-
 import odp_plotting_functions as odpf
+
+# for the html version
+from bokeh.plotting import figure, output_file, save
+from bokeh.layouts import gridplot, column
+from bokeh.models import ColumnDataSource, Div, TapTool, OpenURL
+
+import colorsys
+def generate_distinct_colors(n, saturation=0.65, lightness=0.5):
+    """
+    Generate `n` visually distinct colors using evenly spaced HSL hue values.
+    Returns a list of hex color strings.
+    """
+    colors = []
+    for i in range(n):
+        hue = i / n
+        rgb = colorsys.hls_to_rgb(hue, lightness, saturation)
+        rgb_scaled = tuple(int(x * 255) for x in rgb)
+        hex_color = '#{:02x}{:02x}{:02x}'.format(*rgb_scaled)
+        colors.append(hex_color)
+    return colors
 
 def parse_args():
     """
@@ -23,14 +43,27 @@ def parse_args():
     Args:
       -d --directory: The directory to read in the dataframes from.
       -f --filelist: The list of dataframes to read in. Space separated. We will infer the parameters from the filenames.
-      -o --outdir: The directory to which we will write the plots.
+      -p --prefix:   The files will be saved to this + ".pdf" or ".html"
+      --metadata: space-separated list of metadata files to join against the main dataframe. This will be type list [str] of filenames.
+      --pdf: save a {prefix}.pdf file
+      --html: save a {prefix}.html file
       --plot_features: Looks in the DF for features to plot. Plots everything on the same plot. Only takes in one dataframe.
     """
     parser = argparse.ArgumentParser(description = "Take in a list of datafraes from samples and constructs a comparison of the UMAP plots.")
     parser.add_argument("-d", "--directory",help = "The directory to read in the dataframes from.")
-    parser.add_argument("-f", "--filelist", help = "The list of dataframes to read in. Space separated. We will infer the parameters from the filenames.")
-    parser.add_argument("-o", "--outpdf",   help = "The pdf file to which we want to save our results.", required = True)
+    flstr  = "The list of dataframes to read in. Space separated. We will infer the parameters from the filenames.\n"
+    flstr += "  This cannot be used in combination with the --directory flag.\n"
+    flstr += "  If you use this in combination with the --plot_features flag, this must only be one file."
+    parser.add_argument("-f", "--filelist", help = flstr)
+    parser.add_argument("-p", "--prefix",   help = "The pdf file to which we want to save our results.", required = True)
+    mdstr  = "Optional metadata files with one 'rbh' column to join against the main dataframe, and other columns to annotate the plot."
+    mdstr += "  If the metadata column does not contain an additional column called *_color, the dots will be assigned colors."
+    mdstr += "  The colors will be assigned a gradient if numeric, or a random color if the column if categorical."
+    parser.add_argument("--metadata", help = mdstr)
+    parser.add_argument("--pdf", action = "store_true", help = "Save a {prefix}.pdf file")
+    parser.add_argument("--html", action = "store_true", help = "Save a {prefix}.html file")
     parser.add_argument("--plot_features", action = "store_true", help = "Looks in the DF for features to plot. Plots everything on the same plot. Only takes in one dataframe.")
+
     args = parser.parse_args()
 
     # Make sure that both directory and filelist are not specified.
@@ -47,209 +80,177 @@ def parse_args():
             if len([x for x in os.listdir(args.directory) if x.endswith(".df")]) > 1:
                 raise ValueError("You have turned on the plot_features flag, but you have more than one file in the directory. We can only plot one file at a time with this flag.")
 
+    # Make sure all the files exist
+    if args.directory:
+        df_filelist = [os.path.join(args.directory, f) for f in os.listdir(args.directory) if f.endswith(".df")]
+        if not df_filelist:
+            raise ValueError(f"No .df files found in directory: {args.directory}")
+    elif args.filelist:
+        df_filelist = args.filelist.split(" ")
+        for filepath in df_filelist:
+            if not os.path.exists(filepath):
+                raise ValueError(f"File does not exist: {filepath}")
+
+    # Check that the metadata file(s) exist(s) if specified. They are space-separated, and the output will be a list of files, even if just one file is specified.
+    if args.metadata:
+        metadata_files = args.metadata.split(" ")
+        for metadata_file in metadata_files:
+            if not os.path.exists(metadata_file):
+                raise ValueError(f"Metadata file does not exist: {metadata_file}")
+        args.metadata = metadata_files
+
     return args
 
-def plot_paramsweep(args):
+def generate_df_dict(args):
     """
-    Makes the plot for the parameter sweep plot when we provide multiple dataframes.
+    Reads .df files from a directory or file list, extracts parameters from filenames,
+    and returns a dictionary where keys are (num_neighbors, min_dist) and values are DataFrames.
+
+    Parameters:
+    - args: Argument object with `directory` or `filelist` attributes.
+
+    Returns:
+    - df_dict: {(num_neighbors, min_dist): pd.DataFrame}
     """
     df_filelist = []
     if args.directory:
-        # Get all the dataframes from the directory
-        df_filelist = [x for x in os.listdir(args.directory)
-                       if x.endswith(".df")]
+        df_filelist = [x for x in os.listdir(args.directory) if x.endswith(".df")]
+        df_filelist = [os.path.join(args.directory, f) for f in df_filelist]
     elif args.filelist:
-        # Get all the dataframes from the filelist
         df_filelist = args.filelist.split(" ")
 
-    # we need to change how to address the axes when there is just one axis.
-    onefile = False
-    if len(df_filelist) == 1:
-        onefile = True
+    df_dict = {}
 
-    print("df_filelist is {}".format(df_filelist))
+    for filepath in df_filelist:
+        filename = os.path.basename(filepath)
 
-    # There filenames are formatted like this:
-    #   Metazoa_33208.neighbors_20.mind_0.0.missing_large.df
-    samplename = set([os.path.basename(x).split(".neighbors_")[0] for x in df_filelist])
-    if len(samplename) > 1:
-        raise ValueError("More than one sample name found in the file list. We only allow one for now.")
-    samplename = list(samplename)[0]
-
-    print("samplename is {}".format(samplename))
-
-    # get the number of neighbors
-    num_neighbors = [os.path.basename(x).split(".neighbors_")[1].split(".")[0] for x in df_filelist]
-    # check that everything can be cast to an int
-    for x in num_neighbors:
         try:
-            int(x)
-        except ValueError:
-            raise ValueError(f"Could not cast {x} to an int.")
-    num_neighbors = [int(x) for x in num_neighbors]
-    print("num_neighbors is {}".format(num_neighbors))
-    # get the min_dist
-    min_dist = [os.path.basename(x).split(".mind_")[1].split(".missing_")[0] for x in df_filelist]
-    # check that all min_dist can be cast to a float
-    for x in min_dist:
-        try:
-            float(x)
-        except ValueError:
-            raise ValueError(f"Could not cast {x} to a float.")
-    min_dist = [float(x) for x in min_dist]
-    print("min_dist is {}".format(min_dist))
-    # get whether it is from the small or large dataset
-    miss_size = [os.path.basename(x).split(".missing_")[1].split(".")[0] for x in df_filelist]
-    # make sure that there is only one value for small or large here. We can't deal with both.
-    if len(set(miss_size)) > 1:
-        raise ValueError("More than one size found in the file list. We only allow one for now: small or large")
-    print("Missing size is {}".format(miss_size))
+            # Decapodiformes_215450_without_None.method_phylogenetic.neighbors_50.mind_0.9.missing_large.subchrom.df
+            samplename  =       filename.split(".")[0]
+            avgmethod   =       filename.split(".method_")[0].split(".")[0]
+            miss_size   =       filename.split(".missing_")[1].split(".")[0]
+            num_neighbors = int(filename.split(".neighbors_")[1].split(".")[0])
+            min_dist    = float(filename.split(".mind_")[1].split(".missing_")[0])
+        except (IndexError, ValueError):
+            raise ValueError(f"Invalid filename: {filename}")
 
-    # collate together the html_filelist, num_neighbors, min_dist, and size
-    df = pd.DataFrame({"dffile":        df_filelist,
-                       "num_neighbors": num_neighbors,
-                       "min_dist":      min_dist,
-                       "size":          miss_size})
-    # sort by num_neighbors and min_dist, ascending both
-    df = df.sort_values(["num_neighbors", "min_dist"], ascending=[True, True])
-    # get the sorted order of the unique num_neighbors
-    num_neighbors_list = sorted(df["num_neighbors"].unique())
-    num_neighbors_to_index = {x: i for i, x in enumerate(num_neighbors_list)}
-    # get the sorted order of the unique min_dist
-    min_dist_list = sorted(df["min_dist"].unique())
-    min_dist_to_index = {x: i for i, x in enumerate(min_dist_list)}
+        # Read DataFrame
+        df = pd.read_csv(filepath, sep="\t", index_col=0, header=0)
+        results = {"df": df, "samplename": samplename,
+                   "filepath": filepath,
+                   "num_neighbors": num_neighbors,
+                   "min_dist": min_dist,
+                   "size": miss_size,
+                   "method": avgmethod}
+        df_dict[(num_neighbors, min_dist)] = results
 
-    print(df)
-    print("This is the df we are working with.")
-    print(num_neighbors_list)
-    print(num_neighbors_to_index)
-    print(min_dist_list)
-    print(min_dist_to_index)
+    return df_dict
 
-    # setup the plot based on what we know the parameters will be
-    # These are the the magic numbers! We only need to adjust the size of each panel and how big the margins will be
-    text_size = 10
-    panel_width = 1
-    margin = 0.25
+def plot_paramsweep(df_dict, outpdf):
+    """
+    Makes the plot for the parameter sweep plot when we provide multiple dataframes.
+
+    Uses the df_dict as input.
+    """
+    # Extract sorted unique values for num_neighbors & min_dist
+    num_neighbors_list = sorted(set(k[0] for k in df_dict.keys()))
+    min_dist_list = sorted(set(k[1] for k in df_dict.keys()))
 
     # The rest of the numbers are calculated based on these two
     #     x   0 1 2 3 4
     #  y +-----------------+
-    #    |
     #    |
     #  0 |    o o o o o
     #  1 |    o o o o o
     #  2 |    o o o o o
     #  3 |    o o o o o
     #    |
-    #    |
     #    +-----------------+
     #
+    # Determine Figure size
+    # setup the plot based on what we know the parameters will be
+    # These are the the magic numbers! We only need to adjust the size of each panel and how big the margins will be
+    text_size = 10
+    panel_width = 1
+    margin = 0.25
     panel_height = panel_width
     # the width will have 4 margins, plot, margin, plot... 4 margins
-    fig_width = (margin * 4) + (panel_width * len(min_dist_list)) + (margin * (len(min_dist_list) - 1)) + (margin * 4)
+    fig_width  = (margin * 4) + (panel_width * len(min_dist_list))       + (margin * (len(min_dist_list) - 1)) + (margin * 4)
     # the height will have the same thing, but for the number of neighbors
     fig_height = (margin * 4) + (panel_height * len(num_neighbors_list)) + (margin * (len(num_neighbors_list) - 1)) + (margin * 4)
     fig = plt.figure(figsize=(fig_width, fig_height))
 
-    ## make a point at (0.25/fig_width, 0.25/fig_height)
-    #fig.text((0.25 * fig_width)/fig_width, (0.25 * fig_height)/fig_height,
-    #         "This is a test(0.25,0.25)", fontsize=text_size * 2, color="red")
-    # both figures should be squares and be in the middle of the plot
-    # the first plot should be on top
-    # the second plot should be on the bottom
-    axes = [[] for x in range(len(min_dist_list))]
-    # make all the axes in their correct places
-    for min_dist in min_dist_list:
-        x_index = min_dist_to_index[min_dist]
-        for num_neighbors in num_neighbors_list:
-            y_index = num_neighbors_to_index[num_neighbors]
-            # format is fig.add_axes([left, bottom, width, height])
-            left   = (4 * margin) + (x_index * panel_width)  + (x_index * margin)
-            bottom = fig_height - ((4 * margin) + ((y_index+1) * panel_height) + (y_index * margin))
-            axes[x_index].append(fig.add_axes([left         / fig_width,
-                                               bottom       / fig_height,
-                                               panel_width  / fig_width,
-                                               panel_height / fig_height]))
-            # Turn off the ticks and the lines
-            axes[x_index][-1].set_xticks([])
-            axes[x_index][-1].set_yticks([])
-            # Turn off the lines around the plot
+    # Determine figure size
+    text_size = 10
+    panel_width, margin = 1, 0.25
+    fig_width = (margin * 4) + (panel_width * len(min_dist_list)) + (margin * (len(min_dist_list) - 1)) + (margin * 4)
+    fig_height = (margin * 4) + (panel_width * len(num_neighbors_list)) + (margin * (len(num_neighbors_list) - 1)) + (margin * 4)
+    fig = plt.figure(figsize=(fig_width, fig_height))
+
+    # Create axes grid with correct dimensions
+    axes = [[None for _ in min_dist_list] for _ in num_neighbors_list]
+
+    # This creates the grid of plots and removes the ticks and spines
+    for y_idx, num_neighbors in enumerate(num_neighbors_list):
+        for x_idx, min_dist in enumerate(min_dist_list):
+            left = (4 * margin) + (x_idx * panel_width) + (x_idx * margin)
+            bottom = fig_height - ((4 * margin) + ((y_idx + 1) * panel_width) + (y_idx * margin))
+            axes[y_idx][x_idx] = fig.add_axes([
+                left / fig_width,
+                bottom / fig_height,
+                panel_width / fig_width,
+                panel_width / fig_height
+            ])
+            axes[y_idx][x_idx].set_xticks([])
+            axes[y_idx][x_idx].set_yticks([])
             for spine in ['top', 'right', 'bottom', 'left']:
-                axes[x_index][-1].spines[spine].set_visible(False)
+                axes[y_idx][x_idx].spines[spine].set_visible(False)
 
-    # set the title as samplename and the whether it is small or large
-    sizeunique = df["size"].unique()[0]
-    fig.suptitle(f"{samplename}, {sizeunique} values for non-colocalized")
-    # set absolute left label as the number of neighbors
-    left_x = margin * 2
-    top_y = fig_height - (margin * 3)
-    fig.text(left_x/fig_width, 0.5, 'Number of Neighbors', va='center', rotation='vertical', fontsize=text_size)
-    fig.text(0.5, top_y/fig_height, 'Min Distance', ha='center', fontsize=text_size)
+    # Plot data from df_dict
+    for (num_neighbors, min_dist), data in df_dict.items():
+        y_idx, x_idx = num_neighbors_list.index(num_neighbors), min_dist_list.index(min_dist)
+        ax = axes[y_idx][x_idx]
+        df = data["df"]
 
-    # go through each row of the dataframe and plot it
-    for i, row in df.iterrows():
-        x_index = min_dist_to_index[row["min_dist"]]
-        y_index = num_neighbors_to_index[row["num_neighbors"]]
-        #if we're at the absolute left or right make a label
-        if y_index == 0:
-                axes[x_index][0].xaxis.set_label_position('top')
-                axes[x_index][0].set_xlabel(row["min_dist"], fontsize=text_size)
-        if x_index == 0:
-                axes[0][y_index].yaxis.set_label_position('left')
-                axes[0][y_index].set_ylabel(row["num_neighbors"], rotation=0, ha='right', fontsize=text_size)
-        # get the dataframe of the file we're working with
-        dffile = row["dffile"]
-        if not os.path.exists(dffile):
-            # The user provided the path to this file, but it doesn't exist.
-            # This means that the user made a mistake in writing the file name.
-            raise ValueError(f"The file {dffile} does not exist.")
+        if df.empty:
+            ax.text(0.5, 0.5, "Empty file", fontsize=3, ha='center')
         else:
-            # if the file is empty, then we write into the ax[i, j] that the file is empty
-            if os.path.getsize(dffile) == 0:
-                axes[i, j].text(0.5, 0.5, f"Empty file", fontsize=3, ha='center')
-            else:
-                tempdf = pd.read_csv(dffile, sep="\t", index_col=0)
-                # Plot the UMAP1 UMAP2 with the color column as the color.
-                # Make the dot size small
-                axes[x_index][y_index].scatter(
-                    tempdf["UMAP1"], tempdf["UMAP2"],
-                    s=0.5, lw = 0, alpha=0.5,
-                    color=list(tempdf["color"]))
-                # get the absolute min and max of the UMAP1 and UMAP2
-                # get the bounding box of the axes
-                minval = min([tempdf["UMAP1"].min(), tempdf["UMAP2"].min()])
-                maxval = max([tempdf["UMAP1"].max(), tempdf["UMAP2"].max()])
-                xlims = [minval - abs(.05 * minval), 1.05 * maxval]
-                ylims = xlims
-                axes[x_index][y_index].set_xlim(xlims)
-                axes[x_index][y_index].set_ylim(ylims)
+            ax.scatter(df["UMAP1"], df["UMAP2"], s=0.5, lw=0, alpha=0.5, color=df["color"])
+            minval, maxval = df[["UMAP1", "UMAP2"]].min().min(), df[["UMAP1", "UMAP2"]].max().max()
+            ax.set_xlim([minval - abs(.05 * minval), 1.05 * maxval])
+            ax.set_ylim([minval - abs(.05 * minval), 1.05 * maxval])
 
-    # Now make vertical and horizontal lines to separate the plots. Make them medium gray.
-    # The lines will be on the figure, and not in the plots.
-    # Draw horizontal lines between rows
-    # We know the exact coordinates to draw them, as we know the exact coordinates of the axes
-    for x_index in range(1, len(min_dist_list)):
-        # Draw vertical lines at those coordinates
-        x1 = ((4 * margin) + (x_index * panel_width) + (x_index * margin) - (margin/2) ) / fig_width
-        x2 = x1
-        y1 = (fig_height - (4 * margin)) / fig_height
-        y2 = (4 * margin) / fig_height
-        line = plt.Line2D([x1, x2], [y1, y2], transform=fig.transFigure, color="#BBBBBB")
-        fig.add_artist(line)
+        # If we're at the absolute left (first column), add a Y-axis label
+        if x_idx == 0:
+            ax.yaxis.set_label_position("left")
+            ax.set_ylabel(num_neighbors, rotation=0, ha="right", fontsize=text_size)
 
-    for y_index in range(1, len(num_neighbors_list)):
-        # Draw horizontal lines at those coordinates
-        x1 = (4 * margin) / fig_width
-        x2 = (fig_width - (4 * margin)) / fig_width
-        y1 = (fig_height - ((4 * margin) + (y_index * panel_height) + (y_index * margin) - (margin/2))) / fig_height
-        y2 = y1
-        line = plt.Line2D([x1, x2], [y1, y2], transform=fig.transFigure, color="#BBBBBB")
-        fig.add_artist(line)
+        # If we're at the absolute top (first row), add an X-axis label
+        if y_idx == 0:
+            ax.xaxis.set_label_position("top")
+            ax.set_xlabel(min_dist, fontsize=text_size)
 
-    print("saving the file to {}".format(args.outpdf))
-    plt.savefig(args.outpdf)
-    # close the figure
+    # Add titles and labels
+    fig.suptitle(f"{data['samplename']}, {data['size']} values for non-colocalized loci,\n {data['method']} method for averaging",
+                 fontsize=text_size)
+
+    fig.text(0.5, (fig_height - (margin * 3)) / fig_height, "Min Distance", ha="center", fontsize=text_size)
+    fig.text((margin * 2) / fig_width, 0.5, "Number of Neighbors", va="center", rotation="vertical", fontsize=text_size)
+
+    # Add grid dividers to separate plots
+    for x_idx in range(1, len(min_dist_list)):
+        x1 = ((4 * margin) + (x_idx * panel_width) + (x_idx * margin) - (margin / 2)) / fig_width
+        y1, y2 = ((fig_height - (4 * margin)) / fig_height, (4 * margin) / fig_height)
+        fig.add_artist(plt.Line2D([x1, x1], [y1, y2], transform=fig.transFigure, color="#BBBBBB"))
+
+    for y_idx in range(1, len(num_neighbors_list)):
+        y1 = ((fig_height - ((4 * margin) + (y_idx * panel_width) + (y_idx * margin) - (margin / 2))) / fig_height)
+        x1, x2 = (4 * margin) / fig_width, (fig_width - (4 * margin)) / fig_width
+        fig.add_artist(plt.Line2D([x1, x2], [y1, y1], transform=fig.transFigure, color="#BBBBBB"))
+
+    # Save and close
+    print(f"Saving file to {outpdf}")
+    plt.savefig(outpdf)
     plt.close(fig)
 
 def interpolate_color(value, vmin, vmax, start_color, end_color):
@@ -284,7 +285,7 @@ def interpolate_color(value, vmin, vmax, start_color, end_color):
 
     return interpolated_color
 
-def plot_features(args):
+def plot_features(args, outpdf, metadata_df=None):
     """
     This makes a plot of the features of a single dataframe.
     All of the plots will be plotted along the axes of the UMAP1 and UMAP2.
@@ -292,7 +293,22 @@ def plot_features(args):
     # get the dataframe to load in
     df = pd.read_csv(args.filelist, sep="\t", index_col=0)
     # remove the rows that have a value of NaN in the "smallest_protein" column
-    df = df[~df["smallest_protein"].isna()]
+    if "smallest_protein" in df.columns:
+        df = df[~df["smallest_protein"].isna()]
+
+    # Merge metadata if provided (on 'rbh' = index of df)
+    if metadata_df is not None:
+        metadata_df = metadata_df.set_index("rbh")
+        metadata_df.index = metadata_df.index.astype(str).str.strip()
+        df.set_index("rbh", inplace=True, drop=False)  # ensure 'rbh' is the index
+        df.index = df.index.astype(str).str.strip()
+
+        matched = metadata_df.index.intersection(df.index)
+        print(f"Metadata merge: matched {len(matched)} of {len(df)} UMAP RBH entries")
+
+        df = df.join(metadata_df, how="left")  # join by index
+
+
     print(df.columns)
     print(df)
     # the columns we wa:nt to annotate are defined in the AnnotateSampleDf pipeline
@@ -325,9 +341,20 @@ def plot_features(args):
                                "fraction_Ns", "number_of_gaps", "num_proteins", "mean_protein_length",
                                "median_protein_length", "longest_protein", "smallest_protein", "from_rbh",
                                "frac_ologs", "frac_ologs_sig", "frac_ologs_single"]
-    olog_columns_to_plot = [x for x in df.columns if x.startswith("frac_ologs_") and (x != "frac_ologs_single") and (x != "frac_ologs_sig")]
+    # If we're plotting metadata, we might not actually have these columns in the dataframe.
+    regular_columns_to_plot = [col for col in regular_columns_to_plot if col in df.columns]
+    olog_columns_to_plot = [x for x in df.columns if x.startswith("frac_ologs_") and x not in ("frac_ologs_sig", "frac_ologs_single")]
+
+    known_umap_cols = {"UMAP1", "UMAP2", "color"}
+    metadata_columns = [col for col in df.columns
+                        if col not in known_umap_cols and (
+                            col.endswith("_color") or 
+                            (not col.endswith("_color") and f"{col}_color" in df.columns)
+                        )
+                       ]
     all_columns_to_plot = ["color"] + regular_columns_to_plot + olog_columns_to_plot
-    total_num_cols_to_plot = len(all_columns_to_plot)
+    all_columns_to_plot = list(dict.fromkeys(all_columns_to_plot))  # remove duplicates while preserving order
+    total_num_cols_to_plot = len(all_columns_to_plot) + int(len(metadata_columns)/2) # divide by 2 because we include both the column and its colors
     # figure out what number we should pick to make the shape closest to a square, when plotting N x N plots
     plots_per_row = int(np.ceil(np.sqrt(total_num_cols_to_plot)))
 
@@ -336,23 +363,33 @@ def plot_features(args):
     # make a grid of squares to plot each of these on
     # reduce the space between all the plots
     # make the figure size such that all the plots are square
-    square_size = 1.5
-    fig, axes = plt.subplots(num_rows, num_cols,
-                             figsize=(num_cols*square_size, num_rows*square_size))
-    plt.subplots_adjust(wspace=0.1, hspace=0.1)
 
-    # turn off all the ticks
-    # Turn off the axes
+    # make the axes
+    margin = 0.25
+    panel_width = 1.5
+    fig_width = (margin * 4) + (panel_width * num_cols) + (margin * (num_cols - 1)) + (margin * 4)
+    fig_height = (margin * 4) + (panel_width * num_rows) + (margin * (num_rows - 1)) + (margin * 4)
+    fig = plt.figure(figsize=(fig_width, fig_height))
+
+    axes = [[None for _ in range(num_cols)] for _ in range(num_rows)]
     for i in range(num_rows):
         for j in range(num_cols):
-            axes[i, j].set_xticks([])
-            axes[i, j].set_yticks([])
-            # Turn off the lines around the plot
+            left = (4 * margin) + (j * panel_width) + (j * margin)
+            bottom = fig_height - ((4 * margin) + ((i + 1) * panel_width) + (i * margin))
+            ax = fig.add_axes([
+                left / fig_width,
+                bottom / fig_height,
+                panel_width / fig_width,
+                panel_width / fig_height
+            ])
+            ax.set_xticks([])
+            ax.set_yticks([])
             for spine in ['top', 'right', 'bottom', 'left']:
-                axes[i, j].spines[spine].set_visible(False)
+                ax.spines[spine].set_visible(False)
+            axes[i][j] = ax
 
     # set the title as samplename and the whether it is small or large
-    fig.suptitle(f"Paramplot for {args.filelist}")
+    fig.suptitle(f"Paramplot for {args.filelist}", fontsize = 4)
     # set absolute left label as the number of neighbors
     #fig.text(0.06, 0.5, 'Number of Neighbors', va='center', rotation='vertical')
     #fig.text(0.5, 0.92, 'Min Distance', ha='center')
@@ -360,14 +397,14 @@ def plot_features(args):
     j = 0
     for thiscol in all_columns_to_plot:
         # for the left-most plot in each row, set the ylabel as the number of neighbors
-        #axes[i, j].set_ylabel(f"{row}", rotation=0, ha='right')
+        #axes[i][j].set_ylabel(f"{row}", rotation=0, ha='right')
         #for the top-most plot in each column, set the xlabel as the min_dist
         # put the xlabel on the top
-        axes[i, j].xaxis.set_label_position('top')
+        axes[i][j].xaxis.set_label_position('top')
         if thiscol == "color":
-            axes[i, j].set_xlabel(f"Clade color", fontsize = 5)
+            axes[i][j].set_xlabel(f"Clade color", fontsize = 5)
         else:
-            axes[i, j].set_xlabel(f"{thiscol}", fontsize = 5)
+            axes[i][j].set_xlabel(f"{thiscol}", fontsize = 5)
         # figure out the type of the column
         coltype = df[thiscol].dtype
         #if the type of the column is an object, then plot True as #074FF7 and False as #FD6117
@@ -392,9 +429,58 @@ def plot_features(args):
                     colors = [interpolate_color(x, 0, 1, "#DCDEE3", "#FF2608") for x in df[thiscol]]
 
         # get the df file for this row and column from the dffile
-        axes[i, j].scatter(df["UMAP1"], df["UMAP2"],
+        axes[i][j].scatter(df["UMAP1"], df["UMAP2"],
                          s=0.5, lw = 0, alpha=0.5,
                          color=colors)
+        # iterate i and j
+        j += 1
+        if j == num_cols:
+            j = 0
+            i += 1
+
+    # Now we plot the metadata columns. This is less complicated
+    #  since we already calculated the colors for everything
+    for thiscol in metadata_columns:
+        if thiscol.endswith("_color"):
+            # if the column is not a color column, then we will plot the column and its color
+            continue
+        # get the color column
+        color_col = f"{thiscol}_color"
+        if color_col not in df.columns:
+            # We should have generated this in the other function, so raise an error here
+            raise ValueError(f"The column {color_col} is not present in the dataframe. This should have been generated in the parse_metadata_dfs() function.")
+        axes[i][j].xaxis.set_label_position('top')
+        axes[i][j].set_xlabel(f"{thiscol}", fontsize = 5)
+        colors = df[color_col]
+        axes[i][j].scatter(df["UMAP1"], df["UMAP2"],
+                            s=0.5, lw = 0, alpha=0.5,
+                            color=colors)
+        # If the column is categorical, make a legend
+        if pd.api.types.is_object_dtype(df[thiscol]) or pd.api.types.is_categorical_dtype(df[thiscol]):
+            unique_vals = df[[thiscol, color_col]].dropna().drop_duplicates()
+
+            handles = [
+                plt.Line2D(
+                    [0], [0],
+                    marker='o',
+                    color='none',
+                    label=str(row[thiscol]),
+                    markerfacecolor=row[color_col],
+                    markersize=2,
+                    markeredgewidth=0,
+                    markeredgecolor='none'
+                )
+                for _, row in unique_vals.iterrows()
+            ]
+
+            axes[i][j].legend(
+                handles=handles,
+                loc='center left',
+                bbox_to_anchor=(1.0, 0.5),
+                fontsize=2,
+                frameon=False
+            )
+
         # iterate i and j
         j += 1
         if j == num_cols:
@@ -408,59 +494,237 @@ def plot_features(args):
             col.set_aspect('equal', adjustable='box')
 
     # Now make vertical and horizontal lines to separate the plots. Make them medium gray.
-    # The lines will be on the figure, and not in the plots.
-    # Draw horizontal lines between rows
-    # Get the bounding boxes of the axes including text decorations
-
-    # Get the bounding boxes of the axes including text decorations
-    r = fig.canvas.get_renderer()
-    get_bbox = lambda ax: ax.get_tightbbox(r).transformed(fig.transFigure.inverted())
-    bbox_list = [get_bbox(ax) for ax in axes.flat]
-
-    # Create an empty array with the correct shape and dtype
-    bboxes = np.empty(axes.shape, dtype=object)
-
-    # Fill the array with the bounding boxes
-    for idx, bbox in np.ndenumerate(bboxes):
-        bboxes[idx] = bbox_list[idx[0] * axes.shape[1] + idx[1]]
-
-    # Get the minimum and maximum extent, get the coordinate half-way between those
-    ymax = np.array(list(map(lambda b: b.y1, bboxes.flat))).reshape(axes.shape).max(axis=1)
-    ymin = np.array(list(map(lambda b: b.y0, bboxes.flat))).reshape(axes.shape).min(axis=1)
-    ys = np.c_[ymax[1:], ymin[:-1]].mean(axis=1)
-
-    # Draw horizontal lines at those coordinates
-    for y in ys:
-        line = plt.Line2D([0.125, 0.9], [y, y], transform=fig.transFigure, color="#BBBBBB")
+    xs = []
+    for j in range(1, num_cols):
+        left_current = (4 * margin) + (j * panel_width) + ((j - 1) * margin)
+        xs.append(left_current / fig_width)
+    for x in xs:
+        line = plt.Line2D([x, x], [0, 1], transform=fig.transFigure, color="#BBBBBB", lw=0.5)
         fig.add_artist(line)
 
-    # Get the minimum and maximum extent, get the coordinate half-way between those for vertical lines
-    xmax = np.array(list(map(lambda b: b.x1, bboxes.flat))).reshape(axes.shape).max(axis=0)
-    xmin = np.array(list(map(lambda b: b.x0, bboxes.flat))).reshape(axes.shape).min(axis=0)
-    xs = np.c_[xmax[1:], xmin[:-1]].mean(axis=1)
-
-    # Draw vertical lines at those coordinates
-    for xi in range(len(xs)):
-        x = xs[xi]
-        if xi == 0:
-            x = x + 0.0125
-        line = plt.Line2D([x, x], [0.1, 0.875], transform=fig.transFigure, color="#BBBBBB")
+    ys = []
+    for i in range(1, num_rows):
+        bottom_current = (4 * margin) + (i * panel_width) + ((i - 1) * margin)
+        y = 1 - (bottom_current / fig_height)
+        ys.append(y)
+    for y in ys:
+        line = plt.Line2D([0, 1], [y, y], transform=fig.transFigure, color="#BBBBBB", lw=0.5)
         fig.add_artist(line)
 
     # save the figure as f"{samplename}_{name}.pdf"
     # name is just the size, small or large
-    print("saving the file to {}".format(args.outpdf))
-    plt.savefig(args.outpdf)
+    print("saving the file to {}".format(outpdf))
+    plt.savefig(outpdf)
     # close the figure
     plt.close(fig)
+
+def generate_umap_grid_bokeh(df_dict, output_html):
+    """
+    Takes a dictionary of UMAP DataFrames and generates a Bokeh grid plot.
+    - Rows represent different `num_neighbors` values.
+    - Columns represent different `min_dist` values.
+    - Saves as an interactive HTML file.
+
+    Parameters:
+    - df_dict: Dict where keys are (num_neighbors, min_dist) and values are dictionaries with:
+      - "df": DataFrame with UMAP coordinates
+    - output_html: Path to the output HTML file.
+    """
+
+    # Extract unique num_neighbors (rows) and min_dist (columns) values
+    num_neighbors_list = sorted(set(k[0] for k in df_dict.keys()))
+    min_dist_list = sorted(set(k[1] for k in df_dict.keys()))
+
+    # Adjust plot sizing to reduce overall width and make each plot smaller
+    plot_width = 150  # Reduced plot width
+    plot_height = 150  # Reduced plot height
+
+    # Retrieve general metadata for the title (from any entry)
+    sample_info = next(iter(df_dict.values()))  # Get any sample metadata
+    title_text = f"{sample_info['samplename']}, {sample_info['size']} values for non-colocalized loci, {sample_info['method']} method for averaging"
+
+    # Create a title for the entire plot
+    title_div = Div(text=f"<h3>{title_text}</h3>", width=plot_width * len(min_dist_list), height=40, styles={"text-align": "center"})
+
+    # Create a dictionary to store plots in a grid layout
+    plot_grid = [[None for _ in min_dist_list] for _ in num_neighbors_list]
+
+    # Generate scatter plots for each dataset
+    for (num_neighbors, min_dist), data in df_dict.items():
+        df = data["df"]  # Extract the DataFrame
+
+        # Ensure only valid DataFrame columns are passed to Bokeh
+        valid_columns = ["UMAP1", "UMAP2", "color"]  # Keep only numeric/iterable columns
+        df_filtered = df[valid_columns] if set(valid_columns).issubset(df.columns) else df
+
+        source = ColumnDataSource(df_filtered)
+
+        # Create Bokeh scatter plot with adjusted transparency, smaller dots, and no grid lines
+        p = figure(width=plot_width, height=plot_height, tools="", toolbar_location=None)
+        p.scatter(x="UMAP1", y="UMAP2", source=source, size=1, color="color", alpha=0.3, line_color=None)  # Smaller, transparent dots with no outlines
+
+        # Remove grid lines, axis labels, and ticks
+        p.xgrid.visible = False
+        p.ygrid.visible = False
+        p.outline_line_color = None  # Removes outer plot border
+        p.xaxis.visible = False
+        p.yaxis.visible = False
+
+        # Determine grid position
+        row_idx = num_neighbors_list.index(num_neighbors)
+        col_idx = min_dist_list.index(min_dist)
+        plot_grid[row_idx][col_idx] = p
+
+    # Create centered labels for rows (num_neighbors) and columns (min_dist)
+    row_labels = [Div(text=f"<b>{n}</b>", width=30, height=plot_height, styles={"text-align": "center", "display": "flex", "align-items": "center", "justify-content": "center"}) for n in num_neighbors_list]
+    col_labels = [Div(text=f"<b>{d}</b>", width=plot_width, height=30, styles={"text-align": "center"}) for d in min_dist_list]
+
+    # Arrange plots into a grid layout with labels
+    full_grid = [[Div(text="", width=30, height=30)] + col_labels]  # Top row with column labels
+    for row_label, plots in zip(row_labels, plot_grid):
+        full_grid.append([row_label] + plots)
+
+    # Full layout including title
+    layout = column(title_div, gridplot(full_grid))
+
+    # Output to an HTML file
+    # Print confirmation message
+    print(f"Saving Bokeh grid plot to {output_html}")
+    output_file(output_html)
+    save(layout)
+
+def parse_metadata_dfs(df_filelist: list):
+    """
+    This function reads in a series of files that contain at least two columns:
+    -                      rbh: The rbh identifier, which is the same as the index of the main dataframe.
+    -       <your_column_name>: The column that you want to use to annotate the plot. This
+                                  could be a categorical or numeric column. If there is no additional
+                                  column called <your_column_name>_color, then the colors will be assigned
+                                  a gradient if numeric, or a random color if the column is categorical.
+    - <your_column_name>_color: The column that contains the colors to use for the plot.
+                                  If this column is not present, then the colors will be assigned
+                                  a gradient if numeric, or a random color if the column is categorical.
+
+    Notes:
+      - The argument df_filelist is a list of files that contain the metadata. This should be a list even if there is only one file.
+      - There can be multiple columns with <your_column_name>_color, and they will be used to color the points in the plot. These
+        will get merged together into a single dataframe, with a series of columns that contain the original data, and corresponding columns
+        that contain the colors to use for the plot.
+    """
+    # first enforce that the type of df_filelist is a list
+    if not isinstance(df_filelist, list):
+        raise ValueError("The df_filelist argument must be a list of files.")
+    # ensure that all of the files exist
+    for df_file in df_filelist:
+        if not os.path.exists(df_file):
+            raise ValueError(f"Metadata file does not exist: {df_file}")
+    list_of_dfs = [] # the dfs pre-merge will be added into here
+    for df_file in df_filelist:
+        # read in the dataframe
+        df = pd.read_csv(df_file, sep="\t", header=0)
+        # check that the rbh column is present
+        if "rbh" not in df.columns:
+            raise ValueError(f"The metadata file {df_file} does not contain a 'rbh' column.")
+        # check that there is at least one column that is not rbh
+        if len(df.columns) < 2:
+            raise ValueError(f"The metadata file {df_file} does not contain any columns other than 'rbh'.")
+        # Raise an error if there is a column called "rbh_color", this conflicts with the column we will merge against
+        if "rbh_color" in df.columns:
+            raise ValueError(f"The metadata file {df_file} contains a column called 'rbh_color', which conflicts with the column we will merge against.")
+        # Get a list of the columns ending in _color. If there is not a corresponding column without _color, then we will raise an error.
+        color_columns = [col for col in df.columns if col.endswith("_color")]
+        for color_col in color_columns:
+            non_color_col = color_col[:-6]  # Remove the '_color' suffix
+            if non_color_col not in df.columns:
+                raise ValueError(f"The metadata file {df_file} contains a column called '{color_col}', but does not contain a corresponding column called '{non_color_col}'.")
+        # For all the color columns, ensure that the colors are valid hex colors. Tell the user that we only allow hex colors and not RGB or other formats.
+        for color_col in color_columns:
+            if not all(df[color_col].apply(lambda x: isinstance(x, str) and x.startswith("#") and len(x) == 7)):
+                raise ValueError(f"The metadata file {df_file} contains a column called '{color_col}', but it does not contain valid hex colors. We only allow hex colors in the format #RRGGBB.")
+
+        # NOW WE COLOR THE COLUMNS IF THERE IS NO _color COLUMN
+        # For all the columns that do not have a _color column, we will assign a color based on the values in the column.
+        non_color_non_rbh_columns = [col for col in df.columns if col != "rbh" and not col.endswith("_color")]
+        for thiscol in non_color_non_rbh_columns:
+            # If the column is numeric, we will assign a gradient color
+            if pd.api.types.is_numeric_dtype(df[thiscol]):
+                # Get the min and max values of the column
+                vmin = df[thiscol].min()
+                vmax = df[thiscol].max()
+                # Assign a color based on the values in the column - this is a bit of a magic "color" since we use it in the other function, but leaving it here for now
+                df[f"{thiscol}_color"] = df[thiscol].apply(lambda x: interpolate_color(x, vmin, vmax, "#DCDEE3", "#FF2608"))
+            else:
+                unique_values = df[thiscol].unique()
+                tcolor = "#074FF7"
+                fcolor = "#FD6117"
+
+                # there there is only one value, then raise a warning. There isn't a point for the user to color a column with only one value. Just color everything black.
+                if len(unique_values) == 1:
+                    print(f"Warning: The column '{thiscol}' in the metadata file '{df_file}' contains only one unique value. All points will be colored black.")
+                    df[f"{thiscol}_color"] = "#000000"
+                elif len(unique_values) == 2:
+                    # When there are only two things to color, blue/orange is a good contrasting choice that is colorblind-friendly.
+                    # If the column contains True/Fales values, color them with binary. In fact, if the column is boolean at all, just assign the two True/False colors randomly
+                    if set(unique_values).issubset({True, False}):
+                        # If the column is boolean, we will assign a color based on the True/False values
+                        df[f"{thiscol}_color"] = df[thiscol].map({True: tcolor, False: fcolor})
+                    else:
+                        # If there are only two unique values, we will assign tcolor or fcolor randomly
+                        df[f"{thiscol}_color"] = df[thiscol].apply(lambda x: tcolor if x == unique_values[0] else fcolor)
+                else:
+                    # This column is not numeric and not boolean, so we will assign a random color to each unique value
+                    # Generate a random color for each unique value. Use generate_random_color()
+                    unique_values = pd.Series(df[thiscol].dropna().unique())
+                    distinct_colors = generate_distinct_colors(len(unique_values))
+                    color_map = dict(zip(unique_values, distinct_colors))
+                    df[f"{thiscol}_color"] = df[thiscol].map(color_map).fillna("#000000")
+        # append each of these to the list of dataframes
+        list_of_dfs.append(df)
+    # Now we do some checks before merging to ensure their safety
+    # Check for column name conflicts (excluding 'rbh')
+    all_columns = [c for df in list_of_dfs for c in df.columns if c != "rbh"]
+    if len(all_columns) != len(set(all_columns)):
+        dupes = [c for c in set(all_columns) if all_columns.count(c) > 1]
+        raise ValueError(f"Conflicting column names across metadata files: {dupes}. "
+                         f"Each metadata file must have unique annotation column names.")
+
+    # Now we merge all the dataframes together on the "rbh" column
+    # Set index on rbh for merging
+    for i in range(len(list_of_dfs)):
+        list_of_dfs[i] = list_of_dfs[i].set_index("rbh")
+
+    # Merge all metadata dataframes on 'rbh'
+    from functools import reduce
+    merged_df = reduce(lambda left, right: left.join(right, how="outer"), list_of_dfs)
+
+    # Restore rbh as a column (optional, depending on your downstream needs)
+    merged_df.reset_index(inplace=True)
+
+    return merged_df
 
 def main():
     odpf.format_matplotlib()
     args = parse_args()
+
+
     if args.plot_features:
-        plot_features(args)
+        metadatadf = parse_metadata_dfs(args.metadata) if args.metadata else None
+        print(f"Metadata DataFrame:\n {metadatadf.head() if metadatadf is not None else 'No metadata provided'}")
+        outpdf = args.prefix + ".features.pdf"
+        plot_features(args, outpdf, metadata_df = metadatadf)
     else:
-        plot_paramsweep(args)
+        # In this scenario, we will simply plot the dataframes in a grid based on the parameters.
+        df_dict = generate_df_dict(args) # a special function that reads in the dataframes and extracts the parameters from the filenames
+        ## print the keys of the df_dict
+        #print(df_dict.keys())
+
+        # plot the parameter sweep plot, as a pdf or html or both
+        if args.pdf:
+            outpdf = args.prefix + ".pdf"
+            plot_paramsweep(df_dict, outpdf)
+        if args.html:
+            outhtml = args.prefix + ".html"
+            generate_umap_grid_bokeh(df_dict, outhtml)
 
 if __name__ == "__main__":
     main()
