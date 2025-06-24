@@ -23,6 +23,14 @@ chr_sort_order: optimal-chr-or
 #   - the significant lines will be 0.8, the faint lines will be 0.15
 plot_all: True
 
+# - If you want to plot everything, BUT, you don't want to plot the
+#    black lines on the significant relationships, set to False
+# - The black lines are the orthologous relationships that are on
+#    chromosomes with significant homologous relationships, but have
+#    not been assigned to a linkage group. This will make the resulting
+#    figures easier to work with.
+plot_unassigned_rbh: True
+
 # - First type in the list of species to plot
 # - In this example we plot the relationships between
 #   three species with the codes "EMU", "RES", and "HCA".

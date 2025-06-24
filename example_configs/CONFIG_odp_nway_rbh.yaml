@@ -23,12 +23,30 @@ search_method: "diamond" # this must be diamond or blastp
 # These are all of the analyses that you would like to perform.
 #  The things in quotes here are the 4-way comparisons that you would like to perform
 #  We require these to be explicitely specified in this program because of the higher compute
-#   time of each analysis. 
+#   time of each analysis.
+# Put them in the order that you want them to be plotted in the final ribbon diagram.
 analyses:
   - ["SP1", "SP2", "SP3"]
   - ["SP2", "SP3", "SP4"]
   # You can comment out analyses that you want to mark down, but not complete, or if you need to rerun the pipeline
   #- ["SP1", "SP2", "SP4"]
+
+# This is an optional field that allows you to specify the order of the chromosomes for the final ribbon diagram.
+# It does this on a per-analysis basis, so there are opportunities to have different chromosome orders for different analyses.
+chromosome_order:
+  # The key is "_".join(sorted(analysis_list)) - you may have to think about this a bit or copy/paste from the snakemake runtime
+  SP1_SP2_SP3:
+    SP1:
+      - chr1 # this only plots the chromosomes that are present. So be thorough.
+      - chr2
+    SP2:
+      - scaf3
+      - scaf2
+      - scaf1
+    SP3:
+      - chrA
+      - chrB
+
 
 num_permutations: 1000000
 
