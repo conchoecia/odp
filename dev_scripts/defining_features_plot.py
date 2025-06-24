@@ -17,7 +17,7 @@ from defining_features import load_coo
 
 from PhyloTreeUMAP import algcomboix_file_to_dict
 
-import rbh_tools
+import source.rbh_tools as rbh_tools
 
 #plotting stuff
 import matplotlib.pyplot as plt

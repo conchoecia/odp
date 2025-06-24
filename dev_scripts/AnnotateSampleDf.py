@@ -16,7 +16,7 @@ import fasta
 import matplotlib.pyplot as plt
 import odp_plotting_functions as odp_plot
 import pandas as pd
-from rbh_tools import parse_rbh
+from source.rbh_tools import parse_rbh
 
 def gen_rbh_stats(samplerbhfilepath, algrbhfilepath, ALGname, outfilepath):
     """

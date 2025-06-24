@@ -59,8 +59,8 @@ from odol_annotate_blast import (umapdf_one_species_one_query,
                                  umapdf_reimbedding_bokeh_plot_one_species)
 
 # ODP-specific imports
-snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
-scripts_path = os.path.join(snakefile_path, "../scripts")
+snakefile_path    = os.path.dirname(os.path.realpath(workflow.snakefile))
+scripts_path      = os.path.join(snakefile_path, "../scripts")
 dependencies_path = os.path.join(snakefile_path, "../dependencies")
 sys.path.insert(1, scripts_path)
 import odp_functions as odpf
@@ -139,6 +139,8 @@ sample_to_analysis = {}
 for thisanalysis in analysis_to_samples:
     for thissample in analysis_to_samples[thisanalysis]:
         sample_to_analysis[thissample] = thisanalysis
+print("This is samples to analysis")
+print(sample_to_analysis)
 
 for k in analysis_to_sampledf:
     print(f"{k}: {len(analysis_to_samples[k])} genomes")
@@ -206,7 +208,7 @@ rule all:
         #        ALG = config["targetALGs"],
         #        n = odol_n,
         #        m = odol_m),
-        ## pre-plotting df
+        ### pre-plotting df
         #expand(basedir + "/ALG_reimbedding/{analysis}/{ALG}/{analysis}.neighbors_{n}.mind_{m}.missing_large.subchrom.{query}.df",
         #        query = config["blast_files"],
         #        analysis = analysis_to_samples.keys(),
@@ -219,8 +221,10 @@ rule all:
         #        ALG = config["targetALGs"],
         #        n = odol_n,
         #        m = odol_m),
-        # file_targets contains the one-analysis-one-query-one-sample plots
+        ## file_targets contains the one-analysis-one-query-one-sample plots
         #file_targets
+        # this line will just cause the blast jobs to be produced
+        basedir + "/blast_filt/{query}/{sample}_results.filt.blastp"
 
 rule install_diamond:
     output:

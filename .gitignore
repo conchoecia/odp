@@ -25,6 +25,7 @@ LG_db/*/*.check
 LG_db/*/*.hmm
 LG_db/*/*.rbh
 LG_db/*/
+dev_scripts/deprecated/*
 ._*
 slurm-*
 make_submit.sh
@@ -40,3 +41,19 @@ tests/test_odp_basic/.snakemake/
 tests/test_odp_basic/benchmarks/
 
 .vscode/settings.json
+taxdump.tar.gz
+dependencies/diamond/diamond
+dev_scripts/disk_freezing_test/PhyloTreeUMAP_forloop.py
+dev_scripts/disk_freezing_test/PhyloTreeUMAP_test.snakefile
+dev_scripts/disk_freezing_test/rbh_tools.py
+dev_scripts/ram_test/input_file.txt
+dev_scripts/ram_test/output_file.txt
+dev_scripts/ram_test/ram_test.snakefile
+dev_scripts/ram_test/run_test.sh
+dev_scripts/snakemake_jobs_testing/check_input_legality_profiling.py
+dev_scripts/snakemake_jobs_testing/chromsize_small.py
+dev_scripts/snakemake_jobs_testing/download_minimal.snakefile
+dev_scripts/snakemake_jobs_testing/find_and_plot_gzip_timing.py
+dev_scripts/snakemake_jobs_testing/gzip_time_test.snakefile
+dev_scripts/snakemake_jobs_testing/job_gzip.snakefile
+dev_scripts/snakemake_jobs_testing/job_limiting.snakefile

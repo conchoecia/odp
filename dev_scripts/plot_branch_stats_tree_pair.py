@@ -10,7 +10,7 @@ import ete3
 import os
 import pandas as pd
 # import rbh tools
-import rbh_tools
+import source.rbh_tools as rbh_tools
 import sys
 
 # import from other program

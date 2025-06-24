@@ -14,7 +14,7 @@ from PhyloTreeUMAP import algcomboix_file_to_dict
 import numpy as np
 import os
 import pandas as pd
-import rbh_tools
+import source.rbh_tools as rbh_tools
 import scipy.stats as stats
 import sys
 

@@ -30,7 +30,7 @@ thisfile_path = os.path.dirname(os.path.realpath(__file__))
 scripts_path = os.path.join(thisfile_path, "../scripts")
 sys.path.insert(1, scripts_path)
 import odp_plotting_functions as odp_plot
-import rbh_tools
+import source.rbh_tools as rbh_tools
 import argparse
 import pandas as pd
 

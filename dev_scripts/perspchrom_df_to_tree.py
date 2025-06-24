@@ -12,7 +12,7 @@ import glob
 
 # import the parse_rbh_file from the plot_ALG_fusions.py script
 # this is a function that parses the RBH file into a dataframe
-import rbh_tools
+import source.rbh_tools as rbh_tools
 
 import matplotlib.pyplot as plt
 # import patches

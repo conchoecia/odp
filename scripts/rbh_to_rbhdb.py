@@ -45,9 +45,13 @@ def parse_args():
 
 def main():
     args = parse_args()
+    print("Looking in the following directory for .rbh files: {}".format(args.rbh_direc), file = sys.stderr)
 
     # 1. Load in the absolute paths of all of the RBH files
     rbh_files = [os.path.join(args.rbh_direc, f) for f in os.listdir(args.rbh_direc) if f.endswith('.rbh')]
+    print("We have found the following rbh files:", file = sys.stderr)
+    for f in rbh_files:
+        print(f, file = sys.stderr)
     # load all of these into pandas dataframes
     rbh_dfs = [pd.read_csv(f, sep='\t') for f in rbh_files]
 
