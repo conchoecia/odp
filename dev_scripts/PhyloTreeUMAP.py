@@ -158,14 +158,14 @@ def taxids_of_interest_to_analyses():
                #[[7711],  []],          # Chordata
                #[[7742],  []],      # Vertebrata
                #[[33317],[]]        # Protostomia
-               # [[6340],  [42113]], # annelida minus clitellata
-               # [[6340],  []],      # annelida
-               # [[42113], []],      # clitellata
-               # [[42113], [6392]],      # clitellata minus lumbricidae
+               #[[6340],  [42113]], # annelida minus clitellata
+               [[6340],  []],      # annelida
+               [[42113], []],      # clitellata
+               [[42113], [6392]],      # clitellata minus lumbricidae
                # [[2697495], []],      # spiralia
-               [[6606],  []],      # coleoida
-               [[215450], []],      # decapodiformes
-               [[215451], []],      # octopodiformes
+               #[[6606],  []],      # coleoida
+               #[[215450], []],      # decapodiformes
+               #[[215451], []],      # octopodiformes
                ##[[50557], []],      # insecta
                #[[32341], []],      # Sophophora - subset of drosophilids
                ##[[61985], []],     # myriapoda
@@ -969,14 +969,16 @@ def get_text_color(hex_color):
     brightness = (r * 299 + g * 587 + b * 114) / 1000
     return "#000000" if brightness > 128 else "#FFFFFF"  # Dark colors get white text, bright colors get black text
 
-
-def mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP"):
+def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = None):
     """
     This function takes the UMAPdf and generates an interactive Bokeh plot
     with search functionality for RBH Ortholog and Gene Group.
     It also displays a table below the figure, allowing toggling between OR (||) and AND (&&) searches
     and enabling dataset export.
     """
+    if analysis_type not in ["MGT", "MLT"]:
+        raise ValueError(f"Invalid analysis_type: {analysis_type}. Must be 'MGT' or 'MLT'.")
+
     if not outhtml.endswith(".html"):
         raise ValueError(f"The output file {outhtml} does not end with '.html'. Exiting.")
 
@@ -1013,177 +1015,187 @@ def mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP"):
                            source=source, size="size",
                            color="color", alpha=0.7)
 
-    # Add hover tool for metadata display
-    hover = bokeh.models.HoverTool(tooltips=[
-        ("RBH Ortholog", "@rbh"),
-        ("Gene Group", "@gene_group"),
-    ])
-    plot.add_tools(hover)
+    if analysis_type == "MLT":
+        # Add hover tool for metadata display
+        hover = bokeh.models.HoverTool(tooltips=[
+            ("RBH Ortholog", "@rbh"),
+            ("Gene Group", "@gene_group"),
+        ])
+        plot.add_tools(hover)
+        # Text input fields for search (placed BELOW the plot)
+        search_rbh = bokeh.models.TextInput(title="Search RBH Ortholog:")
+        search_group = bokeh.models.TextInput(title="Search Gene Group:")
 
-    # Text input fields for search (placed BELOW the plot)
-    search_rbh = bokeh.models.TextInput(title="Search RBH Ortholog:")
-    search_group = bokeh.models.TextInput(title="Search Gene Group:")
+        # Button to toggle between OR (||) and AND (&&) search logic
+        search_toggle = bokeh.models.Button(label="Search Type: OR (||)", button_type="primary")
+        search_mode = bokeh.models.Toggle(label="Search Mode")  # False = OR (||), True = AND (&&)
 
-    # Button to toggle between OR (||) and AND (&&) search logic
-    search_toggle = bokeh.models.Button(label="Search Type: OR (||)", button_type="primary")
-    search_mode = bokeh.models.Toggle(label="Search Mode")  # False = OR (||), True = AND (&&)
+        # Button to update the plot based on search terms
+        update_button = bokeh.models.Button(label="Update Plot", button_type="success")
 
-    # Button to update the plot based on search terms
-    update_button = bokeh.models.Button(label="Update Plot", button_type="success")
+        # Dynamically determine the max width needed for RBH column
+        max_rbh_length = max(plot_data["rbh"].astype(str).apply(len))  # Get max string length
+        rbh_column_width = min(max(80, max_rbh_length * 5), 250)
 
-    # Dynamically determine the max width needed for RBH column
-    max_rbh_length = max(plot_data["rbh"].astype(str).apply(len))  # Get max string length
-    rbh_column_width = min(max(80, max_rbh_length * 5), 250)
+        # Create table columns with optimized widths
+        columns = [
+            bokeh.models.TableColumn(field="rbh", title="RBH Ortholog", width=rbh_column_width),  # Adjust width dynamically
+            bokeh.models.TableColumn(field="gene_group", title="Gene Group", width=1),  # Auto-fit
+            bokeh.models.TableColumn(field="UMAP1", title="UMAP1", width=1),  # Auto-fit
+            bokeh.models.TableColumn(field="UMAP2", title="UMAP2", width=1),  # Auto-fit
+            bokeh.models.TableColumn(
+                field="original_color", title="Color",
+                formatter=bokeh.models.HTMLTemplateFormatter(template="""
+                    <span style="background-color:<%= original_color %>;
+                                color:<%= text_color %>;
+                                display:inline-block;
+                                width:auto;
+                                min-width:60px;
+                                text-align:center;
+                                padding:2px 5px;">
+                        <%= original_color %>
+                    </span>
+                """),
+                width=75  # Just wide enough for hex code text
+            )
+        ]
 
-    # Create table columns with optimized widths
-    columns = [
-        bokeh.models.TableColumn(field="rbh", title="RBH Ortholog", width=rbh_column_width),  # Adjust width dynamically
-        bokeh.models.TableColumn(field="gene_group", title="Gene Group", width=1),  # Auto-fit
-        bokeh.models.TableColumn(field="UMAP1", title="UMAP1", width=1),  # Auto-fit
-        bokeh.models.TableColumn(field="UMAP2", title="UMAP2", width=1),  # Auto-fit
-        bokeh.models.TableColumn(
-            field="original_color", title="Color",
-            formatter=bokeh.models.HTMLTemplateFormatter(template="""
-                <span style="background-color:<%= original_color %>; 
-                            color:<%= text_color %>; 
-                            display:inline-block; 
-                            width:auto; 
-                            min-width:60px; 
-                            text-align:center; 
-                            padding:2px 5px;">
-                    <%= original_color %>
-                </span>
-            """),
-            width=75  # Just wide enough for hex code text
+        # Create DataTable with properly adjusted column sizes
+        data_table = bokeh.models.DataTable(
+            source=filtered_source,
+            columns=columns,
+            width=800, height=300,
+            editable=True,
+            sizing_mode="stretch_width"
         )
-    ]
 
-    # Create DataTable with properly adjusted column sizes
-    data_table = bokeh.models.DataTable(
-        source=filtered_source,
-        columns=columns,
-        width=800, height=300,
-        editable=True,
-        sizing_mode="stretch_width"
-    )
+        # Button to export the current table dataset
+        export_button = bokeh.models.Button(label="Export Data Below", button_type="success")
 
-    # Button to export the current table dataset
-    export_button = bokeh.models.Button(label="Export Data Below", button_type="success")
+        # JavaScript Callback for Update Button (Replaces need to press Enter)
+        update_callback = bokeh.models.CustomJS(args=dict(
+            source=source,
+            filtered_source=filtered_source,
+            search_rbh=search_rbh,
+            search_group=search_group,
+            search_mode=search_mode,
+            scatter=scatter
+        ), code="""
+            var data = source.data;
+            var filtered_data = filtered_source.data;
+            var rbh_input = search_rbh.value.trim().toLowerCase();
+            var group_input = search_group.value.trim().toLowerCase();
+            var colors = data['color'];
+            var sizes = data['size'];
+            var selected_indices = [];
 
-    # JavaScript Callback for Update Button (Replaces need to press Enter)
-    update_callback = bokeh.models.CustomJS(args=dict(
-        source=source,
-        filtered_source=filtered_source,
-        search_rbh=search_rbh,
-        search_group=search_group,
-        search_mode=search_mode,
-        scatter=scatter
-    ), code="""
-        var data = source.data;
-        var filtered_data = filtered_source.data;
-        var rbh_input = search_rbh.value.trim().toLowerCase();
-        var group_input = search_group.value.trim().toLowerCase();
-        var colors = data['color'];
-        var sizes = data['size'];
-        var selected_indices = [];
+            var use_and_logic = search_mode.active; // True for AND (&&), False for OR (||)
 
-        var use_and_logic = search_mode.active; // True for AND (&&), False for OR (||)
+            // If no search term is provided, show all data in the table and reset colors
+            var show_all_data = (rbh_input === "" && group_input === "");
 
-        // If no search term is provided, show all data in the table and reset colors
-        var show_all_data = (rbh_input === "" && group_input === "");
-
-        // Clear filtered source data
-        for (var key in filtered_data) {
-            filtered_data[key] = [];
-        }
-
-        for (var i = 0; i < colors.length; i++) {
-            var rbh_match = (rbh_input !== "" && data['rbh'][i].toLowerCase().includes(rbh_input));
-            var group_match = (group_input !== "" && data['gene_group'][i].toLowerCase().includes(group_input));
-
-            var match = (use_and_logic) ? (rbh_match && group_match) : (rbh_match || group_match);
-
-            if (match) {
-                colors[i] = "red";  // Highlight color in plot
-                sizes[i] = 8;       // Double the size
-                selected_indices.push(i);
-            } else {
-                colors[i] = data['original_color'][i]; // Keep original color
-                sizes[i] = 4;
+            // Clear filtered source data
+            for (var key in filtered_data) {
+                filtered_data[key] = [];
             }
 
-            // If no search, restore everything. Otherwise, only show matched rows in the table.
-            if (show_all_data || selected_indices.includes(i)) {
-                for (var key in filtered_data) {
-                    filtered_data[key].push(data[key][i]);
+            for (var i = 0; i < colors.length; i++) {
+                var rbh_match = (rbh_input !== "" && data['rbh'][i].toLowerCase().includes(rbh_input));
+                var group_match = (group_input !== "" && data['gene_group'][i].toLowerCase().includes(group_input));
+
+                var match = (use_and_logic) ? (rbh_match && group_match) : (rbh_match || group_match);
+
+                if (match) {
+                    colors[i] = "red";  // Highlight color in plot
+                    sizes[i] = 8;       // Double the size
+                    selected_indices.push(i);
+                } else {
+                    colors[i] = data['original_color'][i]; // Keep original color
+                    sizes[i] = 4;
+                }
+
+                // If no search, restore everything. Otherwise, only show matched rows in the table.
+                if (show_all_data || selected_indices.includes(i)) {
+                    for (var key in filtered_data) {
+                        filtered_data[key].push(data[key][i]);
+                    }
                 }
             }
-        }
 
-        // Restore original colors if no search is active
-        if (show_all_data) {
-            for (var i = 0; i < colors.length; i++) {
-                colors[i] = data['original_color'][i];
-                sizes[i] = 4;
+            // Restore original colors if no search is active
+            if (show_all_data) {
+                for (var i = 0; i < colors.length; i++) {
+                    colors[i] = data['original_color'][i];
+                    sizes[i] = 4;
+                }
             }
-        }
 
-        // Update sources
-        source.selected.indices = selected_indices;
-        source.change.emit();
-        filtered_source.change.emit();
-    """)
+            // Update sources
+            source.selected.indices = selected_indices;
+            source.change.emit();
+            filtered_source.change.emit();
+        """)
 
-    update_button.js_on_event("button_click", update_callback)
+        update_button.js_on_event("button_click", update_callback)
 
-    # Toggle search mode (OR <-> AND) and update the button label
-    toggle_callback = bokeh.models.CustomJS(args=dict(
-        search_toggle=search_toggle,
-        search_mode=search_mode
-    ), code="""
-        search_mode.active = !search_mode.active;
-        search_toggle.label = search_mode.active ? "Search Type: AND (&&)" : "Search Type: OR (||)";
-        search_toggle.change.emit();
-    """)
+        # Toggle search mode (OR <-> AND) and update the button label
+        toggle_callback = bokeh.models.CustomJS(args=dict(
+            search_toggle=search_toggle,
+            search_mode=search_mode
+        ), code="""
+            search_mode.active = !search_mode.active;
+            search_toggle.label = search_mode.active ? "Search Type: AND (&&)" : "Search Type: OR (||)";
+            search_toggle.change.emit();
+        """)
 
-    search_toggle.js_on_event("button_click", toggle_callback)
-    search_toggle.js_on_event("button_click", update_callback)
+        search_toggle.js_on_event("button_click", toggle_callback)
+        search_toggle.js_on_event("button_click", update_callback)
 
-    # Export Button Callback (Exports highlighted data or full dataset)
-    export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source), code="""
-        var active_data = filtered_source.data['rbh'].length > 0 ? filtered_source.data : source.data;
-        var keys = Object.keys(active_data);
-        var num_rows = active_data[keys[0]].length;
+        # Export Button Callback (Exports highlighted data or full dataset)
+        export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source), code="""
+            var active_data = filtered_source.data['rbh'].length > 0 ? filtered_source.data : source.data;
+            var keys = Object.keys(active_data);
+            var num_rows = active_data[keys[0]].length;
 
-        // Remove unwanted columns (size, color, Unnamed), but keep "original_color" and rename it to "color"
-        var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color");
+            // Remove unwanted columns (size, color, Unnamed), but keep "original_color" and rename it to "color"
+            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color");
 
-        // Rename "original_color" to "color"
-        var renamed_keys = filtered_keys.map(k => k === "original_color" ? "color" : k);
+            // Rename "original_color" to "color"
+            var renamed_keys = filtered_keys.map(k => k === "original_color" ? "color" : k);
 
-        var csv_content = renamed_keys.join("\\t") + "\\n"; // Tab-separated column headers
-        for (var i = 0; i < num_rows; i++) {
-            var row = [];
-            for (var j = 0; j < filtered_keys.length; j++) {
-                row.push(active_data[filtered_keys[j]][i]);
+            var csv_content = renamed_keys.join("\\t") + "\\n"; // Tab-separated column headers
+            for (var i = 0; i < num_rows; i++) {
+                var row = [];
+                for (var j = 0; j < filtered_keys.length; j++) {
+                    row.push(active_data[filtered_keys[j]][i]);
+                }
+                csv_content += row.join("\\t") + "\\n";
             }
-            csv_content += row.join("\\t") + "\\n";
-        }
 
-        var blob = new Blob([csv_content], { type: 'text/plain' });
-        var a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = (filtered_source.data['rbh'].length > 0) ? "highlighted_data.tsv" : "full_data.tsv";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-    """)
+            var blob = new Blob([csv_content], { type: 'text/plain' });
+            var a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = (filtered_source.data['rbh'].length > 0) ? "highlighted_data.tsv" : "full_data.tsv";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        """)
 
-    export_button.js_on_event("button_click", export_callback)
+        export_button.js_on_event("button_click", export_callback)
 
-    # Layout
-    search_row = bokeh.layouts.row(search_group, search_toggle, search_rbh, update_button, export_button, align="end")
-    layout = bokeh.layouts.column(plot, search_row, data_table)
+        # Layout
+        search_row = bokeh.layouts.row(search_group, search_toggle, search_rbh, update_button, export_button, align="end")
+        layout = bokeh.layouts.column(plot, search_row, data_table)
+
+    elif analysis_type == "MGT":
+        # Add hover tool for metadata display
+        hover = bokeh.models.HoverTool(tooltips=[
+            ("Sample", "@sample"),
+            ("taxid", "@taxid"),
+            ("Taxstring", "@taxname_list_str")
+        ])
+        plot.add_tools(hover)
+        layout = bokeh.layouts.column(plot)
 
     # Output to HTML
     bokeh.plotting.output_file(outhtml)
@@ -1767,31 +1779,42 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
     # save the resulting coo file
     save_npz(outcoofile, resultscoo)
 
-def mlt_umap(sampledffile, algrbhfile, coofile,
+def mgt_mlt_umap(sampledffile, LocusFile, coofile,
              smalllargeNaN, n_neighbors, min_dist,
-             UMAPdfout):
+             dfoutfilepath, missing_value_as = 999999999999):
     """
-    This all-in-one plotting method makes UMAPs for the locus distance ALGs
-        constructed by averaging across multiple species.
-    Specifically, this is used for plotting the one-dot-one-locus UMAP plots.
+    Last Updated: 20250612
+
+    This all-in-one plotting method makes UMAPs for the genome distance ALGs
+        constructed by looking at the topology of whole genomes.
+    This file can be used to calculate both the MLT and MGT matrices. The only
+        difference in inputs is the LocusFile. In MLT plots the LocusFile is the
+        ALG rbh file, and in MGT plots it is the rbh index combo file.
+
+    This function was written to avoid a previous version that relied on the umap package to
+      generate the plots, which lapsed in its code concurrency with bokeh, causing issues.
+      Instead, the umap package is only used now to generate the UMAP dataframe.
 
     Inputs:
-      - sampledffile:  The file that contains the sample dataframe.
-                        This is a tab-separated file that contains information on the
-                        genomes used in this analysis.
-      - algrbhfile:    The rbh database used for the markers in this analysis.
-      - coofile:       The file that contains the locus distance matrix.
-                        This is a .npz file.
-      - smalllargeNaN: This is a string that is either "small" or "large".
-                        This determines how the missing values are filled in.
-                        If "small", missing is set as 0, if "large", it is set
-                        as 999999999999. These missing values are averaged out in the
-                        phylogenetic weighting.
-      - n_neighbors:   This is the number of neighbors to use for the UMAP. This is an integer.
-      - min_dist:      This is the minimum distance to use for the UMAP. This is a float.
-      - UMAPdfout:     This is the file that contains the UMAP dataframe.
-                        This is a tab-separated file that contains the rbh db file, plus
-                        the UMAP1 and UMAP2 coordinates.
+      - sampledffile:   The file that contains the sample dataframe.
+                         This is a tab-separated file that contains information on the
+                         genomes used in this analysis.
+      - LocusFile: The rbh database used for the markers in this analysis. In the case of MGT,
+                            this is the alg_combo_to_ix file, which is a .tsv file that contains
+                            the rbh db file, plus the index of the rbh db file. In the case of MLT,
+                            this is the rbh db file, which is a .tsv file that contains the rbh db file,
+      - coofile:        The file that contains the locus distance matrix.
+                         This is a .npz file.
+      - smalllargeNaN:  This is a string that is either "small" or "large".
+                         This determines how the missing values are filled in.
+                         If "small", missing is set as 0, if "large", it is set
+                         as 999999999999. These missing values are averaged out in the
+                         phylogenetic weighting.
+      - n_neighbors:    This is the number of neighbors to use for the UMAP. This is an integer.
+      - min_dist:       This is the minimum distance to use for the UMAP. This is a float.
+      - UMAPdfout:      This is the file that contains the UMAP dataframe.
+                         This is a tab-separated file that contains the rbh db file, plus
+                         the UMAP1 and UMAP2 coordinates.
     """
     # check that the types are correct
     if type(n_neighbors) not in [int, float]:
@@ -1799,16 +1822,29 @@ def mlt_umap(sampledffile, algrbhfile, coofile,
     if type(min_dist) not in [float]:
         raise ValueError(f"The min_dist {min_dist} is not of type float. Exiting.")
 
+    # check that all of the relevant files are actually present
+    for filepath in [sampledffile, LocusFile, coofile]:
+        if not os.path.exists(filepath):
+            raise IOError(f"The file {filepath} does not exist. Exiting.")
+
+    # check that the file ending for the df outfile is .df
+    if not dfoutfilepath.endswith(".df"):
+        raise ValueError(f"The dfoutfilepath {dfoutfilepath} does not end with '.df'. Exiting.")
+
     # read in the sample dataframe. We will need this later
     cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
-    # read in the algrbh as a pandasdf
-    algrbhdf = rbh_tools.parse_rbh(algrbhfile)
+    # Read in the LocusFile
+    ALGcomboix = algcomboix_file_to_dict(LocusFile)
     lil = load_npz(coofile).tolil()
 
     # check that the largest row index of the lil matrix is less than the largest index of cdf - 1
-    if (lil.shape[0] != len(algrbhdf)) and (lil.shape[1] != len(algrbhdf)):
+    if (lil.shape[0] != len(cdf)):
         raise ValueError(f"The largest row index of the lil matrix, {lil.shape[0]}, is greater than the largest index of cdf, {max(cdf.index)}. Exiting.")
-    if n_neighbors >= len(algrbhdf):
+    # make sure that the other axis is the same length as ALGcomboix
+    if (lil.shape[1] != len(ALGcomboix)):
+        raise ValueError(f"The largest column index of the lil matrix, {lil.shape[1]}, is greater than the length of ALGcomboix, {len(ALGcomboix)}. Exiting.")
+    if n_neighbors >= len(cdf):
+        # TODO 20250612 - It may be that we should save an empty file in this case to prevent crashes elsewhere.
         raise ValueError(f"The number of samples, {len(cdf)}, is less than the number of neighbors, {n_neighbors}. Exiting.")
     # If we pass these checks, we should be fine
 
@@ -1816,16 +1852,41 @@ def mlt_umap(sampledffile, algrbhfile, coofile,
     if smalllargeNaN not in ["small", "large"]:
         raise ValueError(f"The smalllargeNaN {smalllargeNaN} is not 'small' or 'large'. Exiting.")
     if smalllargeNaN == "large":
+        # If the matrix is large, we have to convert the real zeros to -1 before we change to csf
         # we have to flip the values of the lil matrix
-        lil.data[lil.data == 0] = 999999999999
+        print("setting zeros to -1")
+        lil.data[lil.data == 0] = -1
+        # We have to convert this to a dense matrix now. There is no way to modify the large values in a sparse matrix.
+        print("Converting to a dense matrix. RAM will increase now.")
+        # Goodbye, RAM.
+        matrix = lil.toarray()
+        del lil
+        # if the missing_values is "large", then we have to convert the 0 to the missing_value_as
+        # Here we switch the representation, namely we don't have to access the data with .data now that this
+        #  is a dense matrix.
+        print(f"setting zeros to {missing_value_as}")
+        matrix[matrix == 0] = missing_value_as
+        # now we convert the -1s to 0
+        print("converting -1s to 0")
+        matrix[matrix == -1] = 0
+        # Note 20250624 - in this method we were playing with inverting the values
+        # add 1 to everything, and do 1/matrix to invert the values
+        # add 1
+        matrix= matrix + 1
+        # invert the values
+        matrix = 1/matrix
         #
+    elif smalllargeNaN == "small":
+        # just change the name
+        matrix = lil
+        del lil
     # check that min_dist is between 0 and 1
     if min_dist < 0 or min_dist > 1:
         raise IOError(f"The min_dist {min_dist} is not between 0 and 1. Exiting.")
 
     # We need a unique set of files for each of these
     # In every case, we must produce a .df file and a .bokeh.html file
-    print(f"    PLOTTING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
+    print(f"    CALCULATING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
     reducer = umap.UMAP(low_memory=True, n_neighbors = n_neighbors, min_dist = min_dist)
     start = time.time()
     # Enter the context manager to catch warnings.
@@ -1835,7 +1896,7 @@ def mlt_umap(sampledffile, algrbhfile, coofile,
         # Ignore UserWarnings temporarily
         warnings.filterwarnings("ignore", category=UserWarning)
         # Your code that might raise the warning
-        mapper = reducer.fit(lil)
+        mapper = reducer.fit(matrix)
         # Check if any warning was generated
         if w:
             for warning in w:
@@ -1846,24 +1907,118 @@ def mlt_umap(sampledffile, algrbhfile, coofile,
     stop = time.time()
     print("   - It took {} seconds to fit_transform the UMAP".format(stop - start))
     print("   - Running the function umap_mapper_to_df")
+    print("This is a sample of the embedding")
+    print(pd.DataFrame(mapper.embedding_, columns = ["UMAP1", "UMAP2"]))
     start = time.time()
-    umap_df = umap_mapper_to_df(mapper, algrbhdf)
+    umap_df = umap_mapper_to_df(mapper, cdf)
     stop  = time.time()
     print("     - It took {} seconds to make the df".format(stop - start))
     print("   - Running the function to_csv")
     start = time.time()
-    umap_df.to_csv(UMAPdfout, sep = "\t", index = True)
+    umap_df.to_csv(dfoutfilepath, sep = "\t", index = True)
     stop  = time.time()
     print("     - It took {} seconds to save the df".format(stop - start))
     print("   - Done with the topoumap_plotumap function")
     return 0
+
+# NOTE 20250612 - note to be deprecated. replaced by mgt_mlt_umap
+#def mlt_umap(sampledffile, algrbhfile, coofile,
+#             smalllargeNaN, n_neighbors, min_dist,
+#             UMAPdfout):
+#    """
+#    This all-in-one plotting method makes UMAPs for the locus distance ALGs
+#        constructed by averaging across multiple species.
+#    Specifically, this is used for plotting the one-dot-one-locus UMAP plots.
+#
+#    Inputs:
+#      - sampledffile:  The file that contains the sample dataframe.
+#                        This is a tab-separated file that contains information on the
+#                        genomes used in this analysis.
+#      - algrbhfile:    The rbh database used for the markers in this analysis.
+#      - coofile:       The file that contains the locus distance matrix.
+#                        This is a .npz file.
+#      - smalllargeNaN: This is a string that is either "small" or "large".
+#                        This determines how the missing values are filled in.
+#                        If "small", missing is set as 0, if "large", it is set
+#                        as 999999999999. These missing values are averaged out in the
+#                        phylogenetic weighting.
+#      - n_neighbors:   This is the number of neighbors to use for the UMAP. This is an integer.
+#      - min_dist:      This is the minimum distance to use for the UMAP. This is a float.
+#      - UMAPdfout:     This is the file that contains the UMAP dataframe.
+#                        This is a tab-separated file that contains the rbh db file, plus
+#                        the UMAP1 and UMAP2 coordinates.
+#    """
+#    # check that the types are correct
+#    if type(n_neighbors) not in [int, float]:
+#        raise ValueError(f"The n_neighbors {n_neighbors} is not of type int or float. Exiting.")
+#    if type(min_dist) not in [float]:
+#        raise ValueError(f"The min_dist {min_dist} is not of type float. Exiting.")
+#
+#    # read in the sample dataframe. We will need this later
+#    cdf = pd.read_csv(sampledffile, sep = "\t", index_col = 0)
+#    # read in the algrbh as a pandasdf
+#    algrbhdf = rbh_tools.parse_rbh(algrbhfile)
+#    lil = load_npz(coofile).tolil()
+#
+#    # check that the largest row index of the lil matrix is less than the largest index of cdf - 1
+#    if (lil.shape[0] != len(algrbhdf)) and (lil.shape[1] != len(algrbhdf)):
+#        raise ValueError(f"The largest row index of the lil matrix, {lil.shape[0]}, is greater than the largest index of cdf, {max(cdf.index)}. Exiting.")
+#    if n_neighbors >= len(algrbhdf):
+#        raise ValueError(f"The number of samples, {len(cdf)}, is less than the number of neighbors, {n_neighbors}. Exiting.")
+#    # If we pass these checks, we should be fine
+#
+#    # check that the smalllargeNaN is either small or large
+#    if smalllargeNaN not in ["small", "large"]:
+#        raise ValueError(f"The smalllargeNaN {smalllargeNaN} is not 'small' or 'large'. Exiting.")
+#    if smalllargeNaN == "large":
+#        # we have to flip the values of the lil matrix
+#        lil.data[lil.data == 0] = 999999999999
+#        #
+#    # check that min_dist is between 0 and 1
+#    if min_dist < 0 or min_dist > 1:
+#        raise IOError(f"The min_dist {min_dist} is not between 0 and 1. Exiting.")
+#
+#    # We need a unique set of files for each of these
+#    # In every case, we must produce a .df file and a .bokeh.html file
+#    print(f"    PLOTTING - UMAP with {smalllargeNaN} missing vals, with n_neighbors = {n_neighbors}, and min_dist = {min_dist}")
+#    reducer = umap.UMAP(low_memory=True, n_neighbors = n_neighbors, min_dist = min_dist)
+#    start = time.time()
+#    # Enter the context manager to catch warnings.
+#    # For some of these parameters, namely small n_neighbors, the graph may not be fully connected.
+#    #  This will cause a warning to be raised by UMAP.
+#    with warnings.catch_warnings(record=True) as w:
+#        # Ignore UserWarnings temporarily
+#        warnings.filterwarnings("ignore", category=UserWarning)
+#        # Your code that might raise the warning
+#        mapper = reducer.fit(lil)
+#        # Check if any warning was generated
+#        if w:
+#            for warning in w:
+#                if issubclass(warning.category, UserWarning):
+#                    disconnected = True
+#                    print("Got the warning that the graph is not fully connected. This happens mostly in the case of clades with highly conserved genomes:", warning.message)
+#                    # You can further process or log the warning here if needed
+#    stop = time.time()
+#    print("   - It took {} seconds to fit_transform the UMAP".format(stop - start))
+#    print("   - Running the function umap_mapper_to_df")
+#    start = time.time()
+#    umap_df = umap_mapper_to_df(mapper, algrbhdf)
+#    stop  = time.time()
+#    print("     - It took {} seconds to make the df".format(stop - start))
+#    print("   - Running the function to_csv")
+#    start = time.time()
+#    umap_df.to_csv(UMAPdfout, sep = "\t", index = True)
+#    stop  = time.time()
+#    print("     - It took {} seconds to save the df".format(stop - start))
+#    print("   - Done with the topoumap_plotumap function")
+#    return 0
 
 def mlt_umapHTML(sample, sampledffile, algrbhfile, coofile,
              smalllargeNaN, n_neighbors, min_dist,
              outdffilepath, outbokehfilepath, outjpegfilepath = None,
              plot_jpeg = False):
     """
-    This is used 
+    This is used to make an html file of the HTML results.
     """
     # check that the types are correct
     if type(n_neighbors) not in [int, float]:
@@ -2355,6 +2510,7 @@ def plot_umap_phylogeny_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_n
     plt.subplots_adjust(right=0.95)
     # adjust the plot so that we can see to the right
 
+    print(df_embedding)
     phylogeny_plot_object = phylogeny_plotting(df_embedding, "taxid_list", "UMAP1", "UMAP2")
     for edge in phylogeny_plot_object.plot_edges:
         plt.plot([edge["x1"], edge["x2"]], [edge["y1"], edge["y2"]], lw = 0.5, color = edge["color"])
@@ -2369,6 +2525,8 @@ def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
                          UMAPconnectivity = "",
                          missing_value_as = 9999999999):
     """
+    NOTE 20250612: This method is set to be deprecated in the future, as it uses deprecated plotting
+                   methods from UMAP.
     This is an all-in-one plotting method to make UMAP plots from the files.
     Specifically, this is used for plotting the one-dot-one-genome (ODOG) UMAP plots.
     This rule can be used both for cases where the user wants to plot all of the genomes for the dataset,
