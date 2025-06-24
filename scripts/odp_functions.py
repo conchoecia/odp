@@ -376,6 +376,7 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
       1. Check that the file exists
       2. Check that the proteins in column 1 were seen in the protein fasta file
       3. Check that the scaffolds were seen in the genome assembly fasta file
+
     """
 
     # PARSE AND CHECK THE GENOME ASSEMBLY
@@ -480,7 +481,7 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
         line = line.strip()
         if line:
             fields = line.split("\t")
-            # check that the protein was seen in the protein fasta file 
+            # check that the protein was seen in the protein fasta file
             protid = fields[0]
             scaffold = fields[1]
             if protid not in protein_headers:
@@ -507,7 +508,7 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
         outmessage += "*\n"
         outmessage += "*  Please investigate whether there are too many entries in the .chrom\n"
         outmessage += "*   file, or if something is missing from the protein .fasta file.\n"
-        outmessage += "*   Then, fix your files and re-run this pipeline.\n"  
+        outmessage += "*   Then, fix your files and re-run this pipeline.\n"
         outmessage += "*********************************************************************\n"
         raise IOError(outmessage)
 
@@ -530,7 +531,7 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
         outmessage += "*\n"
         outmessage += "*  Please investigate whether there are too many entries in the .chrom\n"
         outmessage += "*   file, or if something is missing from the genome .fasta file.\n"
-        outmessage += "*   Then, fix your files and re-run this pipeline.\n"  
+        outmessage += "*   Then, fix your files and re-run this pipeline.\n"
         outmessage += "*********************************************************************\n"
 
     # everything passed
@@ -545,9 +546,9 @@ def check_legality(config):
     # The following strings are illegal and may have been used in previous versions of the program
     #  - "prot_to_loc"
     #  - "prot_to_loc"
-    legal = ["proteins", "chrom", "genome", "genus",
+    legal = ["assembly_accession", "proteins", "chrom", "genome", "genus",
              "minscafsize", "manual_breaks", "chrom_to_color",
-             "plotorder", "species", "prot_to_group"]
+             "plotorder", "prot_to_group", "species", "taxid" ]
     illegal = set()
 
     for this_axis in ["species"]:

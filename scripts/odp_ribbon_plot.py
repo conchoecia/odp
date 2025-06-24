@@ -39,9 +39,7 @@ def _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size,
     if len(checklist) > 0:
         raise IOError("These chromosomes in the chromosome order list for sp {} were not in the fasta file: {}".format(
             sp, checklist))
-    # if we included a list of chromosomes below, remove those 
-    #TODO DELETE
-    print("sp_to_gene_order: {}".format(sp_to_gene_order))
+    # if we included a list of chromosomes below, remove those
     if sp in sp_to_gene_order:
         templist2 = [x for x in templist if x in sp_to_gene_order[sp]]
         templist = templist2
