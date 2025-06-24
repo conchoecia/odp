@@ -20,7 +20,8 @@ from PhyloTreeUMAP import (algcomboix_file_to_dict,
                            topoumap_genmatrix,
                            mgt_mlt_umap,
                            mgt_mlt_plot_HTML,
-                           sampleToRbhFileDict_to_sample_matrix)
+                           sampleToRbhFileDict_to_sample_matrix,
+                           odog_pairwise_distance_matrix)
 
 # get the path of this script, so we know where to look for the plotdfs file
 # This block imports fasta-parser as fasta
@@ -522,6 +523,23 @@ rule odogCl_calculate_umap:
         mgt_mlt_umap(input.sampletsv, input.combotoindex, input.coo,
                      wildcards.sizeNaN, int(wildcards.n), float(wildcards.m),
                      output.df, missing_value_as = 9999999999)
+
+rule odogCl_pairwise_distance:
+    input:
+        sampletsv    = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.sampledf.tsv",
+        combotoindex = results_base_directory + "/combo_to_index.txt",
+        coo          = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.coo.npz",
+    output:
+        matrix = results_base_directory + "/ODOG/clades/{taxanalysis}.pairwise_distance.missing_{sizeNaN}.tsv"
+    threads: 1
+    resources:
+        mem_mb  = odogPlotCladeUMAP_get_mem_mb,
+        runtime = odogPlotCladeUMAP_get_runtime,
+        bigUMAPSlots = 1
+    run:
+        odog_pairwise_distance_matrix(input.sampletsv, input.combotoindex, input.coo,
+                                      wildcards.sizeNaN, output.matrix,
+                                      missing_value_as = 9999999999)
 
 def odol_plot_get_mem_mb(wildcards, attempt):
     """
