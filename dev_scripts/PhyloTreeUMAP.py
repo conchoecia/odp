@@ -36,6 +36,7 @@ import pandas as pd
 import re
 import scipy.sparse
 from scipy.sparse import coo_matrix, lil_matrix, save_npz, load_npz, csr_matrix
+from scipy.spatial.distance import pdist, squareform
 import sys
 import time
 import umap
@@ -1919,6 +1920,50 @@ def mgt_mlt_umap(sampledffile, LocusFile, coofile,
     stop  = time.time()
     print("     - It took {} seconds to save the df".format(stop - start))
     print("   - Done with the topoumap_plotumap function")
+    return 0
+
+def odog_pairwise_distance_matrix(sampledffile, LocusFile, coofile,
+                                  smalllargeNaN, outfilepath,
+                                  missing_value_as = 9999999999):
+    """Calculate a pairwise Euclidean distance matrix between ODOG samples."""
+    if smalllargeNaN not in ["small", "large"]:
+        raise ValueError(f"The smalllargeNaN {smalllargeNaN} is not 'small' or 'large'. Exiting.")
+
+    for filepath in [sampledffile, LocusFile, coofile]:
+        if not os.path.exists(filepath):
+            raise IOError(f"The file {filepath} does not exist. Exiting.")
+
+    cdf = pd.read_csv(sampledffile, sep="\t", index_col=0)
+    ALGcomboix = algcomboix_file_to_dict(LocusFile)
+    lil = load_npz(coofile).tolil()
+
+    if lil.shape[0] != len(cdf):
+        raise ValueError(
+            f"The largest row index of the lil matrix, {lil.shape[0]}, is greater than the largest index of cdf, {max(cdf.index)}. Exiting.")
+    if lil.shape[1] != len(ALGcomboix):
+        raise ValueError(
+            f"The largest column index of the lil matrix, {lil.shape[1]}, is greater than the length of ALGcomboix, {len(ALGcomboix)}. Exiting.")
+
+    if smalllargeNaN == "large":
+        print("setting zeros to -1")
+        lil.data[lil.data == 0] = -1
+        print("Converting to a dense matrix. RAM will increase now.")
+        matrix = lil.toarray()
+        del lil
+        print(f"setting zeros to {missing_value_as}")
+        matrix[matrix == 0] = missing_value_as
+        print("converting -1s to 0")
+        matrix[matrix == -1] = 0
+        matrix = matrix + 1
+        matrix = 1 / matrix
+    else:
+        matrix = lil.toarray()
+        del lil
+
+    dist_array = squareform(pdist(matrix, metric="euclidean"))
+    sample_names = cdf["sample"] if "sample" in cdf.columns else cdf.index
+    dist_df = pd.DataFrame(dist_array, index=sample_names, columns=sample_names)
+    dist_df.to_csv(outfilepath, sep="\t")
     return 0
 
 # NOTE 20250612 - note to be deprecated. replaced by mgt_mlt_umap
