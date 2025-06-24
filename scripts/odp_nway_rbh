@@ -113,7 +113,12 @@ for thisanalysis in analyses_list:
         t = list(sorted(tup))
         config["analysispairs"]["{}_{}".format(t[0], t[1])] = t
 
-#print(config["blastjobs"])
+# Undocumented loophole to avoid duplicate proteins
+if "duplicate_proteins" not in config:
+    config["duplicate_proteins"] = "fail"
+
+print(config["blastjobs"])
+print("analyseslist: {}".format(analyses_list))
 #print(config["analysisspecies"])
 #print(config["analysispairs"])
 #print(        [config["tool"] + "/step1-rbh/{}_reciprocal_best_hits.rbh".format(
@@ -122,47 +127,67 @@ for thisanalysis in analyses_list:
 #            config["blastjobs"][x][0], config["blastjobs"][x][1])
 #            for x in config["blastjobs"]])
 
+nway_rbh_targets = expand(
+    config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh",
+    analysis=["_".join(thisanalysis) for thisanalysis in analyses_list]
+)
+nways_jobs = expand(
+    config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh",
+    analysis=["_".join(thisanalysis) for thisanalysis in analyses_list]
+)
+print("nways_jobs: ", nways_jobs)
+
 wildcard_constraints:
-    analysis="[A-Za-z0-9_]+",
+    sample1 = "[A-Za-z0-9-.]+",
+    sample2 = "[A-Za-z0-9-.]+",
+    analysis= "[A-Za-z0-9_]+",
 
 rule all:
     input:
-        # the reciprocal blast results
+        ## The reciprocal blast results
         [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(
             config["blastjobs"][this][0], config["blastjobs"][this][1])
          for this in config["blastjobs"]],
         # find the reciprocal best hits
-        [config["tool"] + "/step1-rbh/{}_reciprocal_best_hits.rbh".format(
-            "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        # the alpha file
-        [config["tool"] + "/step2-groupby/FDR/{}.FDR.tsv".format(
-            "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        # the groupby file
-        [config["tool"] + "/step2-groupby/{}.rbh.groupby".format(
-            "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        # the filtered groupby file
-        [config["tool"] + "/step2-groupby/{}.rbh.filt.groupby".format(
-            "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        # This unwrapped file needs to have the false discovery rate lines
-        [config["tool"] + "/step3-unwrap/{}.filt.unwrapped.rbh".format(
-            "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        # This unwrapped file has every n-way RBH possible
-        [config["tool"] + "/step3-unwrap/{}.unwrapped.rbh".format(
-            "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        # the ribbon diagrams
-        [config["tool"] + "/step4-ribbon_diagram/{}.ribbon.pdf".format(
-            "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        # plot the ribbon diagrams
-        [config["tool"] + "/step4-ribbon_diagram/{}.ribbon.pdf".format(
-            "_".join(thisanalysis)) for thisanalysis in analyses_list]
+        nways_jobs
+        # possibly delete this?
+        #[config["tool"] + "/step1-rbh/{}_reciprocal_best_hits.rbh".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        ## the alpha file
+        #[config["tool"] + "/step2-groupby/FDR/{}.FDR.tsv".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        ## the groupby file
+        #[config["tool"] + "/step2-groupby/{}.rbh.groupby".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        ## the filtered groupby file
+        #[config["tool"] + "/step2-groupby/{}.rbh.filt.groupby".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        ## This unwrapped file needs to have the false discovery rate lines
+        #[config["tool"] + "/step3-unwrap/{}.filt.unwrapped.rbh".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        ## This unwrapped file has every n-way RBH possible
+        #[config["tool"] + "/step3-unwrap/{}.unwrapped.rbh".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        ## the ribbon diagrams
+        #[config["tool"] + "/step4-ribbon_diagram/{}.ribbon.pdf".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        ## plot the ribbon diagrams
+        #[config["tool"] + "/step4-ribbon_diagram/{}.ribbon.pdf".format(
+        #    "_".join(thisanalysis)) for thisanalysis in analyses_list]
 
 rule check_input_legality:
     """
+    The very first thing that we must do is to check the input files.
     Determine whether the input files are formatted correctly.
     We call a function that checks these files:
       - The genome .fasta file
       - The .chrom file
       - The protein .fasta file
+
+    Notes:
+    202140106 - This job appears to request too much RAM, causing OOM errors even
+        when the input files are small. I'm not sure why this is happening.
+        As a result, I am now adding a resources to limit the number of simultaneous jobs.
     """
     input:
         fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
@@ -170,11 +195,25 @@ rule check_input_legality:
         pep   = lambda wildcards: config["species"][wildcards.sample]["proteins"]
     output:
         input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
+    params:
+        duplicate_handling = config["duplicate_proteins"]
     threads: 1
     run:
-        if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom):
+        # We always check to see if the chrom file is legal, regardless of whether we're ignoring duplicate prots.
+        if not odpf.chrom_file_is_legal(input.chrom):
+            raise IOError("The chrom file is not legal: {}".format(input.chrom))
+        if params.duplicate_handling == "fail":
+            # We want to enforce that the input files are legal
+            # See the odpf.check_species_input_legality function for more details
+            if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom):
+                with open(output.input_pass, "w") as outf:
+                    outf.write("pass")
+        elif params.duplicate_handling == "pass":
+            # we just assume that everything is copacetic and let the program continue
             with open(output.input_pass, "w") as outf:
                 outf.write("pass")
+        else:
+            raise IOError("Right now we can only handle fail and pass cases. Sorry.")
 
 rule filter_prots:
     """
@@ -273,28 +312,37 @@ def get_component_size_dict(G):
         component_size[len(thisentry)] += 1
     print(component_size)
 
+#rule n_ways_reciprocal_best:
+#    """
+#    Gets reciprocal best hits from 3 or more samples
+#    For a protein to be retained, it must be a reciprocal-best hit in three samples.
+#
+#              A      B
+#             / \    /|\
+#            B___C  A-+-C , et cetera
+#                    \|/
+#                     D
+#
+#    The output of this rule is a yaml file with admissible proteins from each sample
+#    """
+#    input:
+#        # just require all the blast jobs to be done because it is easier
+#        #xtoyblastp = [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(x[0], x[1])
+#        #    for x in permutations("_".split(wildcards.analysis), 2)],
+#        xtoyblastp = [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(
+#            config["blastjobs"][this][0], config["blastjobs"][this][1])
+#         for this in config["blastjobs"]],
+#        chrom = lambda wildcards: [config["species"][x]["chrom"]
+#                    for x in config["analysisspecies"]]
 rule n_ways_reciprocal_best:
-    """
-    Gets reciprocal best hits from 3 or more samples
-    For a protein to be retained, it must be a reciprocal-best hit in three samples.
-
-              A      B
-             / \    /|\
-            B___C  A-+-C , et cetera
-                    \|/
-                     D
-
-    The output of this rule is a yaml file with admissible proteins from each sample
-    """
     input:
-        # just require all the blast jobs to be done because it is easier
-        #xtoyblastp = [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(x[0], x[1])
-        #    for x in permutations("_".split(wildcards.analysis), 2)],
-        xtoyblastp = [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(
-            config["blastjobs"][this][0], config["blastjobs"][this][1])
-         for this in config["blastjobs"]],
-        chrom = lambda wildcards: [config["species"][x]["chrom"]
-                    for x in config["analysisspecies"]]
+        xtoyblastp = lambda wildcards: [
+            config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(pair[0], pair[1])
+            for pair in permutations(wildcards.analysis.split("_"), 2)
+            ],
+        chrom = lambda wildcards: [
+            config["species"][species]["chrom"] for species in wildcards.analysis.split("_")
+            ]
     output:
         acceptable_prots = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_acceptable_prots.txt",
         blast_network    = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_edges.txt",
@@ -450,385 +498,385 @@ rule n_ways_reciprocal_best:
         genesdf.to_csv(output.rbh, sep="\t", index = False)
 
 
-################################################################################
-#     ____  ____   ___   __ __  ____  ____   __ __
-#    /    ||    \ /   \ |  |  ||    \|    \ |  |  |
-#   |   __||  D  )     ||  |  ||  o  )  o  )|  |  |
-#   |  |  ||    /|  O  ||  |  ||   _/|     ||  ~  |
-#   |  |_ ||    \|     ||  :  ||  |  |  O  ||___, |
-#   |     ||  .  \     ||     ||  |  |     ||     |
-#   |___,_||__|\_|\___/  \__,_||__|  |_____||____/
+#################################################################################
+##     ____  ____   ___   __ __  ____  ____   __ __
+##    /    ||    \ /   \ |  |  ||    \|    \ |  |  |
+##   |   __||  D  )     ||  |  ||  o  )  o  )|  |  |
+##   |  |  ||    /|  O  ||  |  ||   _/|     ||  ~  |
+##   |  |_ ||    \|     ||  :  ||  |  |  O  ||___, |
+##   |     ||  .  \     ||     ||  |  |     ||     |
+##   |___,_||__|\_|\___/  \__,_||__|  |_____||____/
+##
+#################################################################################
 #
-################################################################################
-
-def permute_n_times(df, num_permutations):
-    observations = {x: 0 for x in range(1, 5000)}
-    scafs = list(df.columns)
-    for i in range(num_permutations):
-        for thisscaf in df.columns:
-            df[thisscaf] = np.random.permutation(df[thisscaf].values)
-        subbed = df.groupby(scafs).size().reset_index(name = "counts")["counts"].value_counts().to_dict()
-        for key in subbed:
-            observations[key] += 1
-        if i % 10 == 0:
-               print("  - Finished {}/{} ({:.2f}%) analyses.  ".format(
-                   i, num_permutations,
-                   (i/num_permutations)*100), end = "\r")
-    observations = {key: observations[key] for key in observations
-                     if observations[key] != 0}
-    return observations
-
-rule single_permutation_test:
-    """
-    This performs one FDR test of 100000 rounds.
-
-    These results will be cat'd with the results from other threads.
-    """
-    input:
-        rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh"
-    output:
-        alpha = config["tool"] + "/step2-groupby/FDR/sim/{analysis}_sim_{simround}.tsv"
-    threads: 1
-    params:
-        thisround = lambda wildcards: wildcards.simround,
-        num_permutations = num_permutations_per_round,
-        analysis_string = lambda wildcards: wildcards.analysis
-    run:
-        these_species = params.analysis_string.split("_")
-        df = pd.read_csv(input.rbh, sep = "\t", index_col = 0)
-        scafs = ["{}_scaf".format(x) for x in these_species]
-        df = df[scafs]
-
-        observations = permute_n_times(df, params.num_permutations)
-        with open(output.alpha, "w") as f:
-            for key in observations:
-                print("{}\t{}".format(key, observations[key]),
-                      file = f)
-
-rule permutation_test_for_compariasons:
-    input:
-        fdr_results = expand(config["tool"] + "/step2-groupby/FDR/sim/{{analysis}}_sim_{simround}.tsv",
-               simround = list(range(1,num_permutation_rounds+1)))
-    output:
-        alpha = config["tool"] + "/step2-groupby/FDR/{analysis}.FDR.tsv"
-    threads: workflow.cores - 1
-    params:
-        num_permutations = config["num_permutations"]
-    run:
-        observations = {x: 0 for x in range(1, 5000)}
-        for thisfile in input.fdr_results:
-            with open(thisfile, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        print(line)
-                        fields = [int(x) for x in line.split()]
-                        observations[fields[0]] += fields[1]
-
-        resultsDF = pd.Series(observations).to_frame()
-        resultsDF.reset_index(inplace = True)
-        resultsDF.columns = ["Num_Genes_In_Chr_Group", "Num_Permutations"]
-        resultsDF["Total_Tests"] = params.num_permutations
-        resultsDF["alpha"] = resultsDF["Num_Permutations"]/params.num_permutations
-        print(resultsDF)
-        resultsDF.to_csv(output.alpha, sep="\t", index = False)
-
-rule groupby_rbh_results:
-    input:
-        rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh",
-        alpha = config["tool"] + "/step2-groupby/FDR/{analysis}.FDR.tsv"
-    output:
-        rbh  = config["tool"] + "/step2-groupby/{analysis}.rbh.groupby"
-    params:
-        analysis_string = lambda wildcards: wildcards.analysis
-    threads: 1
-    run:
-        all_species = params.analysis_string.split("_")
-        match_string = "_".join(all_species)
-
-        df = pd.read_csv(input.rbh, sep = "\t")
-        groupbycols = ["{}_scaf".format(x) for x in all_species]
-        alphadf = pd.read_csv(input.alpha, sep = "\t")
-
-        # calculate the alpha score for each level
-        df = df.reset_index(drop = True)
-        grouped_multiple = df.groupby(groupbycols).agg(list).reset_index()
-
-        # get the size
-        grouped_multiple["count"] = grouped_multiple.rbh.str.len()
-        grouped_mutiple = grouped_multiple.loc[grouped_multiple["count"] > 1, ]
-
-        # sort
-        grouped_multiple = grouped_multiple.sort_values(by="count", ascending=False)
-        alpha_dict = dict(zip(alphadf.Num_Genes_In_Chr_Group, alphadf.alpha))
-        grouped_multiple["alpha"] = grouped_multiple["count"].map(alpha_dict)
-        grouped_multiple["alpha_type"] = "equal_to"
-        for index, row in grouped_multiple.iterrows():
-            if row["alpha"] == 0:
-                # now reassign the alpha to the next group that we've seen
-                done = False
-                countdown_index = 1
-                while not done:
-                    new_alpha = alpha_dict[row["count"] - countdown_index]
-                    if new_alpha == 0:
-                        countdown_index += 1
-                    else:
-                        done = True
-                        grouped_multiple.loc[index, "alpha"] = new_alpha
-                        grouped_multiple.loc[index, "alpha_type"] = "less_than"
-        grouped_multiple["gene_group"] = "None"
-        upfront   = ["rbh", "gene_group",
-                     "count", "alpha", "alpha_type"]
-        other_pt1 = [x for x in grouped_multiple.columns
-                     if x.split("_")[0] not in all_species]
-        other_pt2 = list(sorted([x for x in other_pt1
-                                 if x not in upfront]))
-        species_cols = list(sorted([x for x in grouped_multiple.columns
-                                    if x.split("_")[0] in all_species]))
-        upfront_species_other = upfront + species_cols + other_pt2
-        grouped_multiple = grouped_multiple[upfront_species_other]
-
-        # We should automatically assign some colors to the groups
-        # This feature was part of some requests from Grisha Zolotarov
-        # - request documented here: https://github.com/conchoecia/odp/issues/31
-        # Generate a random color for each row by running the grc() command once per row.
-        #  If alpha of the same row is greater than 0.05, then leave the color black
-        grouped_multiple["color"] = grouped_multiple.apply(lambda x: grc()
-                    if x["alpha"] <= 0.05 else "#000000", axis = 1)
-        # move the color column to right after the gene_group column
-        cols1 = ['rbh', 'gene_group', 'color', 'count', 'alpha', 'alpha_type']
-        cols2 = cols1 + [x for x in grouped_multiple.columns if x not in cols1]
-        grouped_multiple = grouped_multiple[cols2]
-    
-        # Now we add an Ersatz gene group name since we don't have one yet
-        # reset the indices
-        grouped_multiple = grouped_multiple.reset_index(drop = True)
-        # for the 'gene_group' column just use the species string and the df row index
-        grouped_multiple["gene_group"] = grouped_multiple.apply(lambda x: "{}_{}".format(
-                                           match_string, str(int(x.name) + 1)), axis = 1)
-        # now we save the file
-        grouped_multiple.to_csv(output.rbh, sep="\t", index = False)
-
-rule filter_rbh_files:
-    """
-    We found the significantly large groups of genes in the previous step,
-      added an Ersatz linkage group identified, and randomly assigned a color.
-
-    Now we make an easier-to-interpret .groupby file that only has the
-      significantly large groups of genes.
-    """
-    input:
-        rbh  = config["tool"] + "/step2-groupby/{analysis}.rbh.groupby"
-    output:
-        rbh  = config["tool"] + "/step2-groupby/{analysis}.rbh.filt.groupby"
-    params:
-        alpha = 0.05
-    threads: 1
-    run:
-        df = pd.read_csv(input.rbh, sep = "\t", index_col = None)
-        df = df.loc[df["alpha"] <= params.alpha, ]
-        df.to_csv(output.rbh, sep="\t", index = False, na_rep='nan')
-
-def parse_pd_list_or_string(pd_list, rowcount):
-    """
-    This is a special function that parses a list that is stored as a string
-      in the pandas dataframe.
-    """
-    templist = []
-    if type(pd_list) == str:
-        for entry in ["nan", "NaN"]:
-            pd_list = pd_list.replace(entry, "None")
-        if '[' in pd_list:
-            # the thing is a list, parse it as a list
-            return ast.literal_eval(pd_list)
-        else:
-            # if it isn't a list, just
-            #print(pd_list, rowcount)
-            return [pd_list] * rowcount
-    elif (type(pd_list) == float) and (np.isnan(pd_list)):
-        return [None] * rowcount
-
-# we need pathlib only for this function
-from pathlib import Path
-def unwrap_groupby_to_rbh(groupby_filepath, outprefix, outdir = "./"):
-    """
-    This function unwraps the .groupby file into a .rbh file.
-
-    The input parameters are:
-      groupby_filepath  - the path to the .groupby file
-      outprefix         - the prefix for the output file 
-      outdir (optional) - the directory to write the output file to
-    """
-    # check that the input file exists
-    if not os.path.exists(groupby_filepath):
-        raise IOError("The input file {} does not exist.".format(groupby_filepath),
-                       file = sys.stderr)
-
-    df = pd.read_csv(groupby_filepath, sep = "\t", index_col = None)
-    # do some checks on the data
-    if len([x for x in df.columns if x.startswith("Unnamed")]) > 0:
-        raise IOError("There is a column that is unnamed, and probably doesn't have data in that column. Check your input.", file = sys.stderr)
-    df = df[[x for x in df.columns if not x.startswith("Unnamed")]] # this isn't needed, but keeping
-
-    if True in [np.isnan(x) for x in df["count"].unique()]:
-        raise IOError("There are some rows in this dataset where count is nan. That should not occur in a rbh or rbh.groupby file. Check that your input has no rows that are erroneously empty.")
-
-    # get all the species in the dataframe
-    complete_species_list = [x.split("_")[0] for x in df.columns
-                             if x.endswith("_scaf")]
-
-    rbh_entries = []
-    for index, row in df.iterrows():
-        rbh_list = ast.literal_eval(row["rbh"])
-
-        species_to_gene_list = {}
-        species_to_gene_pos  = {}
-        species_to_gene_scaf = {}
-        # make lookup tables
-        for thisspecies in complete_species_list:
-            rowcount = row["count"]
-            parse_pairs = [("gene", species_to_gene_list),
-                           ("pos",  species_to_gene_pos),
-                           ("scaf", species_to_gene_scaf) ]
-            for thiscol, thislist in parse_pairs:
-                # gene_col
-                colname = "{}_{}".format(thisspecies, thiscol)
-                #species_to_gene_list[thisspecies] = ast.literal_eval(row[colname])
-                thislist[thisspecies] = parse_pd_list_or_string(
-                                                     row[colname], rowcount)
-
-        for i in range(len(rbh_list)):
-            thisgroup = row["gene_group"]
-            thisentry = {"rbh": rbh_list[i],
-                         "gene_group": thisgroup,
-                         "count":      row["count"]}
-            for keep_this in ["ALG", "color", "alpha", "alpha_type"]:
-                if keep_this in row:
-                    thisentry[keep_this] = row[keep_this]
-            for thisspecies in complete_species_list:
-                # get col names
-                scafcol = "{}_scaf".format(thisspecies)
-                genecol = "{}_gene".format(thisspecies)
-                poscol  = "{}_pos".format(thisspecies)
-                thisentry[scafcol] = species_to_gene_scaf[thisspecies][i]
-                thisentry[genecol] = species_to_gene_list[thisspecies][i]
-                thisentry[poscol]  = species_to_gene_pos[thisspecies][i]
-            rbh_entries.append(thisentry)
-
-    unwrapped = pd.DataFrame(rbh_entries)
-    unwrapped = unwrapped[[x for x in unwrapped.columns
-                           if x not in ["count"]]]
-
-    # Recursively split the outdir and follow the directories and safely make them
-    #  if they don't yet exist. Requires Python v.3.4 or above.
-    path = Path(outdir)
-    path.mkdir(parents=True, exist_ok=True)
-
-    outfile = os.path.join(outdir, outprefix + ".unwrapped.rbh")
-    unwrapped.to_csv(outfile, sep="\t", na_rep = "None", index = False)
-
-rule unwrap_filtered_rbh_file:
-    """
-    This unwraps the filtered .groupby file.
-    This file will be used for plotting or for ALG db construction.
-    """
-    input:
-        groupby = config["tool"] + "/step2-groupby/{analysis}.rbh.filt.groupby"
-    output:
-        rbh = config["tool"] + "/step3-unwrap/{analysis}.filt.unwrapped.rbh"
-    params:
-        outdir = config["tool"] + "/step3-unwrap/",
-        outprefix = lambda wildcards: wildcards.analysis + ".filt"
-    threads: 1
-    run:
-        unwrap_groupby_to_rbh(input.groupby, params.outprefix,
-                              outdir = params.outdir)
-
-rule unwrap_unfiltered_rbh_file:
-    """
-    This unwraps the unfiltered .groupby file.
-    This file will be used for plotting or for ALG db construction.
-    """
-    input:
-        groupby = config["tool"] + "/step2-groupby/{analysis}.rbh.groupby"
-    output:
-        rbh = config["tool"] + "/step3-unwrap/{analysis}.unwrapped.rbh"
-    params:
-        outdir = config["tool"] + "/step3-unwrap/",
-        outprefix = lambda wildcards: wildcards.analysis 
-    threads: 1
-    run:
-        unwrap_groupby_to_rbh(input.groupby, params.outprefix,
-                              outdir = params.outdir)
-
-rule sp_to_chr_to_len:
-    output:
-        outfile = config["tool"] + "/step3-unwrap/{analysis}.sp_to_chr_to_size.tsv"
-    params:
-        sp_order = lambda wildcards: wildcards.analysis.split("_")
-    threads: 1
-    run:
-        sp_to_chr_to_size = {}
-        outfile = open(output.outfile, "w")
-        # for this test just get the species's chromosome sizes
-        for thissp in params.sp_order:
-            if thissp not in sp_to_chr_to_size:
-                sp_to_chr_to_size[thissp] = {}
-                for record in fasta.parse(config["species"][thissp]["genome"]):
-                    print("{}\t{}\t{}".format(thissp, record.id, len(record.seq)), file = outfile)
-        outfile.close()
-
-# import the plotting function from odp_rbh_to_ribbon
-# TODO we need to move ribbon_plot to odp_plotting_functions and also fix the pointer in
-#   odp_rbh_to_ribbon
-snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
-scripts_path = os.path.join(snakefile_path, "../scripts")
-sys.path.insert(1, scripts_path)
-from odp_ribbon_plot import ribbon_plot
-
-rule unfiltered_ribbon_diagram:
-    """
-    plot the unfiltered ribbon diagram
-    """
-    input:
-        rbh = config["tool"] + "/step3-unwrap/{analysis}.unwrapped.rbh",
-        tsv = config["tool"] + "/step3-unwrap/{analysis}.sp_to_chr_to_size.tsv"
-    output:
-        pdf = config["tool"] + "/step4-ribbon_diagram/{analysis}.ribbon.pdf"
-    params:
-        sp_order = lambda wildcards: wildcards.analysis.split("_")
-    threads: 1
-    run:
-        sp_to_chr_to_size = {}
-        # read in the TSV that we already made since it is faster
-        with open(input.tsv, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    fields = line.split("\t")
-                    sp     = fields[0]
-                    chrom  = fields[1]
-                    chrlen = fields[2]
-                    if sp not in sp_to_chr_to_size:
-                        sp_to_chr_to_size[sp] = {}
-                    if chrom not in sp_to_chr_to_size[sp]:
-                        sp_to_chr_to_size[sp][chrom] = int(chrlen)
-
-        min_chr_size = {}
-        for sp in params.sp_order:
-            if "minscafsize" in config["species"][sp]:
-                min_chr_size[sp] = config["species"][sp]["minscafsize"]
-            else:
-                min_chr_size[sp] = 10000
-
-        species_order = params.sp_order
-        rbh_filelist = [input.rbh]
-        sp_min_chr_size = min_chr_size
-        outfile = output.pdf
-
-        ribbon_plot(species_order, rbh_filelist,
-                    sp_to_chr_to_size,
-                    sp_min_chr_size, outfile,
-                    sp_to_gene_order = None,
-                    chr_sort_order   = "custom",
-                    plot_all = False)
+#def permute_n_times(df, num_permutations):
+#    observations = {x: 0 for x in range(1, 5000)}
+#    scafs = list(df.columns)
+#    for i in range(num_permutations):
+#        for thisscaf in df.columns:
+#            df[thisscaf] = np.random.permutation(df[thisscaf].values)
+#        subbed = df.groupby(scafs).size().reset_index(name = "counts")["counts"].value_counts().to_dict()
+#        for key in subbed:
+#            observations[key] += 1
+#        if i % 10 == 0:
+#               print("  - Finished {}/{} ({:.2f}%) analyses.  ".format(
+#                   i, num_permutations,
+#                   (i/num_permutations)*100), end = "\r")
+#    observations = {key: observations[key] for key in observations
+#                     if observations[key] != 0}
+#    return observations
+#
+#rule single_permutation_test:
+#    """
+#    This performs one FDR test of 100000 rounds.
+#
+#    These results will be cat'd with the results from other threads.
+#    """
+#    input:
+#        rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh"
+#    output:
+#        alpha = config["tool"] + "/step2-groupby/FDR/sim/{analysis}_sim_{simround}.tsv"
+#    threads: 1
+#    params:
+#        thisround = lambda wildcards: wildcards.simround,
+#        num_permutations = num_permutations_per_round,
+#        analysis_string = lambda wildcards: wildcards.analysis
+#    run:
+#        these_species = params.analysis_string.split("_")
+#        df = pd.read_csv(input.rbh, sep = "\t", index_col = 0)
+#        scafs = ["{}_scaf".format(x) for x in these_species]
+#        df = df[scafs]
+#
+#        observations = permute_n_times(df, params.num_permutations)
+#        with open(output.alpha, "w") as f:
+#            for key in observations:
+#                print("{}\t{}".format(key, observations[key]),
+#                      file = f)
+#
+#rule permutation_test_for_compariasons:
+#    input:
+#        fdr_results = expand(config["tool"] + "/step2-groupby/FDR/sim/{{analysis}}_sim_{simround}.tsv",
+#               simround = list(range(1,num_permutation_rounds+1)))
+#    output:
+#        alpha = config["tool"] + "/step2-groupby/FDR/{analysis}.FDR.tsv"
+#    threads: workflow.cores - 1
+#    params:
+#        num_permutations = config["num_permutations"]
+#    run:
+#        observations = {x: 0 for x in range(1, 5000)}
+#        for thisfile in input.fdr_results:
+#            with open(thisfile, "r") as f:
+#                for line in f:
+#                    line = line.strip()
+#                    if line:
+#                        print(line)
+#                        fields = [int(x) for x in line.split()]
+#                        observations[fields[0]] += fields[1]
+#
+#        resultsDF = pd.Series(observations).to_frame()
+#        resultsDF.reset_index(inplace = True)
+#        resultsDF.columns = ["Num_Genes_In_Chr_Group", "Num_Permutations"]
+#        resultsDF["Total_Tests"] = params.num_permutations
+#        resultsDF["alpha"] = resultsDF["Num_Permutations"]/params.num_permutations
+#        print(resultsDF)
+#        resultsDF.to_csv(output.alpha, sep="\t", index = False)
+#
+#rule groupby_rbh_results:
+#    input:
+#        rbh = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh",
+#        alpha = config["tool"] + "/step2-groupby/FDR/{analysis}.FDR.tsv"
+#    output:
+#        rbh  = config["tool"] + "/step2-groupby/{analysis}.rbh.groupby"
+#    params:
+#        analysis_string = lambda wildcards: wildcards.analysis
+#    threads: 1
+#    run:
+#        all_species = params.analysis_string.split("_")
+#        match_string = "_".join(all_species)
+#
+#        df = pd.read_csv(input.rbh, sep = "\t")
+#        groupbycols = ["{}_scaf".format(x) for x in all_species]
+#        alphadf = pd.read_csv(input.alpha, sep = "\t")
+#
+#        # calculate the alpha score for each level
+#        df = df.reset_index(drop = True)
+#        grouped_multiple = df.groupby(groupbycols).agg(list).reset_index()
+#
+#        # get the size
+#        grouped_multiple["count"] = grouped_multiple.rbh.str.len()
+#        grouped_mutiple = grouped_multiple.loc[grouped_multiple["count"] > 1, ]
+#
+#        # sort
+#        grouped_multiple = grouped_multiple.sort_values(by="count", ascending=False)
+#        alpha_dict = dict(zip(alphadf.Num_Genes_In_Chr_Group, alphadf.alpha))
+#        grouped_multiple["alpha"] = grouped_multiple["count"].map(alpha_dict)
+#        grouped_multiple["alpha_type"] = "equal_to"
+#        for index, row in grouped_multiple.iterrows():
+#            if row["alpha"] == 0:
+#                # now reassign the alpha to the next group that we've seen
+#                done = False
+#                countdown_index = 1
+#                while not done:
+#                    new_alpha = alpha_dict[row["count"] - countdown_index]
+#                    if new_alpha == 0:
+#                        countdown_index += 1
+#                    else:
+#                        done = True
+#                        grouped_multiple.loc[index, "alpha"] = new_alpha
+#                        grouped_multiple.loc[index, "alpha_type"] = "less_than"
+#        grouped_multiple["gene_group"] = "None"
+#        upfront   = ["rbh", "gene_group",
+#                     "count", "alpha", "alpha_type"]
+#        other_pt1 = [x for x in grouped_multiple.columns
+#                     if x.split("_")[0] not in all_species]
+#        other_pt2 = list(sorted([x for x in other_pt1
+#                                 if x not in upfront]))
+#        species_cols = list(sorted([x for x in grouped_multiple.columns
+#                                    if x.split("_")[0] in all_species]))
+#        upfront_species_other = upfront + species_cols + other_pt2
+#        grouped_multiple = grouped_multiple[upfront_species_other]
+#
+#        # We should automatically assign some colors to the groups
+#        # This feature was part of some requests from Grisha Zolotarov
+#        # - request documented here: https://github.com/conchoecia/odp/issues/31
+#        # Generate a random color for each row by running the grc() command once per row.
+#        #  If alpha of the same row is greater than 0.05, then leave the color black
+#        grouped_multiple["color"] = grouped_multiple.apply(lambda x: grc()
+#                    if x["alpha"] <= 0.05 else "#000000", axis = 1)
+#        # move the color column to right after the gene_group column
+#        cols1 = ['rbh', 'gene_group', 'color', 'count', 'alpha', 'alpha_type']
+#        cols2 = cols1 + [x for x in grouped_multiple.columns if x not in cols1]
+#        grouped_multiple = grouped_multiple[cols2]
+#
+#        # Now we add an Ersatz gene group name since we don't have one yet
+#        # reset the indices
+#        grouped_multiple = grouped_multiple.reset_index(drop = True)
+#        # for the 'gene_group' column just use the species string and the df row index
+#        grouped_multiple["gene_group"] = grouped_multiple.apply(lambda x: "{}_{}".format(
+#                                           match_string, str(int(x.name) + 1)), axis = 1)
+#        # now we save the file
+#        grouped_multiple.to_csv(output.rbh, sep="\t", index = False)
+#
+#rule filter_rbh_files:
+#    """
+#    We found the significantly large groups of genes in the previous step,
+#      added an Ersatz linkage group identified, and randomly assigned a color.
+#
+#    Now we make an easier-to-interpret .groupby file that only has the
+#      significantly large groups of genes.
+#    """
+#    input:
+#        rbh  = config["tool"] + "/step2-groupby/{analysis}.rbh.groupby"
+#    output:
+#        rbh  = config["tool"] + "/step2-groupby/{analysis}.rbh.filt.groupby"
+#    params:
+#        alpha = 0.05
+#    threads: 1
+#    run:
+#        df = pd.read_csv(input.rbh, sep = "\t", index_col = None)
+#        df = df.loc[df["alpha"] <= params.alpha, ]
+#        df.to_csv(output.rbh, sep="\t", index = False, na_rep='nan')
+#
+#def parse_pd_list_or_string(pd_list, rowcount):
+#    """
+#    This is a special function that parses a list that is stored as a string
+#      in the pandas dataframe.
+#    """
+#    templist = []
+#    if type(pd_list) == str:
+#        for entry in ["nan", "NaN"]:
+#            pd_list = pd_list.replace(entry, "None")
+#        if '[' in pd_list:
+#            # the thing is a list, parse it as a list
+#            return ast.literal_eval(pd_list)
+#        else:
+#            # if it isn't a list, just
+#            #print(pd_list, rowcount)
+#            return [pd_list] * rowcount
+#    elif (type(pd_list) == float) and (np.isnan(pd_list)):
+#        return [None] * rowcount
+#
+## we need pathlib only for this function
+#from pathlib import Path
+#def unwrap_groupby_to_rbh(groupby_filepath, outprefix, outdir = "./"):
+#    """
+#    This function unwraps the .groupby file into a .rbh file.
+#
+#    The input parameters are:
+#      groupby_filepath  - the path to the .groupby file
+#      outprefix         - the prefix for the output file 
+#      outdir (optional) - the directory to write the output file to
+#    """
+#    # check that the input file exists
+#    if not os.path.exists(groupby_filepath):
+#        raise IOError("The input file {} does not exist.".format(groupby_filepath),
+#                       file = sys.stderr)
+#
+#    df = pd.read_csv(groupby_filepath, sep = "\t", index_col = None)
+#    # do some checks on the data
+#    if len([x for x in df.columns if x.startswith("Unnamed")]) > 0:
+#        raise IOError("There is a column that is unnamed, and probably doesn't have data in that column. Check your input.", file = sys.stderr)
+#    df = df[[x for x in df.columns if not x.startswith("Unnamed")]] # this isn't needed, but keeping
+#
+#    if True in [np.isnan(x) for x in df["count"].unique()]:
+#        raise IOError("There are some rows in this dataset where count is nan. That should not occur in a rbh or rbh.groupby file. Check that your input has no rows that are erroneously empty.")
+#
+#    # get all the species in the dataframe
+#    complete_species_list = [x.split("_")[0] for x in df.columns
+#                             if x.endswith("_scaf")]
+#
+#    rbh_entries = []
+#    for index, row in df.iterrows():
+#        rbh_list = ast.literal_eval(row["rbh"])
+#
+#        species_to_gene_list = {}
+#        species_to_gene_pos  = {}
+#        species_to_gene_scaf = {}
+#        # make lookup tables
+#        for thisspecies in complete_species_list:
+#            rowcount = row["count"]
+#            parse_pairs = [("gene", species_to_gene_list),
+#                           ("pos",  species_to_gene_pos),
+#                           ("scaf", species_to_gene_scaf) ]
+#            for thiscol, thislist in parse_pairs:
+#                # gene_col
+#                colname = "{}_{}".format(thisspecies, thiscol)
+#                #species_to_gene_list[thisspecies] = ast.literal_eval(row[colname])
+#                thislist[thisspecies] = parse_pd_list_or_string(
+#                                                     row[colname], rowcount)
+#
+#        for i in range(len(rbh_list)):
+#            thisgroup = row["gene_group"]
+#            thisentry = {"rbh": rbh_list[i],
+#                         "gene_group": thisgroup,
+#                         "count":      row["count"]}
+#            for keep_this in ["ALG", "color", "alpha", "alpha_type"]:
+#                if keep_this in row:
+#                    thisentry[keep_this] = row[keep_this]
+#            for thisspecies in complete_species_list:
+#                # get col names
+#                scafcol = "{}_scaf".format(thisspecies)
+#                genecol = "{}_gene".format(thisspecies)
+#                poscol  = "{}_pos".format(thisspecies)
+#                thisentry[scafcol] = species_to_gene_scaf[thisspecies][i]
+#                thisentry[genecol] = species_to_gene_list[thisspecies][i]
+#                thisentry[poscol]  = species_to_gene_pos[thisspecies][i]
+#            rbh_entries.append(thisentry)
+#
+#    unwrapped = pd.DataFrame(rbh_entries)
+#    unwrapped = unwrapped[[x for x in unwrapped.columns
+#                           if x not in ["count"]]]
+#
+#    # Recursively split the outdir and follow the directories and safely make them
+#    #  if they don't yet exist. Requires Python v.3.4 or above.
+#    path = Path(outdir)
+#    path.mkdir(parents=True, exist_ok=True)
+#
+#    outfile = os.path.join(outdir, outprefix + ".unwrapped.rbh")
+#    unwrapped.to_csv(outfile, sep="\t", na_rep = "None", index = False)
+#
+#rule unwrap_filtered_rbh_file:
+#    """
+#    This unwraps the filtered .groupby file.
+#    This file will be used for plotting or for ALG db construction.
+#    """
+#    input:
+#        groupby = config["tool"] + "/step2-groupby/{analysis}.rbh.filt.groupby"
+#    output:
+#        rbh = config["tool"] + "/step3-unwrap/{analysis}.filt.unwrapped.rbh"
+#    params:
+#        outdir = config["tool"] + "/step3-unwrap/",
+#        outprefix = lambda wildcards: wildcards.analysis + ".filt"
+#    threads: 1
+#    run:
+#        unwrap_groupby_to_rbh(input.groupby, params.outprefix,
+#                              outdir = params.outdir)
+#
+#rule unwrap_unfiltered_rbh_file:
+#    """
+#    This unwraps the unfiltered .groupby file.
+#    This file will be used for plotting or for ALG db construction.
+#    """
+#    input:
+#        groupby = config["tool"] + "/step2-groupby/{analysis}.rbh.groupby"
+#    output:
+#        rbh = config["tool"] + "/step3-unwrap/{analysis}.unwrapped.rbh"
+#    params:
+#        outdir = config["tool"] + "/step3-unwrap/",
+#        outprefix = lambda wildcards: wildcards.analysis 
+#    threads: 1
+#    run:
+#        unwrap_groupby_to_rbh(input.groupby, params.outprefix,
+#                              outdir = params.outdir)
+#
+#rule sp_to_chr_to_len:
+#    output:
+#        outfile = config["tool"] + "/step3-unwrap/{analysis}.sp_to_chr_to_size.tsv"
+#    params:
+#        sp_order = lambda wildcards: wildcards.analysis.split("_")
+#    threads: 1
+#    run:
+#        sp_to_chr_to_size = {}
+#        outfile = open(output.outfile, "w")
+#        # for this test just get the species's chromosome sizes
+#        for thissp in params.sp_order:
+#            if thissp not in sp_to_chr_to_size:
+#                sp_to_chr_to_size[thissp] = {}
+#                for record in fasta.parse(config["species"][thissp]["genome"]):
+#                    print("{}\t{}\t{}".format(thissp, record.id, len(record.seq)), file = outfile)
+#        outfile.close()
+#
+## import the plotting function from odp_rbh_to_ribbon
+## TODO we need to move ribbon_plot to odp_plotting_functions and also fix the pointer in
+##   odp_rbh_to_ribbon
+#snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+#scripts_path = os.path.join(snakefile_path, "../scripts")
+#sys.path.insert(1, scripts_path)
+#from odp_ribbon_plot import ribbon_plot
+#
+#rule unfiltered_ribbon_diagram:
+#    """
+#    plot the unfiltered ribbon diagram
+#    """
+#    input:
+#        rbh = config["tool"] + "/step3-unwrap/{analysis}.unwrapped.rbh",
+#        tsv = config["tool"] + "/step3-unwrap/{analysis}.sp_to_chr_to_size.tsv"
+#    output:
+#        pdf = config["tool"] + "/step4-ribbon_diagram/{analysis}.ribbon.pdf"
+#    params:
+#        sp_order = lambda wildcards: wildcards.analysis.split("_")
+#    threads: 1
+#    run:
+#        sp_to_chr_to_size = {}
+#        # read in the TSV that we already made since it is faster
+#        with open(input.tsv, "r") as f:
+#            for line in f:
+#                line = line.strip()
+#                if line:
+#                    fields = line.split("\t")
+#                    sp     = fields[0]
+#                    chrom  = fields[1]
+#                    chrlen = fields[2]
+#                    if sp not in sp_to_chr_to_size:
+#                        sp_to_chr_to_size[sp] = {}
+#                    if chrom not in sp_to_chr_to_size[sp]:
+#                        sp_to_chr_to_size[sp][chrom] = int(chrlen)
+#
+#        min_chr_size = {}
+#        for sp in params.sp_order:
+#            if "minscafsize" in config["species"][sp]:
+#                min_chr_size[sp] = config["species"][sp]["minscafsize"]
+#            else:
+#                min_chr_size[sp] = 10000
+#
+#        species_order = params.sp_order
+#        rbh_filelist = [input.rbh]
+#        sp_min_chr_size = min_chr_size
+#        outfile = output.pdf
+#
+#        ribbon_plot(species_order, rbh_filelist,
+#                    sp_to_chr_to_size,
+#                    sp_min_chr_size, outfile,
+#                    sp_to_gene_order = None,
+#                    chr_sort_order   = "custom",
+#                    plot_all = False)
