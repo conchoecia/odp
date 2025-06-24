@@ -97,7 +97,7 @@ codog_n    = [2, 3, 4, 5, 6]
 codog_m    = [0.0, 0.1]
 codog_m    = [0.0, 0.05, 0.1, 0.25]
 
-codog_size = ["large", "small"]
+codog_size = ["large"]
 
 rule all:
     input:

@@ -1781,7 +1781,7 @@ def topoumap_genmatrix(sampledffile, ALGcomboixfile, coofile, rbhfile,
 
 def mgt_mlt_umap(sampledffile, LocusFile, coofile,
              smalllargeNaN, n_neighbors, min_dist,
-             dfoutfilepath, missing_value_as = 999999999999):
+             dfoutfilepath, missing_value_as = 9999999999):
     """
     Last Updated: 20250612
 
@@ -1872,9 +1872,9 @@ def mgt_mlt_umap(sampledffile, LocusFile, coofile,
         # Note 20250624 - in this method we were playing with inverting the values
         # add 1 to everything, and do 1/matrix to invert the values
         # add 1
-        matrix= matrix + 1
-        # invert the values
-        matrix = 1/matrix
+        #matrix= matrix + 1
+        ## invert the values
+        #matrix = 1/matrix
         #
     elif smalllargeNaN == "small":
         # just change the name
