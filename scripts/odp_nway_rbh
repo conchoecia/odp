@@ -59,10 +59,16 @@ else:
     if config["diamond_or_blastp"] not in ["diamond", "blastp"]:
         raise IOError("diamond_or_blastp must be either 'diamond' or 'blastp'")
 
-# make sure none of the sample names have underscores
+# Make sure the sample names are legal, in that they only have this character set:
+# "[A-Za-z0-9-.]+",
 for thissample in config["species"]:
-    if "_" in thissample:
-        raise IOError("Sample names can't have '_' char: {}".format(thissample))
+    for char in thissample:
+        illegal_chars = set()
+        if char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._":
+            illegal_chars.add(char)
+        if len(illegal_chars) > 0:
+            raise IOError("The sample name {} is not legal. It must only contain these characters: [A-Za-z0-9-.]. It containts the illegal characters: {}".format(
+                thissample, list(illegal_chars)))
 
 # make sure there are at least 2 samples
 if len(config["species"]) < 2:
@@ -140,7 +146,7 @@ print("nways_jobs: ", nways_jobs)
 wildcard_constraints:
     sample1 = "[A-Za-z0-9-.]+",
     sample2 = "[A-Za-z0-9-.]+",
-    analysis= "[A-Za-z0-9_]+",
+    analysis= "[A-Za-z0-9-._]+", #this must have dashes and underscores
 
 rule all:
     input:
@@ -148,32 +154,28 @@ rule all:
         [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(
             config["blastjobs"][this][0], config["blastjobs"][this][1])
          for this in config["blastjobs"]],
-        # find the reciprocal best hits
-        nways_jobs
-        # possibly delete this?
-        #[config["tool"] + "/step1-rbh/{}_reciprocal_best_hits.rbh".format(
-        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        ## the alpha file
-        #[config["tool"] + "/step2-groupby/FDR/{}.FDR.tsv".format(
-        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        ## the groupby file
-        #[config["tool"] + "/step2-groupby/{}.rbh.groupby".format(
-        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        ## the filtered groupby file
-        #[config["tool"] + "/step2-groupby/{}.rbh.filt.groupby".format(
-        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        ## This unwrapped file needs to have the false discovery rate lines
-        #[config["tool"] + "/step3-unwrap/{}.filt.unwrapped.rbh".format(
-        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        ## This unwrapped file has every n-way RBH possible
-        #[config["tool"] + "/step3-unwrap/{}.unwrapped.rbh".format(
-        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        ## the ribbon diagrams
-        #[config["tool"] + "/step4-ribbon_diagram/{}.ribbon.pdf".format(
-        #    "_".join(thisanalysis)) for thisanalysis in analyses_list],
-        ## plot the ribbon diagrams
-        #[config["tool"] + "/step4-ribbon_diagram/{}.ribbon.pdf".format(
-        #    "_".join(thisanalysis)) for thisanalysis in analyses_list]
+        nways_jobs, # find the reciprocal best hits
+        # the alpha file
+        [config["tool"] + "/step2-groupby/FDR/{}.FDR.tsv".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        # the groupby file
+        [config["tool"] + "/step2-groupby/{}.rbh.groupby".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        # the filtered groupby file
+        [config["tool"] + "/step2-groupby/{}.rbh.filt.groupby".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        # This unwrapped file needs to have the false discovery rate lines
+        [config["tool"] + "/step3-unwrap/{}.filt.unwrapped.rbh".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        # This unwrapped file has every n-way RBH possible
+        [config["tool"] + "/step3-unwrap/{}.unwrapped.rbh".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        # the ribbon diagrams
+        [config["tool"] + "/step4-ribbon_diagram/{}.ribbon.pdf".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        # plot the ribbon diagrams
+        [config["tool"] + "/step4-ribbon_diagram/{}.ribbon.pdf".format(
+            "_".join(thisanalysis)) for thisanalysis in analyses_list]
 
 rule check_input_legality:
     """
@@ -312,28 +314,6 @@ def get_component_size_dict(G):
         component_size[len(thisentry)] += 1
     print(component_size)
 
-#rule n_ways_reciprocal_best:
-#    """
-#    Gets reciprocal best hits from 3 or more samples
-#    For a protein to be retained, it must be a reciprocal-best hit in three samples.
-#
-#              A      B
-#             / \    /|\
-#            B___C  A-+-C , et cetera
-#                    \|/
-#                     D
-#
-#    The output of this rule is a yaml file with admissible proteins from each sample
-#    """
-#    input:
-#        # just require all the blast jobs to be done because it is easier
-#        #xtoyblastp = [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(x[0], x[1])
-#        #    for x in permutations("_".split(wildcards.analysis), 2)],
-#        xtoyblastp = [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(
-#            config["blastjobs"][this][0], config["blastjobs"][this][1])
-#         for this in config["blastjobs"]],
-#        chrom = lambda wildcards: [config["species"][x]["chrom"]
-#                    for x in config["analysisspecies"]]
 rule n_ways_reciprocal_best:
     input:
         xtoyblastp = lambda wildcards: [
