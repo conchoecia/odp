@@ -96,7 +96,7 @@ weighting_methods = ["phylogenetic"]
 codog_n    = [2, 5, 7, 10, 20, 40]
 codog_n    = [2, 3, 4, 5, 6]
 codog_m    = [0.0, 0.1]
-codog_m    = [0.0, 0.05, 0.1, 0.25]
+codog_m    = [0.0, 0.001, 0.01, 0.05, 0.1, 0.25]
 
 codog_size = ["large"]
 
@@ -181,6 +181,9 @@ rule all:
         expand(results_base_directory + "/ODOG/clades/{taxanalysis}.missing_{sizeNaN}.paramsweep.pdf",
                sizeNaN = codog_size,
                taxanalysis = config["taxids"]),
+        expand(results_base_directory + "/ODOG/clades/{taxanalysis}.pairwise_distance.missing_{sizeNaN}.tsv",
+               sizeNaN = codog_size,
+               taxanalysis = config["taxids"])
 
 # ┏┓    ┓        ┓         ┓
 # ┗┓┏┓┏┓┃┏┏┓┏┳┓┏┓┃┏┏┓  ┏┓┓┏┃┏┓┏

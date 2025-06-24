@@ -1934,6 +1934,7 @@ def odog_pairwise_distance_matrix(sampledffile, LocusFile, coofile,
             raise IOError(f"The file {filepath} does not exist. Exiting.")
 
     cdf = pd.read_csv(sampledffile, sep="\t", index_col=0)
+    print("cdf is: ", cdf)
     ALGcomboix = algcomboix_file_to_dict(LocusFile)
     lil = load_npz(coofile).tolil()
 
