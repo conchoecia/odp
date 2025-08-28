@@ -74,6 +74,8 @@ def parse_args():
       --legend-scale: Scale factor for legend (colorbar) size and font. 1.0 = original; 0.5 = half size.
       --genome-min-color: Hex color for genome sizes <= genome-min-bp (default grey).
       --genome-max-color: Hex color for genome sizes >= genome-max-bp (if not set, uses cmap endpoint color).
+      --benedictus: Use the Benedictus diverging colormap for genome size panels,
+                    ignoring genome size min/max thresholds.
       --metadata: space-separated list of metadata files to join against the main dataframe. This will be type list [str] of filenames.
       --pdf: save a {prefix}.pdf file
       --html: save a {prefix}.html file
@@ -103,6 +105,8 @@ def parse_args():
                         help="Hex color for genome sizes <= genome-min-bp (default grey).")
     parser.add_argument("--genome-max-color", type=str, default="#FF2608",
                         help="Hex color for genome sizes >= genome-max-bp (if not set, uses cmap endpoint color).")
+    parser.add_argument("--benedictus", action="store_true",
+                        help="Use Benedictus color scheme for genome size panels (overrides genome min/max options).")
 
     args = parser.parse_args()
 
@@ -332,7 +336,8 @@ def interpolate_color(value, vmin, vmax, start_color, end_color):
 
 def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
                   genome_min_bp=None, genome_max_bp=None,
-                  genome_min_color="#DCDEE3", genome_max_color="#FF2608"):
+                  genome_min_color="#DCDEE3", genome_max_color="#FF2608",
+                  use_benedictus=False):
     """
     Make a grid of UMAP scatter panels colored by many features.
     Adds colorbars for genome_size, genome_size_log2, genome_size_log10 with:
@@ -457,8 +462,10 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
     fig.suptitle(f"Paramplot for {args.filelist}", fontsize=4)
 
     # Colormap for genome panels uses your chosen endpoint colors
-    custom_cmap = LinearSegmentedColormap.from_list("genome_cmap",
-                                                    [genome_min_color, genome_max_color])
+    custom_cmap = (benedictus_cmap()
+                   if use_benedictus
+                   else LinearSegmentedColormap.from_list("genome_cmap",
+                                                         [genome_min_color, genome_max_color]))
 
     # pull user params (already in function signature)
     # legend_scale, genome_min_bp, genome_max_bp, genome_min_color, genome_max_color
@@ -475,16 +482,19 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
         if thiscol in ("genome_size", "genome_size_log2", "genome_size_log10"):
             vals = df[thiscol].to_numpy(dtype=float)
 
-            # Decide vmin/vmax in the *space of vals*
-            if thiscol == "genome_size":
-                use_vmin = genome_min_bp if genome_min_bp is not None else np.nanmin(vals)
-                use_vmax = genome_max_bp if genome_max_bp is not None else np.nanmax(vals)
-            elif thiscol == "genome_size_log2":
-                use_vmin = np.log2(genome_min_bp + 1) if genome_min_bp is not None else np.nanmin(vals)
-                use_vmax = np.log2(genome_max_bp + 1) if genome_max_bp is not None else np.nanmax(vals)
-            else:  # log10
-                use_vmin = np.log10(genome_min_bp + 1) if genome_min_bp is not None else np.nanmin(vals)
-                use_vmax = np.log10(genome_max_bp + 1) if genome_max_bp is not None else np.nanmax(vals)
+            if use_benedictus:
+                use_vmin = np.nanmin(vals)
+                use_vmax = np.nanmax(vals)
+            else:
+                if thiscol == "genome_size":
+                    use_vmin = genome_min_bp if genome_min_bp is not None else np.nanmin(vals)
+                    use_vmax = genome_max_bp if genome_max_bp is not None else np.nanmax(vals)
+                elif thiscol == "genome_size_log2":
+                    use_vmin = np.log2(genome_min_bp + 1) if genome_min_bp is not None else np.nanmin(vals)
+                    use_vmax = np.log2(genome_max_bp + 1) if genome_max_bp is not None else np.nanmax(vals)
+                else:  # log10
+                    use_vmin = np.log10(genome_min_bp + 1) if genome_min_bp is not None else np.nanmin(vals)
+                    use_vmax = np.log10(genome_max_bp + 1) if genome_max_bp is not None else np.nanmax(vals)
 
             # safety
             if not np.isfinite(use_vmin):
@@ -497,10 +507,9 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
             norm = Normalize(vmin=use_vmin, vmax=use_vmax)
             cmap = custom_cmap
 
-            # Pre-map colors from cmap/norm
             mapped_rgba = cmap(norm(vals))
 
-            # Convert panel values back to *raw bp* for threshold checks
+            # Convert panel values back to *raw bp* for threshold checks / labels
             if thiscol == "genome_size":
                 raw_vals = vals
             elif thiscol == "genome_size_log2":
@@ -508,34 +517,28 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
             else:
                 raw_vals = (10.0 ** vals) - 1.0
 
-            # clamp <= min
-            if genome_min_bp is not None:
-                mask_min = np.isfinite(raw_vals) & (raw_vals <= genome_min_bp)
-                if mask_min.any():
-                    mapped_rgba[mask_min] = mcolors.to_rgba(genome_min_color)
+            if not use_benedictus:
+                if genome_min_bp is not None:
+                    mask_min = np.isfinite(raw_vals) & (raw_vals <= genome_min_bp)
+                    if mask_min.any():
+                        mapped_rgba[mask_min] = mcolors.to_rgba(genome_min_color)
+                if genome_max_bp is not None:
+                    mask_max = np.isfinite(raw_vals) & (raw_vals >= genome_max_bp)
+                    if mask_max.any():
+                        mapped_rgba[mask_max] = mcolors.to_rgba(genome_max_color)
 
-            # clamp >= max
-            if genome_max_bp is not None:
-                mask_max = np.isfinite(raw_vals) & (raw_vals >= genome_max_bp)
-                if mask_max.any():
-                    mapped_rgba[mask_max] = mcolors.to_rgba(genome_max_color)
-
-            # NaNs → light grey
             nan_mask = ~np.isfinite(raw_vals)
             if nan_mask.any():
                 mapped_rgba[nan_mask] = mcolors.to_rgba("#DDDDDD")
 
-            # scatter
             ax.scatter(df["UMAP1"], df["UMAP2"], s=0.5, lw=0, alpha=0.5, color=mapped_rgba)
 
-            # Colorbar (shrunken by legend_scale)
             sm = ScalarMappable(norm=norm, cmap=cmap)
             sm.set_array([])
             cbar_fraction = max(0.005, 0.046 * float(legend_scale))
             cbar = fig.colorbar(sm, ax=ax, fraction=cbar_fraction, pad=0.02)
             cbar.ax.tick_params(labelsize=max(1, int(4 * float(legend_scale))))
 
-            # ticks display human-readable *raw* bp
             ticks = np.linspace(use_vmin, use_vmax, 5)
             cbar.set_ticks(ticks)
             if thiscol == "genome_size":
@@ -1078,7 +1081,8 @@ def main():
         outpdf = args.prefix + ".features.pdf"
         plot_features(args, outpdf, metadata_df = metadatadf, legend_scale = args.legend_scale,
                       genome_min_bp = args.genome_min_bp, genome_min_color = args.genome_min_color,
-                      genome_max_bp = args.genome_max_bp, genome_max_color = args.genome_max_color)
+                      genome_max_bp = args.genome_max_bp, genome_max_color = args.genome_max_color,
+                      use_benedictus = args.benedictus)
     else:
         # In this scenario, we will simply plot the dataframes in a grid based on the parameters.
         df_dict = generate_df_dict(args) # a special function that reads in the dataframes and extracts the parameters from the filenames
