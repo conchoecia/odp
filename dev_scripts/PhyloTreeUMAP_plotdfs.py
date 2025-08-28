@@ -308,10 +308,9 @@ def plot_features(args, outpdf, metadata_df=None):
 
         df = df.join(metadata_df, how="left")  # join by index
 
-
     print(df.columns)
     print(df)
-    # the columns we wa:nt to annotate are defined in the AnnotateSampleDf pipeline
+    # the columns we want to annotate are defined in the AnnotateSampleDf pipeline
     #  - things from the genome fasta file
     #    - num_scaffolds
     #    - GC_content
@@ -336,11 +335,16 @@ def plot_features(args, outpdf, metadata_df=None):
     #    - frac_ologs_single:    The fraction of genes of ANY ALG that are significantly on the largest chromosome, as defined by whole_FET
     #    - frac_ologs_{ALGNAME}: The fraction of genes of INDIVIDUAL ALGs that are significantly on any chromosome
 
-    regular_columns_to_plot = ["num_scaffolds", "GC_content", "genome_size", "median_scaffold_length",
-                               "mean_scaffold_length", "scaffold_N50", "longest_scaffold", "smallest_scaffold",
-                               "fraction_Ns", "number_of_gaps", "num_proteins", "mean_protein_length",
+    regular_columns_to_plot = ["num_scaffolds", "GC_content", "genome_size", "genome_size_log2", "genome_size_log10",
+                               "median_scaffold_length", "mean_scaffold_length", "scaffold_N50", "longest_scaffold",
+                               "smallest_scaffold", "fraction_Ns", "number_of_gaps", "num_proteins", "mean_protein_length",
                                "median_protein_length", "longest_protein", "smallest_protein", "from_rbh",
                                "frac_ologs", "frac_ologs_sig", "frac_ologs_single"]
+    # if there is no log2 genome size plot, make one
+    if "genome_size_log2" not in df.columns:
+        df["genome_size_log2"]  = np.log2(df["genome_size"] + 1)
+    if "genome_size_log10" not in df.columns:
+        df["genome_size_log10"] = np.log10(df["genome_size"] + 1)
     # If we're plotting metadata, we might not actually have these columns in the dataframe.
     regular_columns_to_plot = [col for col in regular_columns_to_plot if col in df.columns]
     olog_columns_to_plot = [x for x in df.columns if x.startswith("frac_ologs_") and x not in ("frac_ologs_sig", "frac_ologs_single")]
@@ -705,7 +709,6 @@ def parse_metadata_dfs(df_filelist: list):
 def main():
     odpf.format_matplotlib()
     args = parse_args()
-
 
     if args.plot_features:
         metadatadf = parse_metadata_dfs(args.metadata) if args.metadata else None
