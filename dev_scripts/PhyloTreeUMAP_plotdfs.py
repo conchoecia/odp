@@ -106,7 +106,7 @@ def parse_args():
     parser.add_argument("--genome-max-color", type=str, default="#FF2608",
                         help="Hex color for genome sizes >= genome-max-bp (if not set, uses cmap endpoint color).")
     parser.add_argument("--benedictus", action="store_true",
-                        help="Use Benedictus color scheme for genome size panels (overrides genome min/max options).")
+                        help="Use Benedictus color scheme for genome size panels (overrides genome min/max color options).")
 
     args = parser.parse_args()
 
