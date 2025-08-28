@@ -75,7 +75,8 @@ def parse_args():
       --genome-min-color: Hex color for genome sizes <= genome-min-bp (default grey).
       --genome-max-color: Hex color for genome sizes >= genome-max-bp (if not set, uses cmap endpoint color).
       --benedictus: Use the Benedictus diverging colormap for genome size panels,
-                    ignoring genome size min/max thresholds.
+                    still respecting genome size min/max thresholds but ignoring
+                    the custom min/max colors.
       --metadata: space-separated list of metadata files to join against the main dataframe. This will be type list [str] of filenames.
       --pdf: save a {prefix}.pdf file
       --html: save a {prefix}.html file
@@ -106,7 +107,7 @@ def parse_args():
     parser.add_argument("--genome-max-color", type=str, default="#FF2608",
                         help="Hex color for genome sizes >= genome-max-bp (if not set, uses cmap endpoint color).")
     parser.add_argument("--benedictus", action="store_true",
-                        help="Use Benedictus color scheme for genome size panels (overrides genome min/max color options).")
+                        help="Use Benedictus color scheme for genome size panels (ignores custom min/max colors but still applies genome size thresholds).")
 
     args = parser.parse_args()
 
@@ -344,6 +345,9 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
       - legend_scale to shrink/grow the colorbars and fonts,
       - genome_min_bp/genome_max_bp thresholds (raw bp) that clamp colors:
           <= min -> genome_min_color, >= max -> genome_max_color.
+    When `use_benedictus` is True, the Benedictus diverging colormap is used
+    instead of the custom min/max colors but the genome size thresholds are
+    still respected.
     """
     # ---------- helpers ----------
     def human_readable_bp(n):
@@ -482,19 +486,15 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
         if thiscol in ("genome_size", "genome_size_log2", "genome_size_log10"):
             vals = df[thiscol].to_numpy(dtype=float)
 
-            if use_benedictus:
-                use_vmin = np.nanmin(vals)
-                use_vmax = np.nanmax(vals)
-            else:
-                if thiscol == "genome_size":
-                    use_vmin = genome_min_bp if genome_min_bp is not None else np.nanmin(vals)
-                    use_vmax = genome_max_bp if genome_max_bp is not None else np.nanmax(vals)
-                elif thiscol == "genome_size_log2":
-                    use_vmin = np.log2(genome_min_bp + 1) if genome_min_bp is not None else np.nanmin(vals)
-                    use_vmax = np.log2(genome_max_bp + 1) if genome_max_bp is not None else np.nanmax(vals)
-                else:  # log10
-                    use_vmin = np.log10(genome_min_bp + 1) if genome_min_bp is not None else np.nanmin(vals)
-                    use_vmax = np.log10(genome_max_bp + 1) if genome_max_bp is not None else np.nanmax(vals)
+            if thiscol == "genome_size":
+                use_vmin = genome_min_bp if genome_min_bp is not None else np.nanmin(vals)
+                use_vmax = genome_max_bp if genome_max_bp is not None else np.nanmax(vals)
+            elif thiscol == "genome_size_log2":
+                use_vmin = np.log2(genome_min_bp + 1) if genome_min_bp is not None else np.nanmin(vals)
+                use_vmax = np.log2(genome_max_bp + 1) if genome_max_bp is not None else np.nanmax(vals)
+            else:  # log10
+                use_vmin = np.log10(genome_min_bp + 1) if genome_min_bp is not None else np.nanmin(vals)
+                use_vmax = np.log10(genome_max_bp + 1) if genome_max_bp is not None else np.nanmax(vals)
 
             # safety
             if not np.isfinite(use_vmin):
@@ -504,7 +504,7 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
             if use_vmin == use_vmax:
                 use_vmax = use_vmin + 1.0
 
-            norm = Normalize(vmin=use_vmin, vmax=use_vmax)
+            norm = Normalize(vmin=use_vmin, vmax=use_vmax, clip=True)
             cmap = custom_cmap
 
             mapped_rgba = cmap(norm(vals))
