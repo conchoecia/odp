@@ -106,8 +106,9 @@ def parse_args():
                         help="Hex color for genome sizes <= genome-min-bp (default grey).")
     parser.add_argument("--genome-max-color", type=str, default="#FF2608",
                         help="Hex color for genome sizes >= genome-max-bp (if not set, uses cmap endpoint color).")
-    parser.add_argument("--benedictus", action="store_true",
-                        help="Use Benedictus color scheme for genome size panels (ignores custom min/max colors but still applies genome size thresholds).")
+    parser.add_argument("--threecolor", action="store_true",
+                        help="Use Benedictus three-color scheme for genome size panels (ignores custom min/max colors but still applies genome size thresholds).")
+                        #TODO This should also be implemented with other column types, like ALG % retention
 
     args = parser.parse_args()
 
@@ -341,7 +342,7 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
                   use_benedictus=False):
     """
     Make a grid of UMAP scatter panels colored by many features.
-    Adds colorbars for genome_size, genome_size_log2, genome_size_log10 with:
+    Adds colorbars for genome_size, genome_size_log10 with:
       - legend_scale to shrink/grow the colorbars and fonts,
       - genome_min_bp/genome_max_bp thresholds (raw bp) that clamp colors:
           <= min -> genome_min_color, >= max -> genome_max_color.
@@ -404,7 +405,7 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
     # ---------- columns to plot ----------
     regular_columns_to_plot = [
         "num_scaffolds", "GC_content",
-        "genome_size", "genome_size_log2", "genome_size_log10",
+        "genome_size", "genome_size_log10",
         "median_scaffold_length", "mean_scaffold_length", "scaffold_N50",
         "longest_scaffold", "smallest_scaffold", "fraction_Ns",
         "number_of_gaps", "num_proteins", "mean_protein_length",
