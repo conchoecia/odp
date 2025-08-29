@@ -108,6 +108,7 @@ def parse_args():
                         help="Hex color for genome sizes >= genome-max-bp (if not set, uses cmap endpoint color).")
     parser.add_argument("--threecolor", action="store_true",
                         help="Use Benedictus three-color scheme for genome size panels (ignores custom min/max colors but still applies genome size thresholds).")
+                        # benedictus is from here: https://emilhvitfeldt.github.io/r-color-palettes/discrete/MetBrewer/Benedictus/index.html
                         #TODO This should also be implemented with other column types, like ALG % retention
 
     args = parser.parse_args()
@@ -149,6 +150,8 @@ def parse_args():
     if args.genome_min_bp is not None and args.genome_max_bp is not None:
         if args.genome_min_bp >= args.genome_max_bp:
             raise ValueError("genome-min-bp must be < genome-max-bp")
+
+    args.benedictus = args.threecolor
 
     return args
 
