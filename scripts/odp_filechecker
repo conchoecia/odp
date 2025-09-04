@@ -46,7 +46,7 @@ legal = ["proteins",      "chrom",    "genome",    "gff",     "minscafsize",
          "noylines",      "noxlines", "genus",     "species", "taxid",
          "assembly_accession"]
 
-config["tool"] = "odp"
+config["tool"] = "odp_prechecks"
 
 # check if species in the snakefile
 if "species" not in config:

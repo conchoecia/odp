@@ -265,64 +265,6 @@ rule all:
     input:
         file_targets
 
-def legality_get_mem_mb(wildcards, attempt):
-    """
-    The amount of RAM needed could change.
-    """
-    attemptdict = {1: 4000,
-                   2: 8000,
-                   3: 16000,
-                   4: 64000,
-                   5: 256000,
-                   6: 512000}
-    return attemptdict[attempt]
-
-rule check_input_legality:
-    """
-    The very first thing that we must do is to check the input files.
-    Determine whether the input files are formatted correctly.
-    We call a function that checks these files:
-      - The genome .fasta file
-      - The .chrom file
-      - The protein .fasta file
-
-    Notes:
-    20240106 - This job appears to request too much RAM, causing OOM errors even
-        when the input files are small. I'm not sure why this is happening.
-        As a result, I am now adding a resources to limit the number of simultaneous jobs.
-    """
-    input:
-        fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
-        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"],
-        pep   = lambda wildcards: config["species"][wildcards.sample]["proteins"]
-    output:
-        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
-    params:
-        duplicate_handling = config["duplicate_proteins"]
-    benchmark: "benchmarks/check_input_legality/{sample}.check_input_legality.benchmark.txt"
-    resources:
-        io_slots = 1,
-        mem_mb = legality_get_mem_mb, # 20240105 - Got this from here: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#dynamic-resources
-        runtime   = 60   # 10 minutes
-    threads: 1
-    retries: 6
-    run:
-        # We always check to see if the chrom file is legal, regardless of whether we're ignoring duplicate prots.
-        if not odpf.chrom_file_is_legal(input.chrom):
-            raise IOError("The chrom file is not legal: {}".format(input.chrom))
-        if params.duplicate_handling == "fail":
-            # We want to enforce that the input files are legal
-            # See the odpf.check_species_input_legality function for more details
-            if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom):
-                with open(output.input_pass, "w") as outf:
-                    outf.write("pass")
-        elif params.duplicate_handling == "pass":
-            # we just assume that everything is copacetic and let the program continue
-            with open(output.input_pass, "w") as outf:
-                outf.write("pass")
-        else:
-            raise IOError("Right now we can only handle fail and pass cases. Sorry.")
-
 def filtprot_get_mem_mb(wildcards, attempt):
     """
     The amount of RAM needed for filtering prots could change.
@@ -345,7 +287,6 @@ rule filter_prots:
     input:
         prots = lambda wildcards: config["species"][wildcards.sample]["proteins"],
         chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"],
-        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
         pep = config["tool"] + "/db/{sample}_prots.pep.gz"
     retries: 6
@@ -365,7 +306,6 @@ rule make_diamond_and_blast_db:
     """
     input:
         pep = ancient(config["tool"] + "/db/{sample}_prots.pep.gz"),
-        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
     output:
         dmnd = config["tool"] + "/db/dmnd/{sample}_prots.gz.dmnd",
         phr  = config["tool"] + "/db/{sample}_prots.pep.gz.phr",
@@ -1851,8 +1791,7 @@ rule get_chromsize_of_one_species:
         less RAM.
     """
     input:
-        fasta = lambda wildcards: config["species"][wildcards.sp]["genome"],
-        input_pass = config["tool"] + "/db/input_check/{sp}_pass.txt"
+        fasta = lambda wildcards: config["species"][wildcards.sp]["genome"]
     output:
         chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
     benchmark: "benchmarks/get_chromsize_of_one_species/{sp}.get_chromsize_of_one_species.benchmark.txt"
@@ -1913,9 +1852,7 @@ rule get_chromsize_of_analysis_pair:
     """
     input:
         fastas = lambda wildcards: [config["tool"] + "/step0-chromsize/species/{}.chromsize".format(x)
-                            for x in config["analysispairs"][wildcards.analysis]],
-        pass1  = lambda wildcards: config["tool"] + "/db/input_check/{}_pass.txt".format(wildcards.analysis.split("_")[0]),
-        pass2  = lambda wildcards: config["tool"] + "/db/input_check/{}_pass.txt".format(wildcards.analysis.split("_")[1])
+                            for x in config["analysispairs"][wildcards.analysis]]
     output:
         chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize"
     benchmark: "benchmarks/get_chromsize_of_analysis_pair/{analysis}.get_chromsize_of_analysis_pair.benchmark.txt"
