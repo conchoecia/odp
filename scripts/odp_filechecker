@@ -98,15 +98,22 @@ def check_genome_file_legality(fastapath):
     """
     1. Check that the genome fasta file exists.
     2. Check that the genome fasta file has unique sequence headers.
+    3. Check that each sequence contains only valid DNA characters.
     """
     odpf.check_file_exists(fastapath)
     genome_headers = set()
     duplicates = set()
+    illegal_sequences = {}
+    allowed = set("ACGTNRYKMSWBDHV")
     for record in fasta.parse(fastapath):
+        seq = str(record.seq).upper()
         if record.id not in genome_headers:
             genome_headers.add(record.id)
         else:
             duplicates.add(record.id)
+        illegal = set(seq) - allowed
+        if illegal:
+            illegal_sequences[record.id] = illegal
     if len(duplicates) > 0:
         dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicates)[:3]])
         outmessage =  "*********************************************************************\n"
@@ -126,6 +133,24 @@ def check_genome_file_legality(fastapath):
         outmessage += "*   regenerate the protein fasta and chrom files, and try again.\n"
         outmessage += "*********************************************************************\n"
         raise IOError(outmessage)
+    if len(illegal_sequences) > 0:
+        illstring = "".join([
+            "*    - {}: {}\n".format(rec, "".join(sorted(chars)))
+            for rec, chars in sorted(illegal_sequences.items())[:3]
+        ])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  Some genome sequences contain invalid characters.\n"
+        outmessage += "*  Only IUPAC DNA characters are allowed.\n"
+        outmessage += "*\n"
+        outmessage += "*  The assembly with the problem is: " + fastapath + "\n"
+        outmessage += "*  There are " + str(len(illegal_sequences)) + " sequences with invalid characters.\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += illstring
+        outmessage += "*\n"
+        outmessage += "*  Please clean the fasta file and try again.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
     return True
 
 
@@ -134,22 +159,29 @@ def check_protein_file_legality(peppath, duplicate_handling="fail"):
     1. Check that a protein fasta file exists.
     2. Checkt that each sequence ID only exists once.
     3. Check that there are no duplicate protein sequences.
+    4. Check that each sequence contains only valid amino-acid characters.
     """
     odpf.check_file_exists(peppath)
     protein_headers = set()
     duplicate_headers = set()
     sequence_hashes = set()
     duplicate_sequences = set()
+    illegal_sequences = {}
+    allowed = set("ACDEFGHIKLMNPQRSTVWYBXZJUO*")
     for record in fasta.parse(peppath):
+        seq = str(record.seq).upper()
         if record.id not in protein_headers:
             protein_headers.add(record.id)
         else:
             duplicate_headers.add(record.id)
-        seq_hash = hashlib.sha256(str(record.seq).encode()).digest()
+        seq_hash = hashlib.sha256(seq.encode()).digest()
         if seq_hash not in sequence_hashes:
             sequence_hashes.add(seq_hash)
         else:
             duplicate_sequences.add(record.id)
+        illegal = set(seq) - allowed
+        if illegal:
+            illegal_sequences[record.id] = illegal
     if len(duplicate_headers) > 0:
         dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicate_headers)[:3]])
         outmessage =  "*********************************************************************\n"
@@ -186,6 +218,24 @@ def check_protein_file_legality(peppath, duplicate_handling="fail"):
         outmessage += "*\n"
         outmessage += "*  Please remove the identical sequences from the protein fasta\n"
         outmessage += "*   file, regenerate the chrom files, and try again.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+    if len(illegal_sequences) > 0:
+        illstring = "".join([
+            "*    - {}: {}\n".format(rec, "".join(sorted(chars)))
+            for rec, chars in sorted(illegal_sequences.items())[:3]
+        ])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  Some protein sequences contain invalid characters.\n"
+        outmessage += "*  Only IUPAC amino-acid characters are allowed.\n"
+        outmessage += "*\n"
+        outmessage += "*  The protein fasta with the problem is: " + peppath + "\n"
+        outmessage += "*  There are " + str(len(illegal_sequences)) + " sequences with invalid characters.\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += illstring
+        outmessage += "*\n"
+        outmessage += "*  Please clean the fasta file and try again.\n"
         outmessage += "*********************************************************************\n"
         raise IOError(outmessage)
     return True
