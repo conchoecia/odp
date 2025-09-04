@@ -107,6 +107,8 @@ def check_genome_file_legality(fastapath):
             genome_headers.add(record.id)
         else:
             duplicates.add(record.id)
+    if len(genome_headers) == 0:
+        raise IOError("There are no sequences in the genome fasta file {}!".format(fastapath))
     if len(duplicates) > 0:
         dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicates)[:3]])
         outmessage =  "*********************************************************************\n"
@@ -150,6 +152,8 @@ def check_protein_file_legality(peppath, duplicate_handling="fail"):
             sequence_hashes.add(seq_hash)
         else:
             duplicate_sequences.add(record.id)
+    if len(protein_headers) == 0:
+        raise IOError("There are no sequences in the protein fasta file {}!".format(peppath))
     if len(duplicate_headers) > 0:
         dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicate_headers)[:3]])
         outmessage =  "*********************************************************************\n"
@@ -202,14 +206,20 @@ def check_chrom_file_legality(chrompath, fastapath, peppath):
         raise IOError("The chrom file is not legal: {}".format(chrompath))
 
     genome_headers = set(record.id for record in fasta.parse(fastapath))
+    if len(genome_headers) == 0:
+        raise IOError("There are no sequences in the genome fasta file {}!".format(fastapath))
     protein_headers = set(record.id for record in fasta.parse(peppath))
+    if len(protein_headers) == 0:
+        raise IOError("There are no sequences in the protein fasta file {}!".format(peppath))
 
     proteins_not_in_pep = set()
     scaffolds_not_in_fasta = set()
+    seen_line = False
     with open(chrompath, 'r') as chromhandle:
         for line in chromhandle:
             line = line.strip()
             if line:
+                seen_line = True
                 fields = line.split("\t")
                 protid = fields[0]
                 scaffold = fields[1]
@@ -217,6 +227,8 @@ def check_chrom_file_legality(chrompath, fastapath, peppath):
                     proteins_not_in_pep.add(protid)
                 if scaffold not in genome_headers:
                     scaffolds_not_in_fasta.add(scaffold)
+    if not seen_line:
+        raise IOError("There are no entries in the chrom file {}!".format(chrompath))
 
     if len(proteins_not_in_pep) > 0:
         dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(proteins_not_in_pep)[:3]])
