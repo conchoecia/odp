@@ -30,6 +30,8 @@ sys.path.insert(1, dependencies_path)
 import fasta
 import hashlib
 
+import gzip
+
 # ODP-specific imports
 scripts_path = os.path.join(snakefile_path, "../scripts")
 sys.path.insert(1, scripts_path)
@@ -251,6 +253,14 @@ def check_protein_file_legality(peppath, duplicate_handling="fail"):
         raise IOError(outmessage)
     return True
 
+def open_text_maybe_gzip(path, encoding="utf-8"):
+    """Open text file, auto-detecting gzip vs plain."""
+    with open(path, "rb") as fh:
+        head = fh.read(2)
+    if head == b"\x1f\x8b":  # gzip magic
+        return gzip.open(path, "rt", encoding=encoding)
+    return open(path, "rt", encoding=encoding)
+
 def check_chrom_file_legality(chrompath, fastapath, peppath):
     """
     Checks that the chrom file is legally formatted. Looks for common issues.
@@ -268,19 +278,23 @@ def check_chrom_file_legality(chrompath, fastapath, peppath):
 
     proteins_not_in_pep = set()
     scaffolds_not_in_fasta = set()
-    with open(chrompath, 'r') as chromhandle:
-        has_line = False
+
+    has_line = False
+    with open_text_maybe_gzip(chrompath) as chromhandle:  # support gzipped chrom files
         for line in chromhandle:
             line = line.strip()
-            if line:
-                has_line = True
-                fields = line.split("\t")
-                protid = fields[0]
-                scaffold = fields[1]
-                if protid not in protein_headers:
-                    proteins_not_in_pep.add(protid)
-                if scaffold not in genome_headers:
-                    scaffolds_not_in_fasta.add(scaffold)
+            if not line or line.startswith("#"):
+                continue
+            has_line = True
+            fields = line.split("\t")
+            if len(fields) < 2:
+                raise IOError(f"Malformed .chrom line (need ≥2 tab-separated cols): {line!r}")
+            protid, scaffold = fields[0], fields[1]
+            if protid not in protein_headers:
+                proteins_not_in_pep.add(protid)
+            if scaffold not in genome_headers:
+                scaffolds_not_in_fasta.add(scaffold)
+
     if not has_line:
         raise IOError(f"The chrom file has no lines: {chrompath}")
 
@@ -387,6 +401,7 @@ rule check_protein_legality:
         if check_protein_file_legality(input.pep, params.duplicate_handling):
             with open(output.pep_pass, "w") as outf:
                 outf.write("pass")
+
 
 
 rule check_chrom_legality:
