@@ -111,11 +111,6 @@ for this in config["species"]:
 # create a list of samples for downstream rules
 samples = list(config["species"].keys())
 
-# file targets are what we want to check
-file_targets = []
-file_targets += expand(config["tool"] + "/db/input_check/{sample}_genome_pass.txt", sample=samples)
-file_targets += expand(config["tool"] + "/db/input_check/{sample}_proteins_pass.txt", sample=samples)
-file_targets += expand(config["tool"] + "/db/input_check/{sample}_chrom_pass.txt", sample=samples)
 
 def flatten(list_of_lists):
     """flatten a list of lists, unique only"""
@@ -123,7 +118,10 @@ def flatten(list_of_lists):
 
 
 def check_genome_file_legality(fastapath):
-    """Check that a genome fasta file has unique sequence headers."""
+    """
+    1. Check that the genome fasta file exists.
+    2. Check that the genome fasta file has unique sequence headers.
+    """
     odpf.check_file_exists(fastapath)
     genome_headers = set()
     duplicates = set()
@@ -155,7 +153,11 @@ def check_genome_file_legality(fastapath):
 
 
 def check_protein_file_legality(peppath, duplicate_handling="fail"):
-    """Check that a protein fasta file is well formatted and proteins are unique."""
+    """
+    1. Check that a protein fasta file exists.
+    2. Checkt that each sequence ID only exists once.
+    3. Check that there are no duplicate protein sequences.
+    """
     odpf.check_file_exists(peppath)
     protein_headers = set()
     duplicate_headers = set()
@@ -211,9 +213,14 @@ def check_protein_file_legality(peppath, duplicate_handling="fail"):
         raise IOError(outmessage)
     return True
 
-
 def check_chrom_file_legality(chrompath, fastapath, peppath):
-    """Check that a chrom file is legal and references known proteins and scaffolds."""
+    """
+    Checks that the chrom file is legally formatted. Looks for common issues.
+
+    1. Check that the chrom file exists
+    2. Check that the proteins seen in column 1 were seen in the protein fasta file.
+    3. Check that the scaffolds were seen in the genome assembly fasta file.
+    """
     if not odpf.chrom_file_is_legal(chrompath):
         raise IOError("The chrom file is not legal: {}".format(chrompath))
 
@@ -278,10 +285,11 @@ def check_chrom_file_legality(chrompath, fastapath, peppath):
 
     return True
 
-
 rule all:
     input:
-        file_targets
+        expand(config["tool"] + "/db/input_check/{sample}_genome_pass.txt", sample=samples),
+        expand(config["tool"] + "/db/input_check/{sample}_proteins_pass.txt", sample=samples),
+        expand(config["tool"] + "/db/input_check/{sample}_chrom_pass.txt", sample=samples),
 
 def legality_get_mem_mb(wildcards, attempt):
     """
@@ -354,4 +362,3 @@ rule check_chrom_legality:
         if check_chrom_file_legality(input.chrom, input.fasta, input.pep):
             with open(output.chrom_pass, "w") as outf:
                 outf.write("pass")
-
