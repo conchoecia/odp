@@ -23,6 +23,7 @@ Usage instructions:
 # This block imports fasta-parser as fasta
 import os
 import sys
+import itertools
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
 dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
@@ -101,11 +102,16 @@ def check_genome_file_legality(fastapath):
     3. Check that each sequence contains only valid DNA characters.
     """
     odpf.check_file_exists(fastapath)
+    genome_iter = fasta.parse(fastapath)
+    try:
+        first_record = next(genome_iter)
+    except StopIteration:
+        raise IOError(f"The genome fasta file has no records: {fastapath}")
     genome_headers = set()
     duplicates = set()
     illegal_sequences = {}
     allowed = set("ACGTNRYKMSWBDHV")
-    for record in fasta.parse(fastapath):
+    for record in itertools.chain([first_record], genome_iter):
         seq = str(record.seq).upper()
         if record.id not in genome_headers:
             genome_headers.add(record.id)
@@ -162,13 +168,18 @@ def check_protein_file_legality(peppath, duplicate_handling="fail"):
     4. Check that each sequence contains only valid amino-acid characters.
     """
     odpf.check_file_exists(peppath)
+    protein_iter = fasta.parse(peppath)
+    try:
+        first_record = next(protein_iter)
+    except StopIteration:
+        raise IOError(f"The protein fasta file has no records: {peppath}")
     protein_headers = set()
     duplicate_headers = set()
     sequence_hashes = set()
     duplicate_sequences = set()
     illegal_sequences = {}
     allowed = set("ACDEFGHIKLMNPQRSTVWYBXZJUO*")
-    for record in fasta.parse(peppath):
+    for record in itertools.chain([first_record], protein_iter):
         seq = str(record.seq).upper()
         if record.id not in protein_headers:
             protein_headers.add(record.id)
@@ -248,6 +259,7 @@ def check_chrom_file_legality(chrompath, fastapath, peppath):
     2. Check that the proteins seen in column 1 were seen in the protein fasta file.
     3. Check that the scaffolds were seen in the genome assembly fasta file.
     """
+    odpf.check_file_exists(chrompath)
     if not odpf.chrom_file_is_legal(chrompath):
         raise IOError("The chrom file is not legal: {}".format(chrompath))
 
@@ -257,9 +269,11 @@ def check_chrom_file_legality(chrompath, fastapath, peppath):
     proteins_not_in_pep = set()
     scaffolds_not_in_fasta = set()
     with open(chrompath, 'r') as chromhandle:
+        has_line = False
         for line in chromhandle:
             line = line.strip()
             if line:
+                has_line = True
                 fields = line.split("\t")
                 protid = fields[0]
                 scaffold = fields[1]
@@ -267,6 +281,8 @@ def check_chrom_file_legality(chrompath, fastapath, peppath):
                     proteins_not_in_pep.add(protid)
                 if scaffold not in genome_headers:
                     scaffolds_not_in_fasta.add(scaffold)
+    if not has_line:
+        raise IOError(f"The chrom file has no lines: {chrompath}")
 
     if len(proteins_not_in_pep) > 0:
         dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(proteins_not_in_pep)[:3]])

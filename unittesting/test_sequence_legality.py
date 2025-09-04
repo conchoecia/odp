@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 import pytest
 import hashlib
+import itertools
 
 # set up paths to import dependencies
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +20,10 @@ class _ODPFunctions:
         if not Path(path).is_file():
             raise IOError(f"File does not exist: {path}")
 
+    @staticmethod
+    def chrom_file_is_legal(path):
+        return True
+
 odpf = _ODPFunctions()
 
 # extract function definitions from Snakemake file
@@ -32,12 +37,15 @@ def _load_func(name):
         'fasta': fasta,
         'odpf': odpf,
         'hashlib': hashlib,
+        'os': os,
+        'itertools': itertools,
     }
     exec(code, namespace)
     return namespace[name]
 
 check_genome_file_legality = _load_func('check_genome_file_legality')
 check_protein_file_legality = _load_func('check_protein_file_legality')
+check_chrom_file_legality = _load_func('check_chrom_file_legality')
 
 
 def write_fasta(tmp_path, text):
@@ -62,3 +70,26 @@ def test_protein_illegal_chars(tmp_path):
     )
     with pytest.raises(IOError):
         check_protein_file_legality(fasta_path)
+
+
+def test_genome_empty(tmp_path):
+    fasta_path = write_fasta(tmp_path, "")
+    with pytest.raises(IOError):
+        check_genome_file_legality(fasta_path)
+
+
+def test_protein_empty(tmp_path):
+    fasta_path = write_fasta(tmp_path, "")
+    with pytest.raises(IOError):
+        check_protein_file_legality(fasta_path)
+
+
+def test_chrom_empty(tmp_path):
+    genome_path = tmp_path / "genome.fasta"
+    genome_path.write_text(">s1\nACGT\n")
+    protein_path = tmp_path / "protein.fasta"
+    protein_path.write_text(">p1\nM\n")
+    chrom_path = tmp_path / "test.chrom"
+    chrom_path.write_text("")
+    with pytest.raises(IOError):
+        check_chrom_file_legality(str(chrom_path), str(genome_path), str(protein_path))
