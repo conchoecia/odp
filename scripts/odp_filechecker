@@ -347,7 +347,7 @@ def legality_get_mem_mb(wildcards, attempt):
                    4: 64000,
                    5: 256000,
                    6: 512000}
-    return attemptdict[attempt]
+    return attemptdict.get(attempt, attemptdict[max(attemptdict)])
 
 rule check_genome_legality:
     """Check that genome fasta files are legal."""
