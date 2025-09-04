@@ -94,29 +94,6 @@ if len(illegal) > 0:
     for key in illegal:
         print("  - {}".format(key))
 
-# check diamond_or_blastp
-if "diamond_or_blastp" not in config:
-    config["diamond_or_blastp"] = "blastp"
-else:
-    if config["diamond_or_blastp"] not in ["diamond", "blastp"]:
-        raise IOError("diamond_or_blastp must be either 'diamond' or 'blastp'")
-
-#make fake breaks for later analyses
-for this in config["species"]:
-    if "manual_breaks" not in config["species"][this]:
-        config["species"][this]["manual_breaks"] = []
-    if "minscafsize" not in config["species"][this]:
-        config["species"][this]["minscafsize"] = 5000
-
-# create a list of samples for downstream rules
-samples = list(config["species"].keys())
-
-
-def flatten(list_of_lists):
-    """flatten a list of lists, unique only"""
-    return list(set([item for sublist in list_of_lists for item in sublist]))
-
-
 def check_genome_file_legality(fastapath):
     """
     1. Check that the genome fasta file exists.
@@ -287,9 +264,12 @@ def check_chrom_file_legality(chrompath, fastapath, peppath):
 
 rule all:
     input:
-        expand(config["tool"] + "/db/input_check/{sample}_genome_pass.txt", sample=samples),
-        expand(config["tool"] + "/db/input_check/{sample}_proteins_pass.txt", sample=samples),
-        expand(config["tool"] + "/db/input_check/{sample}_chrom_pass.txt", sample=samples),
+        expand(config["tool"] + "/db/input_check/{sample}_genome_pass.txt",
+            sample = config["species"].keys()),
+        expand(config["tool"] + "/db/input_check/{sample}_proteins_pass.txt",
+            sample = config["species"].keys()),
+        expand(config["tool"] + "/db/input_check/{sample}_chrom_pass.txt",
+            sample = config["species"].keys())
 
 def legality_get_mem_mb(wildcards, attempt):
     """
