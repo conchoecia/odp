@@ -27,6 +27,7 @@ snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
 dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
 import fasta
+import hashlib
 
 # ODP-specific imports
 scripts_path = os.path.join(snakefile_path, "../scripts")
@@ -107,9 +108,175 @@ for this in config["species"]:
     if "minscafsize" not in config["species"][this]:
         config["species"][this]["minscafsize"] = 5000
 
+# create a list of samples for downstream rules
+samples = list(config["species"].keys())
+
+# file targets are what we want to check
+file_targets = []
+file_targets += expand(config["tool"] + "/db/input_check/{sample}_genome_pass.txt", sample=samples)
+file_targets += expand(config["tool"] + "/db/input_check/{sample}_proteins_pass.txt", sample=samples)
+file_targets += expand(config["tool"] + "/db/input_check/{sample}_chrom_pass.txt", sample=samples)
+
 def flatten(list_of_lists):
     """flatten a list of lists, unique only"""
     return list(set([item for sublist in list_of_lists for item in sublist]))
+
+
+def check_genome_file_legality(fastapath):
+    """Check that a genome fasta file has unique sequence headers."""
+    odpf.check_file_exists(fastapath)
+    genome_headers = set()
+    duplicates = set()
+    for record in fasta.parse(fastapath):
+        if record.id not in genome_headers:
+            genome_headers.add(record.id)
+        else:
+            duplicates.add(record.id)
+    if len(duplicates) > 0:
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicates)[:3]])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  There is a genome assembly with duplicate sequence headers.\n"
+        outmessage += "*  Each sequence in the genome assembly must have a unique ID.\n"
+        outmessage += "*\n"
+        outmessage += "*  The assembly with the problem is: " + fastapath + "\n"
+        outmessage += "*  There are " + str(len(duplicates)) + " duplicate sequence headers.\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that we cannot distinguish\n"
+        outmessage += "*   between two separate sequences with the same header.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please remove the duplicate sequence headers from the fasta file,\n"
+        outmessage += "*   regenerate the protein fasta and chrom files, and try again.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+    return True
+
+
+def check_protein_file_legality(peppath, duplicate_handling="fail"):
+    """Check that a protein fasta file is well formatted and proteins are unique."""
+    odpf.check_file_exists(peppath)
+    protein_headers = set()
+    duplicate_headers = set()
+    sequence_hashes = set()
+    duplicate_sequences = set()
+    for record in fasta.parse(peppath):
+        if record.id not in protein_headers:
+            protein_headers.add(record.id)
+        else:
+            duplicate_headers.add(record.id)
+        seq_hash = hashlib.sha256(str(record.seq).encode()).digest()
+        if seq_hash not in sequence_hashes:
+            sequence_hashes.add(seq_hash)
+        else:
+            duplicate_sequences.add(record.id)
+    if len(duplicate_headers) > 0:
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicate_headers)[:3]])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  There is a protein fasta with duplicate sequence headers.\n"
+        outmessage += "*  Each sequence in the protein fasta must have a unique ID.\n"
+        outmessage += "*\n"
+        outmessage += "*  The protein pep with the problem is: " + peppath + "\n"
+        outmessage += "*  There are " + str(len(duplicate_headers)) + " duplicate sequence headers.\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that we cannot distinguish\n"
+        outmessage += "*   between two separate sequences with the same header.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please remove the duplicate sequence headers from the protein fasta\n"
+        outmessage += "*   file, regenerate the chrom files, and try again.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+    if len(duplicate_sequences) > 0 and duplicate_handling == "fail":
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicate_sequences)[:3]])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  Some protein sequences in your file are identical.\n"
+        outmessage += "*  Each protein sequence must be unique.\n"
+        outmessage += "*\n"
+        outmessage += "*  The protein fasta with the problem is: " + peppath + "\n"
+        outmessage += "*  There are " + str(len(duplicate_sequences)) + " duplicate sequences.\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that duplicate protein seqs\n"
+        outmessage += "*   may interfere with proper reciprocal blastp match detection.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please remove the identical sequences from the protein fasta\n"
+        outmessage += "*   file, regenerate the chrom files, and try again.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+    return True
+
+
+def check_chrom_file_legality(chrompath, fastapath, peppath):
+    """Check that a chrom file is legal and references known proteins and scaffolds."""
+    if not odpf.chrom_file_is_legal(chrompath):
+        raise IOError("The chrom file is not legal: {}".format(chrompath))
+
+    genome_headers = set(record.id for record in fasta.parse(fastapath))
+    protein_headers = set(record.id for record in fasta.parse(peppath))
+
+    proteins_not_in_pep = set()
+    scaffolds_not_in_fasta = set()
+    with open(chrompath, 'r') as chromhandle:
+        for line in chromhandle:
+            line = line.strip()
+            if line:
+                fields = line.split("\t")
+                protid = fields[0]
+                scaffold = fields[1]
+                if protid not in protein_headers:
+                    proteins_not_in_pep.add(protid)
+                if scaffold not in genome_headers:
+                    scaffolds_not_in_fasta.add(scaffold)
+
+    if len(proteins_not_in_pep) > 0:
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(proteins_not_in_pep)[:3]])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  Some proteins in the .chrom file were not seen in the protein\n"
+        outmessage += "*   .fasta file.\n"
+        outmessage += "*\n"
+        outmessage += "*  The chrom file with the problem is: " + chrompath + "\n"
+        outmessage += "*  There are " + str(len(proteins_not_in_pep)) + " proteins in the .chrom not seen in the protein .fasta\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that we need to access every\n"
+        outmessage += "*   protein specified in the .chrom file, but it is unavailable.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please investigate whether there are too many entries in the .chrom\n"
+        outmessage += "*   file, or if something is missing from the protein .fasta file.\n"
+        outmessage += "*   Then, fix your files and re-run this pipeline.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+
+    if len(scaffolds_not_in_fasta) > 0:
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(scaffolds_not_in_fasta)[:3]])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  Some scaffolds in the .chrom file were not seen in the genome\n"
+        outmessage += "*   .fasta file.\n"
+        outmessage += "*\n"
+        outmessage += "*  The chrom file with the problem is: " + chrompath + "\n"
+        outmessage += "*  There are " + str(len(scaffolds_not_in_fasta)) + " scaffolds in the .chrom not seen in the genome .fasta\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that we need to access every\n"
+        outmessage += "*   scaffold specified in the .chrom file, but it is unavailable.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please investigate whether there are too many entries in the .chrom\n"
+        outmessage += "*   file, or if something is missing from the genome .fasta file.\n"
+        outmessage += "*   Then, fix your files and re-run this pipeline.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+
+    return True
 
 
 rule all:
@@ -128,49 +295,63 @@ def legality_get_mem_mb(wildcards, attempt):
                    6: 512000}
     return attemptdict[attempt]
 
-rule check_input_legality:
-    """
-    The very first thing that we must do is to check the input files.
-    Determine whether the input files are formatted correctly.
-    We call a function that checks these files:
-      - The genome .fasta file
-      - The .chrom file
-      - The protein .fasta file
-
-    Notes:
-    20240106 - This job appears to request too much RAM, causing OOM errors even
-        when the input files are small. I'm not sure why this is happening.
-        As a result, I am now adding a resources to limit the number of simultaneous jobs.
-    """
+rule check_genome_legality:
+    """Check that genome fasta files are legal."""
     input:
-        fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
-        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"],
-        pep   = lambda wildcards: config["species"][wildcards.sample]["proteins"]
+        fasta = lambda wildcards: config["species"][wildcards.sample]["genome"]
     output:
-        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
-    params:
-        duplicate_handling = config["duplicate_proteins"]
-    benchmark: "benchmarks/check_input_legality/{sample}.check_input_legality.benchmark.txt"
+        genome_pass = config["tool"] + "/db/input_check/{sample}_genome_pass.txt"
+    benchmark: "benchmarks/check_genome_legality/{sample}.check_genome_legality.benchmark.txt"
     resources:
         io_slots = 1,
-        mem_mb = legality_get_mem_mb, # 20240105 - Got this from here: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#dynamic-resources
-        runtime   = 60   # 10 minutes
+        mem_mb = legality_get_mem_mb,
+        runtime   = 60
     threads: 1
     retries: 6
     run:
-        # We always check to see if the chrom file is legal, regardless of whether we're ignoring duplicate prots.
-        if not odpf.chrom_file_is_legal(input.chrom):
-            raise IOError("The chrom file is not legal: {}".format(input.chrom))
-        if params.duplicate_handling == "fail":
-            # We want to enforce that the input files are legal
-            # See the odpf.check_species_input_legality function for more details
-            if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom):
-                with open(output.input_pass, "w") as outf:
-                    outf.write("pass")
-        elif params.duplicate_handling == "pass":
-            # we just assume that everything is copacetic and let the program continue
-            with open(output.input_pass, "w") as outf:
+        if check_genome_file_legality(input.fasta):
+            with open(output.genome_pass, "w") as outf:
                 outf.write("pass")
-        else:
-            raise IOError("Right now we can only handle fail and pass cases. Sorry.")
+
+
+rule check_protein_legality:
+    """Check that protein fasta files are legal."""
+    input:
+        pep = lambda wildcards: config["species"][wildcards.sample]["proteins"]
+    output:
+        pep_pass = config["tool"] + "/db/input_check/{sample}_proteins_pass.txt"
+    params:
+        duplicate_handling = config["duplicate_proteins"]
+    benchmark: "benchmarks/check_protein_legality/{sample}.check_protein_legality.benchmark.txt"
+    resources:
+        io_slots = 1,
+        mem_mb = legality_get_mem_mb,
+        runtime   = 60
+    threads: 1
+    retries: 6
+    run:
+        if check_protein_file_legality(input.pep, params.duplicate_handling):
+            with open(output.pep_pass, "w") as outf:
+                outf.write("pass")
+
+
+rule check_chrom_legality:
+    """Check that chrom files are legal and consistent with genome and proteins."""
+    input:
+        fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
+        pep   = lambda wildcards: config["species"][wildcards.sample]["proteins"],
+        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"]
+    output:
+        chrom_pass = config["tool"] + "/db/input_check/{sample}_chrom_pass.txt"
+    benchmark: "benchmarks/check_chrom_legality/{sample}.check_chrom_legality.benchmark.txt"
+    resources:
+        io_slots = 1,
+        mem_mb = legality_get_mem_mb,
+        runtime   = 60
+    threads: 1
+    retries: 6
+    run:
+        if check_chrom_file_legality(input.chrom, input.fasta, input.pep):
+            with open(output.chrom_pass, "w") as outf:
+                outf.write("pass")
 
