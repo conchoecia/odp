@@ -1,0 +1,176 @@
+"""
+Program  : odp_filechecker
+Language : snakemake
+Date     : 2025-09-04
+Author   : Darrin T. Schultz
+Email    : darrin.schultz@univie.ac.at
+Github   : https://github.com/conchoecia/odp
+License  : GNU GENERAL PUBLIC LICENSE, Version 3, 29 June 2007. See the LICENSE file.
+
+Description:
+  The purpose of this script is to check the input files for an odp
+  run with common issues that would cause problems later in the pipeline.
+
+  This was split off of the main pipeline, largely because it previously added a
+  computational bottleneck. The checks were run in a single rule that was resource-hungry
+  and often failed. Splitting that rule into multiple smaller rules took snakemake overhead
+  out of the main odp pipeline.
+
+Usage instructions:
+  - Run it with the same config file as the main pipeline, in the same directory.
+"""
+
+# This block imports fasta-parser as fasta
+import os
+import sys
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
+
+# ODP-specific imports
+scripts_path = os.path.join(snakefile_path, "../scripts")
+sys.path.insert(1, scripts_path)
+import odp_functions as odpf
+
+configfile: "config.yaml"
+# Perform a general check on the run since there are some common errors that
+#  should be caught regardless of which program is run.
+odpf.general_legal_run() # checks that the program isn't being run in the install directory
+
+# check for legal config entries. Useful for finding misspelled entries
+legal = ["proteins",      "chrom",    "genome",    "gff",     "minscafsize",
+         "manual_breaks", "note",     "plotorder", "sort_by_x_coord_blast",
+         "noylines",      "noxlines", "genus",     "species", "taxid",
+         "assembly_accession"]
+
+config["tool"] = "odp"
+
+# check if species in the snakefile
+if "species" not in config:
+    raise IOError("You must have a 'species' fields in the config file.")
+
+# make sure none of the sample names have underscores
+for thissample in config["species"]:
+    if "_" in thissample:
+        raise IOError("Sample names can't have '_' char: {}".format(thissample))
+
+# check if we have specified how to handle duplicate protein sequences
+if "duplicate_proteins" not in config:
+    config["duplicate_proteins"] = "fail"
+#else:
+#    options_list = ["fail", "best"]
+#    outstring = ", ".join(options_list)
+#    if config["duplicate_proteins"] not in options_list:
+#        raise IOError("duplicate_proteins must be set to one of the following: {}".format(outstring))
+
+# Check if we have specified a LG_db directory, if not, use the installed one.
+# This allows us to specify directories for testing, for example.
+if "LG_db" not in config:
+    config["LG_db"] = os.path.join(os.path.dirname(os.path.realpath(workflow.snakefile)), "../LG_db/")
+else:
+    # if it is specified, make sure it is a directory and exists
+    if not os.path.isdir(config["LG_db"]):
+        raise IOError("The LG_db directory does not exist: {}".format(config["LG_db"]))
+
+# see if we have included any illegal arguments
+illegal = set()
+for this_sample in config["species"]:
+    # this bit of code allows for users to also use the term minscaflen instead of minscafsize
+    if "minscaflen" in config["species"][this_sample]:
+        config["species"][this_sample]["minscafsize"] = config["species"][this_sample]["minscaflen"]
+        del config["species"][this_sample]["minscaflen"]
+    for key in config["species"][this_sample]:
+        if key not in legal:
+            illegal.add(key)
+
+if len(illegal) > 0:
+    print("We found some fields in your config file that are not used by this program.")
+    print("The only fields allowed for individual samples are:")
+    for key in legal:
+        print("  - {}".format(key))
+    print("The keys that we found that are not allowed/in the list above are:")
+    for key in illegal:
+        print("  - {}".format(key))
+
+# check diamond_or_blastp
+if "diamond_or_blastp" not in config:
+    config["diamond_or_blastp"] = "blastp"
+else:
+    if config["diamond_or_blastp"] not in ["diamond", "blastp"]:
+        raise IOError("diamond_or_blastp must be either 'diamond' or 'blastp'")
+
+#make fake breaks for later analyses
+for this in config["species"]:
+    if "manual_breaks" not in config["species"][this]:
+        config["species"][this]["manual_breaks"] = []
+    if "minscafsize" not in config["species"][this]:
+        config["species"][this]["minscafsize"] = 5000
+
+def flatten(list_of_lists):
+    """flatten a list of lists, unique only"""
+    return list(set([item for sublist in list_of_lists for item in sublist]))
+
+
+rule all:
+    input:
+        file_targets
+
+def legality_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed could change.
+    """
+    attemptdict = {1: 4000,
+                   2: 8000,
+                   3: 16000,
+                   4: 64000,
+                   5: 256000,
+                   6: 512000}
+    return attemptdict[attempt]
+
+rule check_input_legality:
+    """
+    The very first thing that we must do is to check the input files.
+    Determine whether the input files are formatted correctly.
+    We call a function that checks these files:
+      - The genome .fasta file
+      - The .chrom file
+      - The protein .fasta file
+
+    Notes:
+    20240106 - This job appears to request too much RAM, causing OOM errors even
+        when the input files are small. I'm not sure why this is happening.
+        As a result, I am now adding a resources to limit the number of simultaneous jobs.
+    """
+    input:
+        fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
+        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"],
+        pep   = lambda wildcards: config["species"][wildcards.sample]["proteins"]
+    output:
+        input_pass = config["tool"] + "/db/input_check/{sample}_pass.txt"
+    params:
+        duplicate_handling = config["duplicate_proteins"]
+    benchmark: "benchmarks/check_input_legality/{sample}.check_input_legality.benchmark.txt"
+    resources:
+        io_slots = 1,
+        mem_mb = legality_get_mem_mb, # 20240105 - Got this from here: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#dynamic-resources
+        runtime   = 60   # 10 minutes
+    threads: 1
+    retries: 6
+    run:
+        # We always check to see if the chrom file is legal, regardless of whether we're ignoring duplicate prots.
+        if not odpf.chrom_file_is_legal(input.chrom):
+            raise IOError("The chrom file is not legal: {}".format(input.chrom))
+        if params.duplicate_handling == "fail":
+            # We want to enforce that the input files are legal
+            # See the odpf.check_species_input_legality function for more details
+            if odpf.check_species_input_legality(input.fasta, input.pep, input.chrom):
+                with open(output.input_pass, "w") as outf:
+                    outf.write("pass")
+        elif params.duplicate_handling == "pass":
+            # we just assume that everything is copacetic and let the program continue
+            with open(output.input_pass, "w") as outf:
+                outf.write("pass")
+        else:
+            raise IOError("Right now we can only handle fail and pass cases. Sorry.")
+

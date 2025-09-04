@@ -46,7 +46,6 @@ def general_legal_run():
     safe_dirs   = [os.path.join(odp_path, "tests/test_odp_basic")]
     cwd      = os.getcwd()
 
-
     # if we are in the odp directory, but in the test directory, that's fine
     # test if we are in the odp directory
     crash = False
@@ -400,7 +399,7 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
         outmessage += "*  Each sequence in the genome assembly must have a unique ID.\n"
         outmessage += "*\n"
         outmessage += "*  The assembly with the problem is: " + fastapath + "\n"
-        outmessage += "*  There are " + str(len(duplicate)) + " duplicate sequence headers.\n"
+        outmessage += "*  There are " + str(len(duplicates)) + " duplicate sequence headers.\n"
         outmessage += "*  Here are the first 1 to 3:\n"
         outmessage += dupstring
         outmessage += "*\n"
