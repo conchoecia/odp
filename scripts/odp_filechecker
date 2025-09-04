@@ -29,6 +29,12 @@ dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
 import fasta
 import hashlib
+import math
+from pathlib import Path
+GiB = 1024**3
+
+def size_gib(p: str) -> float:
+    return max(0.001, Path(p).stat().st_size / GiB)  # float GiB, tiny floor
 
 import gzip
 
@@ -373,7 +379,9 @@ rule check_genome_legality:
     resources:
         io_slots = 1,
         mem_mb = legality_get_mem_mb,
-        runtime   = 60
+        runtime  = lambda wildcards, input: int(math.ceil(
+            5 + 10 * max(0.001, Path(input.fasta).stat().st_size / GiB)
+            ))
     threads: 1
     retries: 6
     run:
@@ -394,15 +402,15 @@ rule check_protein_legality:
     resources:
         io_slots = 1,
         mem_mb = legality_get_mem_mb,
-        runtime   = 60
+        runtime  = lambda wildcards, input: int(math.ceil(
+            5 + 8 * max(0.001, Path(input.pep).stat().st_size / GiB)
+            ))
     threads: 1
     retries: 6
     run:
         if check_protein_file_legality(input.pep, params.duplicate_handling):
             with open(output.pep_pass, "w") as outf:
                 outf.write("pass")
-
-
 
 rule check_chrom_legality:
     """Check that chrom files are legal and consistent with genome and proteins."""
@@ -416,7 +424,9 @@ rule check_chrom_legality:
     resources:
         io_slots = 1,
         mem_mb = legality_get_mem_mb,
-        runtime   = 60
+        runtime  = lambda wildcards, input: int(math.ceil(
+            5 + 20 * max(0.001, Path(input.chrom).stat().st_size / GiB)
+            ))
     threads: 1
     retries: 6
     run:

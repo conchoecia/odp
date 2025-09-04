@@ -45,7 +45,8 @@ def aggregate(config_path: str, benchmarks_dir: str) -> pd.DataFrame:
         config = yaml.safe_load(fh)
 
     records = []
-    pattern = re.compile(r"(?P<sample>[^.]+)\.(?P<rule>[^.]+)\.benchmark\.txt$")
+    pattern = re.compile(r"(?P<sample>.+)\.(?P<rule>[^.]+)\.benchmark\.txt$")
+
 
     for bfile in glob.glob(os.path.join(benchmarks_dir, "**", "*.benchmark.txt"), recursive=True):
         m = pattern.search(os.path.basename(bfile))
