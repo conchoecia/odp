@@ -326,10 +326,12 @@ def chrom_file_is_legal(chrompath):
     check_file_exists(chrompath)
     # 2. Open the file for whatever type it is
     chromhandle = fasta.get_open_func(chrompath)
+    seen_line = False
     # go through the file line by line and inspect each element
     for line in chromhandle:
         line = line.strip()
         if line:
+            seen_line = True
             fields = line.strip().split("\t")
             # check if any of the fields have leading or trailing whitespace
             for field in fields:
@@ -354,6 +356,8 @@ def chrom_file_is_legal(chrompath):
                 return False
     # close the handle
     chromhandle.close()
+    if not seen_line:
+        raise IOError("There are no entries in the chrom file {}!".format(chrompath))
     # if we get here, everything is good
     return True
 
@@ -390,6 +394,8 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
             genome_headers.add(record.id)
         else:
             duplicates.add(record.id)
+    if not genome_headers:
+        raise IOError("There are no sequences in the genome fasta file {}!".format(fastapath))
     if len(duplicates) > 0:
         dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicates)[:3]])
         # raise an error because each ID should only occur once
@@ -429,6 +435,8 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
             sequence_hashes.add(seq_hash)
         else:
             duplicate_sequences.add(record.id)
+    if not protein_headers:
+        raise IOError("There are no sequences in the protein fasta file {}!".format(peppath))
 
     if len(duplicate_headers) > 0:
         dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicate_headers)[:3]])
@@ -478,9 +486,11 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
     check_file_exists(chrompath)
     proteins_not_in_pep    = set()
     scaffolds_not_in_fasta = set()
+    seen_line = False
     for line in open(chrompath, 'r'):
         line = line.strip()
         if line:
+            seen_line = True
             fields = line.split("\t")
             # check that the protein was seen in the protein fasta file
             protid = fields[0]
@@ -489,6 +499,8 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
                 proteins_not_in_pep.add(protid)
             if scaffold not in genome_headers:
                 scaffolds_not_in_fasta.add(scaffold)
+    if not seen_line:
+        raise IOError("There are no entries in the chrom file {}!".format(chrompath))
 
     # 2. Check that the proteins in column 1 were seen in the protein fasta file
     if len(proteins_not_in_pep) > 0:
@@ -668,10 +680,12 @@ def generate_coord_structs_from_chrom_to_loc(chrom_file):
     prot_to_stop   = {}
     prot_to_middle = {}
     print("chrom_file", chrom_file)
+    seen_line = False
     with open(chrom_file, "r") as f:
        for line in f:
            line = line.strip()
            if line:
+               seen_line = True
                splitd = line.split()
                prot = splitd[0]
                # add things now
@@ -683,6 +697,8 @@ def generate_coord_structs_from_chrom_to_loc(chrom_file):
                prot_to_stop[prot]   = stop
                stop = int(splitd[4])
                prot_to_middle[prot] = int(start + (stop - start)/2)
+    if not seen_line:
+        raise IOError("There are no entries in the chrom file {}!".format(chrom_file))
     return { "prot_to_scaf":   prot_to_scaf,
              "prot_to_strand": prot_to_strand,
              "prot_to_start":  prot_to_start,
@@ -703,6 +719,8 @@ def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
             splitd = line.split()
             keep_these.add(splitd[0])
     chromhandle.close()
+    if len(keep_these) == 0:
+        raise IOError("There are no entries in the chrom file {}!".format(chrom_file))
     # If the output_fasta file name has a .gz, then we need to write a gzip file.
     # Otherwise, just write to a regular file.
     output_gz = False
@@ -716,7 +734,9 @@ def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
         outhandle = open(output_fasta, "w")
 
     # now that we have handled the output, filter the fasta file
+    seen_record = False
     for record in fasta.parse(input_fasta):
+        seen_record = True
         if record.id in keep_these and record.id not in printed_already:
             # The record object has the properties
             #  - Record.id
@@ -729,6 +749,9 @@ def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
             else:
                 print(record.format(wrap=80), file = outhandle, end="")
             printed_already.add(record.id)
+    if not seen_record:
+        outhandle.close()
+        raise IOError("There are no sequences in the fasta file {}!".format(input_fasta))
     outhandle.close()
 
 ###### THESE ARE THE FUNCTIONS FOR ODP and ODP_SANDWICH
