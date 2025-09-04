@@ -17,6 +17,7 @@ import odp_plotting_functions as odp_plot
 # other standard python libraries
 from itertools import combinations
 from itertools import product
+import hashlib
 
 # non-standard dependencies
 import pandas as pd
@@ -415,17 +416,18 @@ def check_species_input_legality(fastapath, peppath, chrompath) -> bool:
     # 1. check that the file exists
     check_file_exists(peppath)
     # 2. check that each sequence ID exists only once
-    protein_headers     = set()
-    duplicate_headers   = set()
-    protein_sequences   = set()
-    duplicate_sequences = set()
+    protein_headers      = set()
+    duplicate_headers    = set()
+    sequence_hashes      = set()
+    duplicate_sequences  = set()
     for record in fasta.parse(peppath):
         if record.id not in protein_headers:
             protein_headers.add(record.id)
         else:
             duplicate_headers.add(record.id)
-        if str(record.seq) not in protein_sequences:
-            protein_sequences.add(str(record.seq))
+        seq_hash = hashlib.sha256(str(record.seq).encode()).digest()
+        if seq_hash not in sequence_hashes:
+            sequence_hashes.add(seq_hash)
         else:
             duplicate_sequences.add(record.id)
 
