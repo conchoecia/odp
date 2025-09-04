@@ -287,7 +287,7 @@ rule check_input_legality:
       - The protein .fasta file
 
     Notes:
-    202140106 - This job appears to request too much RAM, causing OOM errors even
+    20240106 - This job appears to request too much RAM, causing OOM errors even
         when the input files are small. I'm not sure why this is happening.
         As a result, I am now adding a resources to limit the number of simultaneous jobs.
     """
