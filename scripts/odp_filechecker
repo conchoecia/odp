@@ -380,7 +380,7 @@ rule check_genome_legality:
         io_slots = 1,
         mem_mb = legality_get_mem_mb,
         runtime  = lambda wildcards, input: int(math.ceil(
-            5 + 10 * max(0.001, Path(input.fasta).stat().st_size / GiB)
+            5 + 20 * max(0.001, Path(input.fasta).stat().st_size / GiB) # switched to 20 minutes per GiB on disk
             ))
     threads: 1
     retries: 6
@@ -425,7 +425,7 @@ rule check_chrom_legality:
         io_slots = 1,
         mem_mb = legality_get_mem_mb,
         runtime  = lambda wildcards, input: int(math.ceil(
-            5 + 20 * max(0.001, Path(input.chrom).stat().st_size / GiB)
+            5 + 13 * max(0.001, Path(input.fasta).stat().st_size / GiB) # uses the base size of the genome to estimate runtime, plus a little more
             ))
     threads: 1
     retries: 6
