@@ -259,14 +259,6 @@ def check_protein_file_legality(peppath, duplicate_handling="fail"):
         raise IOError(outmessage)
     return True
 
-def open_text_maybe_gzip(path, encoding="utf-8"):
-    """Open text file, auto-detecting gzip vs plain."""
-    with open(path, "rb") as fh:
-        head = fh.read(2)
-    if head == b"\x1f\x8b":  # gzip magic
-        return gzip.open(path, "rt", encoding=encoding)
-    return open(path, "rt", encoding=encoding)
-
 def check_chrom_file_legality(chrompath, fastapath, peppath):
     """
     Checks that the chrom file is legally formatted. Looks for common issues.
@@ -286,7 +278,7 @@ def check_chrom_file_legality(chrompath, fastapath, peppath):
     scaffolds_not_in_fasta = set()
 
     has_line = False
-    with open_text_maybe_gzip(chrompath) as chromhandle:  # support gzipped chrom files
+    with odpf.open_text_maybe_gzip(chrompath) as chromhandle:  # support gzipped chrom files
         for line in chromhandle:
             line = line.strip()
             if not line or line.startswith("#"):

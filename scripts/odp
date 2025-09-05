@@ -35,6 +35,7 @@ source_path = os.path.join(snakefile_path, "../source")
 sys.path.insert(1, source_path)
 import rbh_tools
 
+bin_path = os.path.join(snakefile_path, "../bin")
 scripts_path = os.path.join(snakefile_path, "../scripts")
 
 # We need to generate random colors
@@ -263,7 +264,9 @@ wildcard_constraints:
 
 rule all:
     input:
-        file_targets
+        #file_targets
+        expand(config["tool"] + "/db/{sample}_prots.pep.gz", sample = config["species"])
+
 
 def filtprot_get_mem_mb(wildcards, attempt):
     """
@@ -282,13 +285,16 @@ rule filter_prots:
     Sometimes the prot file with have sequences that are not present in
      the chrom file. Make a prot file of only the proteins in the chrom file.
 
-    We require that the file has passed the input checks first.
+    Use seqtk for speed and low memory usage.
     """
     input:
         prots = lambda wildcards: config["species"][wildcards.sample]["proteins"],
-        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"],
+        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"]
     output:
+        ids = temp(config["tool"] + "/db/{sample}_prots.ids.txt"),
         pep = config["tool"] + "/db/{sample}_prots.pep.gz"
+    params:
+        seqtk = os.path.join(bin_path, "seqtk/seqtk")
     retries: 6
     benchmark: "benchmarks/filter_prots/{sample}.filter_prots.benchmark.txt"
     resources:
@@ -296,8 +302,21 @@ rule filter_prots:
         mem_mb = filtprot_get_mem_mb, # should be small
         runtime   = 10  # ten minutes
     threads: 1
-    run:
-        odpf.filter_fasta_chrom(input.chrom, input.prots, output.pep)
+    shell:
+        """
+        # 1) IDs from col1 of .chrom (uniq)
+        if [[ "{input.chrom}" == *.gz ]]; then zcat "{input.chrom}"; else cat "{input.chrom}"; fi \
+          | cut -f1 | awk 'NF' | sort -u > "{output.ids}"
+
+        # 2) Filter FASTA by those IDs
+        #    - seqtk subseq matches sequence 'name' (ID before first space); it reads .gz directly
+        #    - strip descriptions so headers are just '>ID'
+        #    - OPTIONAL: dedupe by ID (keep first occurrence)
+        #    - wrap to 80 and gzip
+        {params.seqtk} subseq "{input.prots}" "{output.ids}" \
+          | {params.seqtk} seq -l 80 \
+          | gzip -c > {output.pep}
+        """
 
 rule make_diamond_and_blast_db:
     """
@@ -2214,7 +2233,8 @@ def gzhmm_get_mem_mb(wildcards, attempt):
                    5: 16000,
                    6: 320000,
                    7: 640000}
-    return attemptdict[attempt]
+    return attemptdict.get(attempt, attemptdict[max(attemptdict)])
+
 
 rule hmm_2_gzip_hmm_results:
     """

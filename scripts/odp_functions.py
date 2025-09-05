@@ -689,47 +689,49 @@ def generate_coord_structs_from_chrom_to_loc(chrom_file):
              "prot_to_stop":   prot_to_stop,
              "prot_to_middle": prot_to_middle }
 
+def open_text_maybe_gzip(path, encoding="utf-8"):
+    with open(path, "rb") as fh:
+        head = fh.read(2)
+    if head == b"\x1f\x8b":
+        return gzip.open(path, "rt", encoding=encoding)
+    return open(path, "rt", encoding=encoding)
+
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     """
-    Takes a chrom file, gzipped or not, only keeps proteins in input_fasta from chrom file,
-     saves those prots to output_fasta.
+    Keep only proteins whose IDs appear in chrom_file; write to output_fasta (gz or plain).
+    RAM: O(#unique IDs in chrom) and that set shrinks as we write matches.
     """
+    # 1) Collect unique IDs to keep (first TAB-delimited field)
     keep_these = set()
-    printed_already = set()
     chromhandle = fasta.get_open_func(chrom_file)
-    for line in chromhandle:
-        line = line.strip()
-        if line:
-            splitd = line.split()
-            keep_these.add(splitd[0])
-    chromhandle.close()
-    # If the output_fasta file name has a .gz, then we need to write a gzip file.
-    # Otherwise, just write to a regular file.
-    output_gz = False
-    for thisending in [".gz", ".gzip"]:
-        if output_fasta.endswith(thisending):
-            output_gz = True
-    outhandle = None
-    if output_gz:
-        outhandle = gzip.open(output_fasta, "wt")
-    else:
-        outhandle = open(output_fasta, "w")
+    with open_text_maybe_gzip(chrom_file) as chromhandle:
+        for line in chromhandle:
+            line = line.strip()
+            if not line:
+                continue
+            keep_these.add(line.split("\t", 1)[0])
 
-    # now that we have handled the output, filter the fasta file
-    for record in fasta.parse(input_fasta):
-        if record.id in keep_these and record.id not in printed_already:
-            # The record object has the properties
-            #  - Record.id
-            #  - Record.seq
-            #  - Record.desc
-            # get rid of the description to avoid parsing errors later
-            record.desc=""
-            if output_gz:
-                outhandle.write(record.format(wrap=80))
-            else:
-                print(record.format(wrap=80), file = outhandle, end="")
-            printed_already.add(record.id)
-    outhandle.close()
+    # 1) Open output (gz or plain)
+    out_is_gz = output_fasta.endswith((".gz", ".gzip"))
+    out = gzip.open(output_fasta, "wt") if out_is_gz else open(output_fasta, "w")
+    write = out.write
+
+    try:
+        # 3) Stream over input FASTA using your parser; write matches and shrink the set
+        for record in fasta.parse(input_fasta):
+            pid = record.id
+            if pid in keep_these:
+                keep_these.discard(pid)     # let the set shrink to free RAM
+                # Drop description to avoid later parsing issues; write directly (no format())
+                write(f">{pid}\n")
+                seq = record.seq            # parser already made this string
+                # Write in chunks to avoid creating one giant formatted string
+                for i in range(0, len(seq), 80):
+                    write(seq[i:i+80] + "\n")
+                if not keep_these:          # optional early exit if all found
+                    break
+    finally:
+        out.close()
 
 ###### THESE ARE THE FUNCTIONS FOR ODP and ODP_SANDWICH
 def genome_coords_to_plotstart_dict(path_to_genocoords_file, **kwargs):
