@@ -1,3 +1,8 @@
+# bin
+bin/fainfo
+# downloads
+source/kseq.h
+
 .DS_Store
 .Rhistory
 LG_TEMP/*

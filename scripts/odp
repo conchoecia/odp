@@ -281,19 +281,26 @@ def filtprot_get_mem_mb(wildcards, attempt):
 
 rule filter_prots:
     """
+    This is a preprocessing step for the input files.
+    NOTE - I grouped the chromsize and pep filtering steps together to put the IO-intensive
+           steps together to avoid overloading the SLURM scheduler.
     Sometimes the prot file with have sequences that are not present in
      the chrom file. Make a prot file of only the proteins in the chrom file.
 
     Use seqtk for speed and low memory usage.
     """
     input:
+        fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
         prots = lambda wildcards: config["species"][wildcards.sample]["proteins"],
         chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"]
     output:
         ids = temp(config["tool"] + "/db/{sample}_prots.ids.txt"),
-        pep = config["tool"] + "/db/{sample}_prots.pep.gz"
+        pep = config["tool"] + "/db/{sample}_prots.pep.gz",
+        chromsize = config["tool"] + "/step0-chromsize/species/{sample}.chromsize"
     params:
-        seqtk = os.path.join(bin_path, "seqtk/seqtk")
+        seqtk = os.path.join(bin_path, "seqtk/seqtk"),
+        fainfo = os.path.join(bin_path, "fainfo"),
+        sample = lambda wildcards: wildcards.sample,
     retries: 6
     benchmark: "benchmarks/filter_prots/{sample}.filter_prots.benchmark.txt"
     resources:
@@ -320,6 +327,9 @@ rule filter_prots:
         {params.seqtk} subseq "{input.prots}" "{output.ids}" \
           | {params.seqtk} seq -l 80 \
           | gzip -c > {output.pep}
+
+        # 3) Get chrom sizes
+        {params.fainfo} {params.sample} {input.fasta} > {output.chromsize}
         """
 
 rule make_diamond_and_blast_db:
@@ -701,7 +711,7 @@ def calculate_FET(genesdf, scafdict):
         allowed_scaffolds = set(scafdict[all_species[i]])  # Convert to a set for fast lookup
         scafcol = "{}_scaf".format(all_species[i])
         genesdf = genesdf.loc[genesdf[scafcol].isin(allowed_scaffolds)]
-    print("genesdf after filtering\n", genesdf)
+    #print("genesdf after filtering\n", genesdf)
 
     genesdf["whole_FET"] = -1
     genesdf["break_FET"] = -1
@@ -1786,68 +1796,38 @@ def synteny_plot_sheet(df_file, plotdf_file, synplot,
 
     plt.savefig(synplot)
 
-def chromsize_get_mem_mb(wildcards, attempt):
-    """
-    The amount of RAM needed for miniprot is highly variable.
-    """
-    attemptdict = {1: 4000,
-                   2: 8000,
-                   3: 16000,
-                   4: 32000,
-                   5: 64000,
-                   6: 128000,
-                   7: 256000}
-    return attemptdict[attempt]
-
-rule get_chromsize_of_one_species:
-    """
-    This chromsize file is used later to speed up the synteny_plot analysis.
-    The first column is the sample name
-    2nd col is the scaf name
-    3rd col is the scaf length
-
-    We filter out the scaffolds that are too small here.
-
-    We require that the sample pass the input file checks first.
-    Notes:
-      - 20240106 - We use this implementation instead of the fasta package because it consumes
-        less RAM.
-    """
-    input:
-        fasta = lambda wildcards: config["species"][wildcards.sp]["genome"]
-    output:
-        chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
-    benchmark: "benchmarks/get_chromsize_of_one_species/{sp}.get_chromsize_of_one_species.benchmark.txt"
-    resources:
-        io_slots = 1,
-        mem_mb = chromsize_get_mem_mb, # Use 2GB of RAM in case there are large chromosomes
-        runtime   = 20   # ten minutes in seconds
-    retries: 7
-    threads: 1
-    run:
-        outhandle = open(output.chromsize, "w")
-        scaffold_lengths = {}
-        # determine whether we open with gzip or not
-        handle = fasta.get_open_func(input.fasta)
-        for line in handle:
-            line = line.strip()
-
-            if line.startswith('>'):
-                # Header line indicating a new scaffold. We cannot simply split the header on a space character,
-                #  because we have found some fasta files where the user/the software introduced tab characters
-                #  in the header. (WHY?). I.E. Do not use this code to split: current_scaffold = line[1:].split(" ")[0]
-                current_scaffold = line[1:].split()[0]
-                scaffold_lengths[current_scaffold] = 0
-            else:
-                # Sequence line, update scaffold length
-                if current_scaffold is not None:
-                    scaffold_lengths[current_scaffold] += len(line)
-        handle.close()
-
-        for thisscaf in scaffold_lengths:
-            print("{}\t{}\t{}".format(wildcards.sp,
-                                      thisscaf, scaffold_lengths[thisscaf]), file = outhandle)
-        outhandle.close()
+#rule get_chromsize_of_one_species:
+#    """
+#    This chromsize file is used later to speed up the synteny_plot analysis.
+#    The first column is the sample name
+#    2nd col is the scaf name
+#    3rd col is the scaf length
+#
+#    We filter out the scaffolds that are too small here.
+#
+#    We require that the sample pass the input file checks first.
+#    Notes:
+#      - 20240106 - We use this implementation instead of the fasta package because it consumes
+#        less RAM.
+#    """
+#    input:
+#        fasta = lambda wildcards: config["species"][wildcards.sp]["genome"]
+#    output:
+#        chromsize = config["tool"] + "/step0-chromsize/species/{sp}.chromsize"
+#    benchmark: "benchmarks/get_chromsize_of_one_species/{sp}.get_chromsize_of_one_species.benchmark.txt"
+#    params:
+#        fainfo = os.path.join(bin_path, "fainfo"),
+#        sample = lambda wildcards: wildcards.sp
+#    resources:
+#        io_slots = 1,
+#        mem_mb = chromsize_get_mem_mb, # Use 2GB of RAM in case there are large chromosomes
+#        runtime   = 10   # ten minutes in seconds
+#    retries: 7
+#    threads: 1
+#    shell:
+#        """
+#        {params.fainfo} {params.sample} {input.fasta} > {output.chromsize}
+#        """
 
 def chromsize_to_s2c2s(chromsize_path):
     """
@@ -2152,79 +2132,121 @@ rule hmm_1_against_prots:
     threads: 8 # 20231211 - 3 threads was very slow and used only around 500MB of RAM at peak. Trying 8 threads.
     retries: 4
     run:
-        # GET THE PROTEIN IDS IN THE RBH FILE
-        # first we load the .rbh file to process all of the possible protein IDs
+        # helper: stream fasta headers only (no sequence allocation)
+        def fasta_header_ids(path):
+            """Yield FASTA IDs (first token after '>') from plain or gz files."""
+            with odpf.open_text_maybe_gzip(path) as fh:
+                for line in fh:
+                    if line.startswith(">"):
+                        yield line[1:].strip().split()[0]
+
+        # --- PARSE RBH table and build mapping dict ---
         rbhdf = rbh_tools.parse_rbh(input.rbh)
-        # get all of the '*_gene' columns
-        gene_columns = [x for x in rbhdf.columns if x.endswith("_gene")]
-        # get all of the species prefixes, the first part of the '*_gene' columns. Keep everything up until the last _ character
-        all_species = ["_".join(x.split("_")[0:-1]) for x in gene_columns]
-        # concatenate the contents of the "*_gene" columns
-        all_protein_ids = set()
-        for thiscol in gene_columns:
-            all_protein_ids = all_protein_ids.union(set(rbhdf[thiscol].unique()))
-        # now, for the column rbh, tag "_" + the species name to the end of the protein ID, for each species, and add these to all_protein_ids
-        for thissp in all_species:
-            all_protein_ids = all_protein_ids.union(set([x + "_" + thissp for x in rbhdf["rbh"].unique()]))
 
-        # GET THE PROTEIN IDS IN THE SAMPLE
-        sample_protein_ids = set()
-        for record in fasta.parse(input.proteins):
-            sample_protein_ids.add(record.id)
+        # gene columns and rbh values (cache these once)
+        gene_columns = [c for c in rbhdf.columns if c.endswith("_gene")]
+        if "rbh" not in rbhdf.columns:
+            raise IOError(f"RBH file {input.rbh} missing required 'rbh' column.")
 
-        # DECISION TIME
-        # If the protein ids in the sample are a subset of what was found in the RBH file, then print out a pseudo-hmmsearch file
-        # If not, continue with the actual hmm search.
+        rbh_values = set(rbhdf["rbh"].dropna().astype(str).unique())
+        print(f"[hmm_1_against_prots] {wildcards.coloredby} has {len(rbh_values)} unique RBH families.")
+
+        # TODO - If the use cases of rbh files get to big s.t. the number of gene columns * rows is several million
+        #         then the melt operation below might be too slow / memory-intensive.
+        # Melt gene columns to build protein -> rbh mapping (vectorized & fast)
+        # This avoids repeated .unique() and many DataFrame scans
+        melted = rbhdf.melt(id_vars="rbh", value_vars=gene_columns, value_name="prot", var_name="orig_col")
+        melted = melted[melted["prot"].notna()]
+        # Ensure string types
+        melted["prot"] = melted["prot"].astype(str)
+        melted["rbh"] = melted["rbh"].astype(str)
+
+        mapping = dict(zip(melted["prot"], melted["rbh"]))  # protein_id -> genefamily (rbh)
+
+        # species suffixes for gene-columns, e.g., if column 'X_gene' -> 'X'
+        all_species = [col.rsplit("_", 1)[0] for col in gene_columns]
+
+        # Build set of allowed ids:
+        #  - all protein ids present in mapping keys
+        #  - all rbh_values themselves (some ids are gene-family ids)
+        #  - rbh_values suffixed with species names (rbh + '_' + species)
+        rbh_suffixed = {f"{rbh}_{sp}" for rbh in rbh_values for sp in all_species}
+        all_protein_ids = set(mapping.keys()) | set(rbh_values) | rbh_suffixed
+
+
+        # --- READ SAMPLE PROTEIN IDS (header-only) ---
+        sample_protein_ids = set(fasta_header_ids(input.proteins))
+
+        # example [hmm_1_against_prots] sample=Urchin RBH_families=223 mapped_proteins=854 sample_proteins=3366
+        #
+        # sample_proteins is the number of entries in the chrom file and protein file. 3366 for Urchin.
+        print(f"[hmm_1_against_prots] sample={wildcards.sample} RBH_families={len(rbh_values)} "
+              f"mapped_proteins={len(mapping)} sample_proteins={len(sample_protein_ids)}")
+
+        # --- DECIDE: subset -> write pseudo tblout; else run hmmsearch ---
+        os.makedirs(os.path.dirname(output.hmm), exist_ok=True)
+
         if sample_protein_ids.issubset(all_protein_ids):
-            # write out a pseudo hmmsearch file
-            with open(output.hmm, "w") as o:
-                for thisid in sample_protein_ids:
-                    # we must determine which gene family (rbh column) in the rbh file this protein belongs to.
-                    thisgenefamily = ""
-                    potential_gene_family_id = "_".join(thisid.split("_")[0:-1])
-
-                    # this case applies to when this is a gene family protein name
-                    if potential_gene_family_id in rbhdf["rbh"].unique():
-                        # the genefamily is the rbh value of this column
-                        thisgenefamily = potential_gene_family_id
+            # produce pseudo tblout mapping each sample protein to its genefamily
+            missing = []
+            with open(output.hmm, "w") as outfh:
+                for prot_id in sorted(sample_protein_ids):
+                    genefam = ""
+                    # direct cases:
+                    if prot_id in rbh_values:
+                        genefam = prot_id
+                    elif prot_id in mapping:
+                        genefam = mapping[prot_id]
                     else:
-                        for thiscol in gene_columns:
-                            # this case applies to when this is a specific protein ID that exists in another sample
-                            if thisid in rbhdf[thiscol].unique():
-                                # the genefamily is the rbh value of this column
-                                thisgenefamily = rbhdf.loc[rbhdf[thiscol] == thisid, "rbh"].values[0]
-                                break
-                    if thisgenefamily == "":
-                        raise IOError("The gene family wasn't assigned for some reason. This should not happpen. One possible cause is that the protein fasta file had a blank header.")
-                    # there are 19 fields. The first is the protein ID, the fourth is the gene family, and the rest are alignment scores
-                    print("{}\t-\t{}\t-\t0\t9999\t0\t0\t9999\t0\t1\t1\t1\t1\t1\t1\t1\t1\t1".format(
-                        thisid, thisgenefamily), file = o)
+                        # maybe header looks like PROT_RBH and RBH is the prefix
+                        cand = prot_id.rsplit("_", 1)[0]
+                        if cand in rbh_values:
+                            genefam = cand
+                    if not genefam:
+                        missing.append(prot_id)
+                        continue
+                    # produce the same 19-field format used by your pipeline
+                    outfh.write(f"{prot_id}\t-\t{genefam}\t-\t0\t9999\t0\t0\t9999\t0\t1\t1\t1\t1\t1\t1\t1\t1\t1\n")
+
+            if missing:
+                # show up to 20 missing as context
+                raise IOError(f"Missing gene-family mappings for {len(missing)} sample proteins "
+                              f"in sample {wildcards.sample}: {missing[:20]} ...")
+            else:
+                print(f"[hmm_1_against_prots] Wrote pseudo tblout for {wildcards.sample} with {len(sample_protein_ids)} entries.")
         else:
-            # remove the file from the output.hmm, just get that directory path
-            outdirec_path = os.path.dirname(output.hmm)
-            # safely, recursively make the outdirec_path for output.hmm
-            os.makedirs(outdirec_path, exist_ok = True)
-            # first check that the hmmsearch program is an executable in the current environment. If not, raise an error.
+            # run real hmmsearch
             if shutil.which("hmmsearch") is None:
-                raise IOError("The hmmsearch program is not in the current environment. Please install it or configure your environment and try again. For slurm clusters, you might try 'module load hmmer' or 'conda install -c bioconda hmmer'.")
-            # Example HMM command
+                raise IOError("The 'hmmsearch' program is not in PATH. Please install or load the hmmer module.")
             hmm_command = f"hmmsearch --incE 1E-5 --tblout {output.hmm} --cpu {threads} --noali --notextw {input.hmm} {input.proteins} > /dev/null"
             # Run the HMM command using subprocess. Check the return code. If it is not 0, raise an error.
             # check = True returns a CalledProcessError if the return code is not 0
+            print(f"[hmm_1_against_prots] Running hmmsearch: {hmm_command}")
             subprocess.run(hmm_command, shell = True, check = True)
-        # We have output the hmmsearch file. We need to check it to make sure that all of the entries have the same number of fields
-        # Every field must look like this
-        #   EAA03888.3           -          Simakov2022BCnS_genefamily_4903 -            3.4e-25   87.8   0.0   4.3e-25   87.5   0.0   1.0   1   0   0   1   1   1   1 -
-        # There are 19 fields
-        with open(output.hmm, "r") as f:
-            counter = 0
-            prev = ""
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    fields = line.split()
-                    if len(fields) != 19:
-                        raise IOError("The hmmsearch file has an incorrect number of fields. This should not happen. This means that this job failed for sample {}. Please check the hmmsearch file and try again.".format(wildcards.sample))
+            print("[hmm_1_against_prots] hmmsearch finished.")
+
+        # --- Validate that every non-comment line has exactly 19 fields ---
+        bad_lines = []
+        with open(output.hmm, "r") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                # split at most 18 times -> gives at most 19 fields; last field keeps any spaces (description)
+                fields = s.split(None, 18)
+                if len(fields) != 19:
+                    bad_lines.append((lineno, s))
+                    if len(bad_lines) > 10:
+                        break
+        if bad_lines:
+            lineno, example_line = bad_lines[0]
+            raise IOError(
+                f"hmmsearch output {output.hmm} has lines with incorrect number of fields "
+                f"(expected 19). First bad line at {lineno}: {example_line!r} "
+                f"for sample {wildcards.sample}."
+            )
+
+        print(f"[hmm_1_against_prots] Completed rule for sample {wildcards.sample}.")
 
 def gzhmm_get_mem_mb(wildcards, attempt):
     """

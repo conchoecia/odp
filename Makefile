@@ -1,6 +1,25 @@
-all: BCnS_ALG UnicellLG UnicellLGOrthofinder seqtk
+# ---- toolchain ------------------------
+CC       ?= cc
+CFLAGS   ?= -O3 -std=c11 -Wall -Wextra
+CPPFLAGS ?= -Ibin/seqtk
+LDLIBS   ?= -lz
 
-.PHONY: seqtk
+
+all: BCnS_ALG UnicellLG UnicellLGOrthofinder seqtk fainfo
+
+.PHONY: seqtk fainfo
+
+# ---- fainfo -----------------------------------------------------------------
+# Build ./bin/fainfo from ./source/fainfo.c using kseq.h in bin/seqtk/
+fainfo: bin/fainfo
+
+KSEQ_URL = https://raw.githubusercontent.com/lh3/seqtk/master/kseq.h
+
+bin/fainfo: source/fainfo.c bin/seqtk/seqtk
+	@mkdir -p bin
+	@curl -L $(KSEQ_URL) -o source/kseq.h
+	@$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LDLIBS)
+	@echo "Built: $@"
 
 seqtk: bin/seqtk/seqtk
 
