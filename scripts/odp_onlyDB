@@ -112,39 +112,42 @@ else:
     if not os.path.isdir(config["LG_db"]):
         raise IOError("The LG_db directory does not exist: {}".format(config["LG_db"]))
 
-# see if we have included any illegal arguments
-illegal = set()
-for this_sample in config["species"]:
-    # this bit of code allows for users to also use the term minscaflen instead of minscafsize
-    if "minscaflen" in config["species"][this_sample]:
-        config["species"][this_sample]["minscafsize"] = config["species"][this_sample]["minscaflen"]
-        del config["species"][this_sample]["minscaflen"]
-    for key in config["species"][this_sample]:
-        if key not in legal:
-            illegal.add(key)
+# This could be put in a first checkpoint rule, but would retrigger everything
+## see if we have included any illegal arguments
+#illegal = set()
+#for this_sample in config["species"]:
+#    # this bit of code allows for users to also use the term minscaflen instead of minscafsize
+#    if "minscaflen" in config["species"][this_sample]:
+#        config["species"][this_sample]["minscafsize"] = config["species"][this_sample]["minscaflen"]
+#        del config["species"][this_sample]["minscaflen"]
+#    for key in config["species"][this_sample]:
+#        if key not in legal:
+#            illegal.add(key)
+#
+#if len(illegal) > 0:
+#    print("We found some fields in your config file that are not used by this program.")
+#    print("The only fields allowed for individual samples are:")
+#    for key in legal:
+#        print("  - {}".format(key))
+#    print("The keys that we found that are not allowed/in the list above are:")
+#    for key in illegal:
+#        print("  - {}".format(key))
 
-if len(illegal) > 0:
-    print("We found some fields in your config file that are not used by this program.")
-    print("The only fields allowed for individual samples are:")
-    for key in legal:
-        print("  - {}".format(key))
-    print("The keys that we found that are not allowed/in the list above are:")
-    for key in illegal:
-        print("  - {}".format(key))
+# no need for this
+## check diamond_or_blastp
+#if "diamond_or_blastp" not in config:
+#    config["diamond_or_blastp"] = "blastp"
+#else:
+#    if config["diamond_or_blastp"] not in ["diamond", "blastp"]:
+#        raise IOError("diamond_or_blastp must be either 'diamond' or 'blastp'")
 
-# check diamond_or_blastp
-if "diamond_or_blastp" not in config:
-    config["diamond_or_blastp"] = "blastp"
-else:
-    if config["diamond_or_blastp"] not in ["diamond", "blastp"]:
-        raise IOError("diamond_or_blastp must be either 'diamond' or 'blastp'")
-
-#make fake breaks for later analyses
-for this in config["species"]:
-    if "manual_breaks" not in config["species"][this]:
-        config["species"][this]["manual_breaks"] = []
-    if "minscafsize" not in config["species"][this]:
-        config["species"][this]["minscafsize"] = 5000
+# This should be removed
+##make fake breaks for later analyses
+#for this in config["species"]:
+#    if "manual_breaks" not in config["species"][this]:
+#        config["species"][this]["manual_breaks"] = []
+#    if "minscafsize" not in config["species"][this]:
+#        config["species"][this]["minscafsize"] = 5000
 
 def flatten(list_of_lists):
     """flatten a list of lists, unique only"""
@@ -186,88 +189,47 @@ if (config["prot_to_color"] == {}) and (config["prot_to_color_rbh"] == {}):
 # file targets are what we want to plot
 file_targets = []
 
-# come up with a list of blast/diamond jobs
-# we must have every combination that is in the analyses_list
-config["blastjobs"] = {}
-config["analysisspecies"] = set()
-config["analysispairs"] = {}
-for tup in permutations(config["species"], 2):
-    keep_pair = True
-    if "only_analyses_with_these_sp" in config:
-        if (tup[0] in config["only_analyses_with_these_sp"]) or (tup[1] in config["only_analyses_with_these_sp"]):
-            pass # we keep it
-        else:
-            keep_pair = False
-    if keep_pair:
-        # all the blast analyses
-        config["blastjobs"]["{}_{}".format(tup[0], tup[1])] = list(tup)
-        # the individual species
-        config["analysisspecies"].add(tup[0])
-        config["analysisspecies"].add(tup[1])
-        # get the sorted reciprocal analyses
-        t = list(sorted(tup))
-        config["analysispairs"]["{}_{}".format(t[0], t[1])] = t
-
-# if we want to plot more than LGs, add those special file
-if "plot_sp_sp" not in config:
-    config["plot_sp_sp"] = True
-
-# file targets are what we want to plot
-# if we want to plot more than LGs, add those special file
-if "plot_LGs" not in config:
-    config["plot_LGs"] = True
-
-
-if config["plot_sp_sp"]:
-    # We figured out the blast_jobs above
-    # find the reciprocal best hits
-    file_targets += [config["tool"] + "/step1-rbh/{}_reciprocal_best_hits.rbh".format(x)
-        for x in config["analysispairs"]]
-
-    # Make a final filtered rbh plot that only has the FET-significant orthologs. Keep only p-values <= 0.05.
-    #  Assign a group name and color to each set
-    file_targets += [config["tool"] + "/step1-rbh-filtered/{}_reciprocal_best_hits.D.FET.filt.rbh".format(x)
-        for x in config["analysispairs"]]
-
-    # no color here
-    file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_xy_reciprocal_best_hits.plotted.rbh".format(x)
-        for x in config["analysispairs"]]
-    file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_xy_synteny.pdf".format(x)
-        for x in config["analysispairs"]]
-    file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_yx_synteny.pdf".format(x)
-        for x in config["analysispairs"]]
-
-    # If we also want to plot the LGs, we do that for sp-sp comparisons
-    if config["plot_LGs"]:
-        # This set of files plots the installed LGs against all of the datasets
-        # color by the things in the chrom settings
-        file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
-          for x in config["analysispairs"] for y in config["prot_to_color"]]
-        file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
-          for x in config["analysispairs"] for y in config["prot_to_color"]]
-        file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
-          for x in config["analysispairs"] for y in config["prot_to_color"]]
-
-if config["plot_LGs"]:
-    # We also want to plot the ALGs as if they were genomes, against the individual species
-    # This line specifically is for testing the RBH-as-a-species analysis
-    # the rbh file after setting up the plotting
-    file_targets += expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_reciprocal_best_hits.plotted.rbh",
-           hmm = config["prot_to_color"], sp = config["species"])
-    # and the pdfs we are plotting of these relationships
-    file_targets += expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_synteny.pdf",
-           hmm = config["prot_to_color"], sp = config["species"])
-    file_targets += expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_yx_synteny.pdf",
-           hmm = config["prot_to_color"], sp = config["species"])
-
-# plot the decay blocks
-if "plot_LG_decay" not in config:
-    config["plot_LG_decay"] = False
-if config["plot_LG_decay"]:
-    file_targets += expand(config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.pdf",
-           hmm = config["prot_to_color"], sp = config["species"])
-    file_targets += expand(config["tool"] + "/step2-figures/ALG_decay_plots/{hmm}_{sp}_ALG_decay.tsv",
-           hmm = config["prot_to_color"], sp = config["species"])
+#if config["plot_sp_sp"]:
+#    # We figured out the blast_jobs above
+#    # find the reciprocal best hits
+#    file_targets += [config["tool"] + "/step1-rbh/{}_reciprocal_best_hits.rbh".format(x)
+#        for x in config["analysispairs"]]
+#
+#    # Make a final filtered rbh plot that only has the FET-significant orthologs. Keep only p-values <= 0.05.
+#    #  Assign a group name and color to each set
+#    file_targets += [config["tool"] + "/step1-rbh-filtered/{}_reciprocal_best_hits.D.FET.filt.rbh".format(x)
+#        for x in config["analysispairs"]]
+#
+#    # no color here
+#    file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_xy_reciprocal_best_hits.plotted.rbh".format(x)
+#        for x in config["analysispairs"]]
+#    file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_xy_synteny.pdf".format(x)
+#        for x in config["analysispairs"]]
+#    file_targets += [config["tool"] + "/step2-figures/synteny_nocolor/{}_yx_synteny.pdf".format(x)
+#        for x in config["analysispairs"]]
+#
+#    # If we also want to plot the LGs, we do that for sp-sp comparisons
+#    if config["plot_LGs"]:
+#        # This set of files plots the installed LGs against all of the datasets
+#        # color by the things in the chrom settings
+#        file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_reciprocal_best_hits.coloredby_{}.plotted.rbh".format(y, x, y)
+#          for x in config["analysispairs"] for y in config["prot_to_color"]]
+#        file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_xy_synteny_coloredby_{}.pdf".format(y, x, y)
+#          for x in config["analysispairs"] for y in config["prot_to_color"]]
+#        file_targets += [config["tool"] + "/step2-figures/synteny_coloredby_{}/{}_yx_synteny_coloredby_{}.pdf".format(y, x, y)
+#          for x in config["analysispairs"] for y in config["prot_to_color"]]
+#
+#if config["plot_LGs"]:
+#    # We also want to plot the ALGs as if they were genomes, against the individual species
+#    # This line specifically is for testing the RBH-as-a-species analysis
+#    # the rbh file after setting up the plotting
+#    file_targets += expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_reciprocal_best_hits.plotted.rbh",
+#           hmm = config["prot_to_color"], sp = config["species"])
+#    # and the pdfs we are plotting of these relationships
+#    file_targets += expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_synteny.pdf",
+#           hmm = config["prot_to_color"], sp = config["species"])
+#    file_targets += expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_yx_synteny.pdf",
+#           hmm = config["prot_to_color"], sp = config["species"])
 
 wildcard_constraints:
     sample1="[A-Za-z0-9-.]+",
@@ -282,8 +244,9 @@ wildcard_constraints:
 
 rule all:
     input:
-        file_targets
-
+        #file_targets
+        expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_reciprocal_best_hits.plotted.rbh",
+                   hmm = config["prot_to_color"], sp = config["species"])
 
 def filtprot_get_mem_mb(wildcards, attempt):
     """
