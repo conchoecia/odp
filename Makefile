@@ -1,4 +1,19 @@
-all: BCnS_ALG UnicellLG UnicellLGOrthofinder
+all: BCnS_ALG UnicellLG UnicellLGOrthofinder seqtk
+
+.PHONY: seqtk
+
+seqtk: bin/seqtk/seqtk
+
+bin/seqtk/seqtk:
+	@mkdir -p bin
+	@if [ ! -d bin/seqtk ]; then \
+	  git clone https://github.com/lh3/seqtk.git bin/seqtk; \
+	else \
+	  echo "bin/seqtk exists, assuming repo already cloned."; \
+	fi
+	@echo "Building seqtk..."
+	@$(MAKE) -C bin/seqtk
+	@echo "Built: $@"
 
 BCnS_ALG: LG_db/BCnS_LGs.tar.gz
 	cd LG_db; \
