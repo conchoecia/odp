@@ -626,43 +626,6 @@ rule n_ways_reciprocal_best:
 
         genesdf.to_csv(output.rbh, sep="\t", index = False)
 
-def calc_D_for_y_and_x(df, xsample, ysample):
-    """
-    This calculates D for both the x and y axes.
-    Defined in the 2020 vertebrate synteny paper.
-    """
-    # some variable names in this for loop are "x" but it doesn't matter.
-    #  everything important is variable between x and y
-    for i in [0,1]:
-        if i == 0:
-            thisdir = xsample
-            oppositexy = ysample
-        elif i == 1:
-            thisdir = ysample
-            oppositexy = xsample
-        df = df.sort_values(by = ["{}_breakchrom".format(thisdir),
-                                  "{}_break_ix".format(thisdir)],
-                            ascending = True)
-        df = df.reset_index(drop = True)
-        #print("df\n", df)
-        breaks = df["{}_breakchrom".format(thisdir)].unique()
-        thisdir_dfs = []
-        # this just calculates Dx
-        for thisx in breaks:
-            xdf = df.loc[df["{}_breakchrom".format(thisdir)] == thisx, ].copy()
-            xdf = xdf.reset_index(drop=True)
-            df2 = pd.get_dummies(xdf["{}_breakchrom".format(oppositexy)])
-            df2_xiL = df2.apply(lambda x: x.rolling(20).mean(), axis = 0)
-            df2_xiR = df2.apply(lambda x: x.iloc[::-1].rolling(20).mean(), axis = 0).iloc[::-1]
-            df2_xiR = df2_xiR.set_index(df2_xiR.index - 1)
-            df2_xiR = df2_xiR.iloc[1:]
-            subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
-            xdf["{}_D".format(thisdir)] = subtractdf.apply(lambda x: np.sqrt(np.square(x).sum()), axis = 1)
-            thisdir_dfs.append(xdf)
-        print("thisdir_dfs\n", thisdir_dfs)
-        df = pd.concat(thisdir_dfs)
-    df.reset_index(drop=True, inplace = True)
-    return df
 
 def calculate_FET(genesdf, scafdict):
     """
@@ -1887,7 +1850,11 @@ rule analysis_D_and_FET:
         df = calculate_FET(df, s2c2s)
         print("Calculating D of the LG {} and the species {}.".format(
             params.xsample, params.ysample), file = sys.stderr)
-        df = calc_D_for_y_and_x(df, params.xsample, params.ysample)
+        df = odpf.calc_D_for_y_and_x(
+            df,
+            xsample=params.xsample,
+            ysample=params.ysample,
+        )
         df.to_csv(output.rbh, sep ="\t", header = True, index = None)
 
 rule filtered_D_FET_rbh:
@@ -1977,7 +1944,11 @@ rule species_HMM_D_and_FET:
         df = calculate_FET(df, s2c2s)
         print("Calculating D of the LG {} and the species {}.".format(
             params.xsample, params.ysample), file = sys.stderr)
-        df = calc_D_for_y_and_x(df, params.xsample, params.ysample)
+        df = odpf.calc_D_for_y_and_x(
+            df,
+            xsample=params.xsample,
+            ysample=params.ysample,
+        )
         df.to_csv(output.rbh, sep ="\t", header = True, index = None)
 
 """
