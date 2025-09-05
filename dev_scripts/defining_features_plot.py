@@ -7,6 +7,7 @@ The point of this script is to make plots to visualize the genomic colocalizatio
   the ODOG UMAP. Later we may implement plotting of these in genomes, or in ODOL UMAPs.
 """
 
+import sys
 import argparse
 import numpy as np
 import pandas as pd

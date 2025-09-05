@@ -30,6 +30,137 @@ import pandas as pd
 #    """
 #    # First check what the file extension is
 
+def hmmsearch_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 2000,
+                   2: 4000,
+                   3: 8000,
+                   4: 16000,
+                   5: 32000,
+                   6: 64000,
+                   7: 128000,
+                   8: 256000}
+    return attemptdict[attempt]
+
+
+def filthmm_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 1000,
+                   2: 2000,
+                   3: 4000,
+                   4: 8000,
+                   5: 16000,
+                   6: 320000,
+                   7: 640000}
+    return attemptdict[attempt]
+
+
+def gzhmm_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 1000,
+                   2: 2000,
+                   3: 4000,
+                   4: 8000,
+                   5: 16000,
+                   6: 320000,
+                   7: 640000}
+    return attemptdict.get(attempt, attemptdict[max(attemptdict)])
+
+
+
+def hmm_against_prots_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for filtering prots could change.
+    """
+    attemptdict = {1: 5000,
+                   2: 16000,
+                   3: 64000,
+                   4: 256000}
+    return attemptdict[attempt]
+
+def tmp_unzip_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 2000,
+                   2: 4000,
+                   3: 8000,
+                   4: 16000}
+    return attemptdict[attempt]
+
+
+def chromsize_to_s2c2s(chromsize_path):
+    """
+    this reads in a chromsize file and returns a dictionary of species to scaffold to scaflen
+    """
+    s2c2s = {}
+    with open(chromsize_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                thissp, thisscaf, thislen = line.split("\t")
+                if thissp not in s2c2s:
+                    s2c2s[thissp] = {}
+                s2c2s[thissp][thisscaf] = int(thislen)
+    return s2c2s
+
+def calc_D_for_y_and_x(df, xsample, ysample):
+    """
+    This calculates D for both the x and y axes.
+    Defined in the 2020 vertebrate synteny paper.
+    """
+    # some variable names in this for loop are "x" but it doesn't matter.
+    #  everything important is variable between x and y
+    for i in [0,1]:
+        if i == 0:
+            thisdir = xsample
+            oppositexy = ysample
+        elif i == 1:
+            thisdir = ysample
+            oppositexy = xsample
+        df = df.sort_values(by = ["{}_breakchrom".format(thisdir),
+                                  "{}_break_ix".format(thisdir)],
+                            ascending = True)
+        df = df.reset_index(drop = True)
+        #print("df\n", df)
+        breaks = df["{}_breakchrom".format(thisdir)].unique()
+        thisdir_dfs = []
+        # this just calculates Dx
+        for thisx in breaks:
+            xdf = df.loc[df["{}_breakchrom".format(thisdir)] == thisx, ].copy()
+            xdf = xdf.reset_index(drop=True)
+            df2 = pd.get_dummies(xdf["{}_breakchrom".format(oppositexy)])
+            df2_xiL = df2.apply(lambda x: x.rolling(20).mean(), axis = 0)
+            df2_xiR = df2.apply(lambda x: x.iloc[::-1].rolling(20).mean(), axis = 0).iloc[::-1]
+            df2_xiR = df2_xiR.set_index(df2_xiR.index - 1)
+            df2_xiR = df2_xiR.iloc[1:]
+            subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
+            xdf["{}_D".format(thisdir)] = subtractdf.apply(lambda x: np.sqrt(np.square(x).sum()), axis = 1)
+            thisdir_dfs.append(xdf)
+        print("thisdir_dfs\n", thisdir_dfs)
+        df = pd.concat(thisdir_dfs)
+    df.reset_index(drop=True, inplace = True)
+    return df
+
+
+def filtprot_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for filtering prots could change.
+    """
+    attemptdict = {1: 2000,
+                   2: 4000,
+                   3: 16000,
+                   4: 64000,
+                   5: 256000,
+                   6: 512000}
+    return attemptdict.get(attempt, max(attemptdict.values()))
+
 def general_legal_run():
     """
     imports required:

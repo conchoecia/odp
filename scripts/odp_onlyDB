@@ -33,11 +33,12 @@ import fasta
 # ODP-specific imports
 scripts_path = os.path.join(snakefile_path, "../scripts")
 sys.path.insert(1, scripts_path)
+source_path = os.path.join(snakefile_path, "../source")
+sys.path.insert(1, source_path)
+
 import odp_functions as odpf
 import odp_plotting_functions as odp_plot
 import odp_color_manager as oc
-source_path = os.path.join(snakefile_path, "../source")
-sys.path.insert(1, source_path)
 import rbh_tools
 
 bin_path = os.path.join(snakefile_path, "../bin")

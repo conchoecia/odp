@@ -24,6 +24,30 @@ dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
 import fasta
 
+def h2r(h):
+    """
+    converts hex to rgb
+    """
+    h = h.replace("#","").upper()
+    return [x/255 for x in list(int(h[i:i+2], 16) for i in (0, 2, 4))]
+
+def inverse_color(hexcolor):
+    """
+    Takes in a hex color and determines if the text should be black or white
+
+    This is used for determining the color of text in the cells
+
+    taken from: https://stackoverflow.com/questions/3942878
+    """
+    red,green,blue = [x*255 for x in h2r(hexcolor)]
+
+    if hexcolor == "#000000":
+        return "#000000"
+
+    if (red*0.299 + green*0.587 + blue*0.114) > 186:
+        return "#000000"
+    else:
+        return "#ffffff"
 
 def is_valid_hex_code(hex_code):
     return len(hex_code) == 7 and all(c in '0123456789ABCDEFabcdef' for c in hex_code[1:])
