@@ -21,6 +21,7 @@ import hashlib
 
 # non-standard dependencies
 import pandas as pd
+import numpy as np
 
 # TODO implement this function soon after release
 #def gff_or_chrom(filepath):
@@ -110,43 +111,129 @@ def chromsize_to_s2c2s(chromsize_path):
                 s2c2s[thissp][thisscaf] = int(thislen)
     return s2c2s
 
-def calc_D_for_y_and_x(df, xsample, ysample):
+def calc_D_for_y_and_x(
+    df,
+    xsample=None,
+    ysample=None,
+    x_offset=None,
+    y_offset=None,
+    x_scaf_to_len=None,
+    y_scaf_to_len=None,
+    **kwargs,
+):
+    """Calculate D for both the x and y axes.
+
+    This function supports two different dataframe structures:
+
+    1. Break-based mode where ``xsample`` and ``ysample`` are provided and the
+       dataframe contains ``*_breakchrom`` and ``*_break_ix`` columns.
+    2. Scaffold-based mode where offset dictionaries and scaffold length
+       mappings are supplied for both axes.
     """
-    This calculates D for both the x and y axes.
-    Defined in the 2020 vertebrate synteny paper.
-    """
-    # some variable names in this for loop are "x" but it doesn't matter.
-    #  everything important is variable between x and y
-    for i in [0,1]:
-        if i == 0:
-            thisdir = xsample
-            oppositexy = ysample
-        elif i == 1:
-            thisdir = ysample
-            oppositexy = xsample
-        df = df.sort_values(by = ["{}_breakchrom".format(thisdir),
-                                  "{}_break_ix".format(thisdir)],
-                            ascending = True)
-        df = df.reset_index(drop = True)
-        #print("df\n", df)
-        breaks = df["{}_breakchrom".format(thisdir)].unique()
-        thisdir_dfs = []
-        # this just calculates Dx
-        for thisx in breaks:
-            xdf = df.loc[df["{}_breakchrom".format(thisdir)] == thisx, ].copy()
-            xdf = xdf.reset_index(drop=True)
-            df2 = pd.get_dummies(xdf["{}_breakchrom".format(oppositexy)])
-            df2_xiL = df2.apply(lambda x: x.rolling(20).mean(), axis = 0)
-            df2_xiR = df2.apply(lambda x: x.iloc[::-1].rolling(20).mean(), axis = 0).iloc[::-1]
-            df2_xiR = df2_xiR.set_index(df2_xiR.index - 1)
-            df2_xiR = df2_xiR.iloc[1:]
-            subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
-            xdf["{}_D".format(thisdir)] = subtractdf.apply(lambda x: np.sqrt(np.square(x).sum()), axis = 1)
-            thisdir_dfs.append(xdf)
-        print("thisdir_dfs\n", thisdir_dfs)
-        df = pd.concat(thisdir_dfs)
-    df.reset_index(drop=True, inplace = True)
-    return df
+
+    # Break-based mode
+    if (
+        xsample is not None
+        and ysample is not None
+        and f"{xsample}_breakchrom" in df.columns
+        and f"{ysample}_breakchrom" in df.columns
+    ):
+        for thisdir, oppositexy in [(xsample, ysample), (ysample, xsample)]:
+            df = df.sort_values(
+                by=[f"{thisdir}_breakchrom", f"{thisdir}_break_ix"], ascending=True
+            ).reset_index(drop=True)
+            breaks = df[f"{thisdir}_breakchrom"].unique()
+            thisdir_dfs = []
+            for thisx in breaks:
+                xdf = (
+                    df.loc[df[f"{thisdir}_breakchrom"] == thisx,].copy().reset_index(drop=True)
+                )
+                df2 = pd.get_dummies(xdf[f"{oppositexy}_breakchrom"])
+                df2_xiL = df2.apply(lambda x: x.rolling(20).mean(), axis=0)
+                df2_xiR = (
+                    df2.apply(lambda x: x.iloc[::-1].rolling(20).mean(), axis=0)
+                    .iloc[::-1]
+                    .set_index(df2.index - 1)
+                    .iloc[1:]
+                )
+                subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
+                xdf[f"{thisdir}_D"] = subtractdf.apply(
+                    lambda x: np.sqrt(np.square(x).sum()), axis=1
+                )
+                thisdir_dfs.append(xdf)
+            df = pd.concat(thisdir_dfs)
+        df.reset_index(drop=True, inplace=True)
+        return df
+
+    # Scaffold-based mode
+    elif (
+        x_offset is not None
+        and y_offset is not None
+        and x_scaf_to_len is not None
+        and y_scaf_to_len is not None
+    ):
+        df = df.dropna()
+        for thisdir in ["x", "y"]:
+            df = df.sort_values(by=[f"{thisdir}middle"])
+            df.reset_index(drop=True, inplace=True)
+
+            unique_x = df[f"{thisdir}scaf"].unique()
+            thisdir_dfs = []
+            for thisx in unique_x:
+                xdf = df.loc[df[f"{thisdir}scaf"] == thisx,].copy().reset_index(drop=True)
+                oppositexy = "y" if thisdir == "x" else "x"
+                this_offset = x_offset if thisdir == "x" else y_offset
+                this_scaf_to_len = (
+                    x_scaf_to_len if thisdir == "x" else y_scaf_to_len
+                )
+                df2 = pd.get_dummies(xdf[f"{oppositexy}scaf"])
+                df2_xiL = df2.apply(lambda x: x.rolling(20).mean(), axis=0)
+                df2_xiR = (
+                    df2.apply(lambda x: x.iloc[::-1].rolling(20).mean(), axis=0)
+                    .iloc[::-1]
+                    .set_index(df2.index - 1)
+                    .iloc[1:]
+                )
+                subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
+                D = subtractdf.apply(lambda x: np.sqrt(np.square(x).sum()), axis=1)
+                xdf[f"D{thisdir}"] = D
+                xdf[f"D{thisdir}_barleft"] = 0
+                xdf[f"D{thisdir}_barmiddle"] = 0
+                xdf[f"D{thisdir}_barright"] = 0
+                xdf[f"D{thisdir}_barwidth"] = 0
+                for i, row in xdf.iterrows():
+                    barleft = -1
+                    barright = -1
+                    if len(xdf) > 1:
+                        if i == 0:
+                            thisend = row[f"{thisdir}stop"]
+                            nextstart = xdf.loc[i + 1, f"{thisdir}start"]
+                            barleft = this_offset[thisx]
+                            barright = thisend + ((nextstart - thisend) / 2)
+                        elif i == (len(xdf) - 1):
+                            prevend = xdf.loc[i - 1, f"{thisdir}stop"]
+                            thisstart = row[f"{thisdir}start"]
+                            barleft = prevend + ((thisstart - prevend) / 2)
+                            barright = this_scaf_to_len[thisx]
+                        else:
+                            prevend = xdf.loc[i - 1, f"{thisdir}stop"]
+                            thisstart = row[f"{thisdir}start"]
+                            thisend = row[f"{thisdir}stop"]
+                            nextstart = xdf.loc[i + 1, f"{thisdir}start"]
+                            barleft = prevend + ((thisstart - prevend) / 2)
+                            barright = thisend + ((nextstart - thisend) / 2)
+                    xdf.loc[i, f"D{thisdir}_barleft"] = barleft
+                    xdf.loc[i, f"D{thisdir}_barright"] = barright
+                    xdf.loc[i, f"D{thisdir}_barmiddle"] = barleft + ((barright - barleft) / 2)
+                    xdf.loc[i, f"D{thisdir}_barwidth"] = barright - barleft + 1
+                thisdir_dfs.append(xdf)
+            df = pd.concat(thisdir_dfs)
+        df = df.sort_values(by=["xmiddle"])
+        df.reset_index(drop=True, inplace=True)
+        return df
+
+    else:
+        raise ValueError("Insufficient arguments to calculate D for x and y")
 
 
 def filtprot_get_mem_mb(wildcards, attempt):
@@ -1074,79 +1161,6 @@ def parse_coords(coords_file, sample, xory,
     return (offset, scaf_to_len, lines_at, max_coord, tick_labels, tick_pos, list(df["scaf"]))
 
 
-def calc_D_for_y_and_x(df, x_offset, y_offset, x_scaf_to_len, y_scaf_to_len, **kwargs):
-    """
-    This calculates D for both the x and y axes.
-    Defined in the 2020 vertebrate synteny paper.
-    """
-    df = df.dropna()
-    # some variable names in this for loop are "x" but it doesn't matter.
-    #  everything important is variable between x and y
-    for thisdir in ["x", "y"]:
-        df = df.sort_values(by=["{}middle".format(thisdir)])
-        df.reset_index(drop=True, inplace = True)
-
-        unique_x = df["{}scaf".format(thisdir)].unique()
-        thisdir_dfs = []
-        # this just calculates Dx
-        for thisx in unique_x:
-            xdf = df.loc[df["{}scaf".format(thisdir)] == thisx, ].copy()
-            xdf = xdf.reset_index(drop=True)
-            oppositexy = "d"
-            this_offset = {}
-            this_scaf_to_len = {}
-            if thisdir == "x":
-                oppositexy = "y"
-                this_offset = x_offset
-                this_scaf_to_len = x_scaf_to_len
-            elif thisdir == "y":
-                oppositexy = "x"
-                this_offset = y_offset
-                this_scaf_to_len = y_scaf_to_len
-            df2 = pd.get_dummies(xdf["{}scaf".format(oppositexy)])
-            df2_xiL = df2.apply(lambda x: x.rolling(20).mean(), axis = 0)
-            df2_xiR = df2.apply(lambda x: x.iloc[::-1].rolling(20).mean(), axis = 0).iloc[::-1]
-            df2_xiR = df2_xiR.set_index(df2_xiR.index - 1)
-            df2_xiR = df2_xiR.iloc[1:]
-            subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
-            D = subtractdf.apply(lambda x: np.sqrt(np.square(x).sum()), axis = 1)
-            xdf["D{}".format(thisdir)] = D
-            xdf["D{}_barleft".format(thisdir)] = 0
-            xdf["D{}_barmiddle".format(thisdir)] = 0
-            xdf["D{}_barright".format(thisdir)] = 0
-            xdf["D{}_barwidth".format(thisdir)] = 0
-            for i, row in xdf.iterrows():
-                barleft   = -1
-                barright  = -1
-                barmiddle = -1
-                barwidth  = -1
-                if len(xdf) > 1:
-                    if i == 0:
-                        thisend   = row["{}stop".format(thisdir)]
-                        nextstart = xdf.loc[i+1, "{}start".format(thisdir)]
-                        barleft   = this_offset[thisx]
-                        barright  = thisend + ((nextstart-thisend)/2)
-                    elif i == (len(xdf) - 1):
-                        prevend   = xdf.loc[i-1, "{}stop".format(thisdir)]
-                        thisstart = row["{}start".format(thisdir)]
-                        barleft   = prevend + ((thisstart-prevend)/2)
-                        barright  = this_scaf_to_len[thisx]
-                    else:
-                        prevend   = xdf.loc[i-1, "{}stop".format(thisdir)]
-                        thisstart = row["{}start".format(thisdir)]
-                        thisend   = row["{}stop".format(thisdir)]
-                        nextstart = xdf.loc[i+1, "{}start".format(thisdir)]
-                        barleft   = prevend + ((thisstart-prevend)/2)
-                        barright  = thisend + ((nextstart-thisend)/2)
-                xdf.loc[i, "D{}_barleft".format(thisdir)]   = barleft
-                xdf.loc[i, "D{}_barright".format(thisdir)]  = barright
-                xdf.loc[i, "D{}_barmiddle".format(thisdir)] = barleft + ((barright - barleft)/2)
-                xdf.loc[i, "D{}_barwidth".format(thisdir)]  = barright - barleft + 1
-            thisdir_dfs.append(xdf)
-        df = pd.concat(thisdir_dfs)
-    df = df.sort_values(by=["xmiddle"])
-    df.reset_index(drop=True, inplace = True)
-    return df
 
 def determine_breaks(df, scaf_to_breaks_set, scaf_to_offset_dict,
                      sort_direction, auto_breaks, **kwargs):
@@ -1432,7 +1446,13 @@ def gen_plotting_df(ycoords_file, xcoords_file,
     df.reset_index(drop=True, inplace = True)
 
     # Now calculate D and Dw for both X and Y axes
-    df = calc_D_for_y_and_x(df, x_offset, y_offset, x_scaf_to_len, y_scaf_to_len)
+    df = calc_D_for_y_and_x(
+        df,
+        x_offset=x_offset,
+        y_offset=y_offset,
+        x_scaf_to_len=x_scaf_to_len,
+        y_scaf_to_len=y_scaf_to_len,
+    )
     if outtable:
         df.to_csv(outtable, sep="\t")
 
