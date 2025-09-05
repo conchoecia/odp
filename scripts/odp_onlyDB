@@ -141,13 +141,13 @@ else:
 #    if config["diamond_or_blastp"] not in ["diamond", "blastp"]:
 #        raise IOError("diamond_or_blastp must be either 'diamond' or 'blastp'")
 
-# This should be removed
-##make fake breaks for later analyses
-#for this in config["species"]:
-#    if "manual_breaks" not in config["species"][this]:
-#        config["species"][this]["manual_breaks"] = []
-#    if "minscafsize" not in config["species"][this]:
-#        config["species"][this]["minscafsize"] = 5000
+# If this is removed it will cause the program to break
+#make fake breaks for later analyses
+for this in config["species"]:
+    if "manual_breaks" not in config["species"][this]:
+        config["species"][this]["manual_breaks"] = []
+    if "minscafsize" not in config["species"][this]:
+        config["species"][this]["minscafsize"] = 5000
 
 def flatten(list_of_lists):
     """flatten a list of lists, unique only"""
