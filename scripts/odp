@@ -304,6 +304,11 @@ rule filter_prots:
     threads: 1
     shell:
         """
+        # 0) Warn the user if the seqtk binary doesn't exist
+        if [ ! -x "{params.seqtk}" ]; then
+          echo "The seqtk binary doesn't exist or isn't executable: {params.seqtk}. Please run make in the odp install directory."
+          exit 1
+        fi
         # 1) IDs from col1 of .chrom (uniq)
         if [[ "{input.chrom}" == *.gz ]]; then zcat "{input.chrom}"; else cat "{input.chrom}"; fi \
           | cut -f1 | awk 'NF' | sort -u > "{output.ids}"
