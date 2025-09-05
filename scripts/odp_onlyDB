@@ -15,6 +15,11 @@ Description:
 
 Usage instructions:
   - See https://github.com/conchoecia/odp#getting-started
+
+This version only works to generate rbh files of a sample against a LG_db.
+The sp-sp comparisons have been removed to reduce RAM overhead.
+The ONLY files that we will use at the end are the BCnSSimakov2022_*_xy_reciprocal_best_hits.plotted.rbh files,
+ where BCnSSimakov2022 is the name of th eonly LG_db that was in the folder we used.
 """
 
 # This block imports fasta-parser as fasta
