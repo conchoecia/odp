@@ -264,8 +264,7 @@ wildcard_constraints:
 
 rule all:
     input:
-        #file_targets
-        expand(config["tool"] + "/db/{sample}_prots.pep.gz", sample = config["species"])
+        file_targets
 
 
 def filtprot_get_mem_mb(wildcards, attempt):
