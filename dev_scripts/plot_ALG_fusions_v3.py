@@ -61,7 +61,7 @@ import rbh_tools
 from taxid_tools import NCBI_taxid_to_taxdict
 
 # import the stuff to work with lineages
-from ete3 import NCBITaxa,Tree
+from ete4 import NCBITaxa,Tree
 
 # get the warnings
 import warnings

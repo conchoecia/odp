@@ -247,7 +247,34 @@ rule all:
     input:
         #file_targets
         expand(config["tool"] + "/step2-figures/ALG-species_plots/{hmm}_{sp}_xy_reciprocal_best_hits.plotted.rbh",
-                   hmm = config["prot_to_color"], sp = config["species"])
+                   hmm = config["prot_to_color"], sp = config["species"]),
+        # lists of rbh files to use for EGT
+        expand(config["tool"] + "/rbh_file_list_for_egt_fullpath.{hmm}.txt",
+                   hmm = config["prot_to_color"]),
+        expand(config["tool"] + "/rbh_file_list_for_egt_relative.{hmm}.txt",
+                   hmm = config["prot_to_color"])
+
+rule rbh_filelist_for_egt:
+    """
+    This rule makes a list of final .rbh files to be used later for egt analyses.
+    """
+    input:
+        rbh = expand(config["tool"] + "/step2-figures/ALG-species_plots/{{hmm}}_{sp}_xy_reciprocal_best_hits.plotted.rbh",
+                   sp = config["species"])
+    output:
+        rbhfull = config["tool"] + "/rbh_file_list_for_egt_fullpath.{hmm}.txt",
+        rbhrela = config["tool"] + "/rbh_file_list_for_egt_relative.{hmm}.txt"
+    threads: 1
+    run:
+        full_out     = open(output.rbhfull, "w")
+        relative_out = open(output.rbhrela, "w")
+
+        for thisfile in input.rbh:
+            full_path = os.path.abspath(thisfile)
+            print(full_path, file = full_out)
+            print(thisfile, file = relative_out)
+        full_out.close()
+        relative_out.close()
 
 def filtprot_get_mem_mb(wildcards, attempt):
     """
@@ -1969,7 +1996,6 @@ rule plot_synteny_nocolor:
         runtime   = 30  # 30 minutes
     params:
         analysis = lambda wildcards: wildcards.analysis,
-        orthology_method = config["diamond_or_blastp"]
     run:
         xsample = params.analysis.split("_")[0]
         ysample = params.analysis.split("_")[1]
@@ -1980,6 +2006,8 @@ rule plot_synteny_nocolor:
 
         s2c2s = chromsize_to_s2c2s(input.chromsize)
 
+        orthology_method = config.get("diamond_or_blastp", "diamond")
+
         # figure out how to sort the scaffolds
         sort_y_by_x = True
         if "sort_by_x_coord_blast" in config["species"][ysample]:
@@ -1989,7 +2017,7 @@ rule plot_synteny_nocolor:
                      s2c2s,
                      xorder, yorder,
                      xbreaks, ybreaks,
-                     params.orthology_method,
+                     orthology_method,
                      sort_y_by_x = sort_y_by_x)
         # check again for sort
         if "sort_by_x_coord_blast" in config["species"][xsample]:
@@ -1999,7 +2027,7 @@ rule plot_synteny_nocolor:
                      s2c2s,
                      yorder, xorder,
                      ybreaks, xbreaks,
-                     params.orthology_method,
+                     orthology_method,
                      sort_y_by_x = sort_y_by_x)
 
 def tmp_unzip_get_mem_mb(wildcards, attempt):
@@ -2465,7 +2493,6 @@ rule plot_synteny_coloredby:
     threads: 1
     params:
         analysis = lambda wildcards: wildcards.analysis,
-        orthology_method = config["diamond_or_blastp"],
         coloredby = lambda wildcards: wildcards.coloredby,
         coloredbydir = lambda wildcards: config["prot_to_color"][wildcards.coloredby]
     run:
@@ -2478,6 +2505,7 @@ rule plot_synteny_coloredby:
 
         s2c2s = chromsize_to_s2c2s(input.chromsize)
 
+        orthology_method = config.get("diamond_or_blastp", "diamond")
 
         # figure out how to sort the scaffolds
         sort_y_by_x = True
@@ -2488,7 +2516,7 @@ rule plot_synteny_coloredby:
                      s2c2s,
                      xorder, yorder,
                      xbreaks, ybreaks,
-                     params.orthology_method,
+                     orthology_method,
                      sort_y_by_x = sort_y_by_x,
                      prot_to_color_name = params.coloredby,
                      prot_to_color_dir  = params.coloredbydir,
@@ -2502,7 +2530,7 @@ rule plot_synteny_coloredby:
                      s2c2s,
                      yorder, xorder,
                      ybreaks, xbreaks,
-                     params.orthology_method,
+                     orthology_method,
                      sort_y_by_x = sort_y_by_x,
                      prot_to_color_name = params.coloredby,
                      prot_to_color_dir  = params.coloredbydir,
@@ -2535,7 +2563,6 @@ rule plot_synteny_of_ALGs_plus_species:
         runtime   = 30  # 30 minutes in seconds
     threads: 1
     params:
-        orthology_method = config["diamond_or_blastp"],
         coloredby = lambda wildcards: wildcards.hmm,
     run:
         xsample = wildcards.hmm
@@ -2544,6 +2571,8 @@ rule plot_synteny_of_ALGs_plus_species:
         yorder  = config["species"][ysample]["plotorder"] if "plotorder" in config["species"][ysample] else []
         xbreaks = []
         ybreaks = config["species"][ysample]["manual_breaks"] if "manual_breaks" in config["species"][ysample] else []
+
+        orthology_method = config.get("diamond_or_blastp", "diamond")
 
         s2c2s = chromsize_to_s2c2s(input.chromsize)
         # In this case we look in the dataframe and for each scaffold, just get the largest
@@ -2566,7 +2595,7 @@ rule plot_synteny_of_ALGs_plus_species:
                      s2c2s,
                      xorder, yorder,
                      xbreaks, ybreaks,
-                     params.orthology_method,
+                     orthology_method,
                      sort_y_by_x = sort_y_by_x,
                      prot_to_color_name = None,
                      prot_to_color_dir  = None,
@@ -2579,7 +2608,7 @@ rule plot_synteny_of_ALGs_plus_species:
                      s2c2s,
                      yorder, xorder,
                      ybreaks, xbreaks,
-                     params.orthology_method,
+                     orthology_method,
                      sort_y_by_x = sort_y_by_x,
                      prot_to_color_name = None,
                      prot_to_color_dir  = None,

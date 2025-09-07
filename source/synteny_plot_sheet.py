@@ -2,11 +2,18 @@
 This was taken out of the odp script.
 """
 
+import os
 from matplotlib              import font_manager # https://github.com/conchoecia/odp/issues/34#issuecomment-1636475654
 from matplotlib.patches      import Patch
 from matplotlib.lines        import Line2D
 from matplotlib.font_manager import FontProperties
+import sys
 
+# ODP-specific requirements
+import rbh_tools
+from fishers_exact import FET_graph, FET_connected_components, FET_sample_to_chrom_to_CC
+import odp_plotting_functions as odp_plot
+import odp_color_manager as oc
 
 def synteny_plot_sheet(df_file, plotdf_file, synplot,
                  xsample, ysample,

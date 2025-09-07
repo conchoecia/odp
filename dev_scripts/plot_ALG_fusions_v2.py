@@ -69,7 +69,7 @@ sys.path.insert(1, source_path)
 import rbh_tools
 
 # import the stuff to work with lineages
-from ete3 import NCBITaxa,Tree
+from ete4 import NCBITaxa,Tree
 
 
 # get the warnings

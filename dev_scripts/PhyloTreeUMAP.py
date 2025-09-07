@@ -27,7 +27,7 @@ Usage instructions:
 import argparse
 from  ast import literal_eval as aliteraleval
 import bokeh           # bokeh is used to visualize and save the UMAP
-from ete3 import NCBITaxa,Tree
+from ete4 import NCBITaxa,Tree
 import networkx as nx
 import numpy as np
 np.set_printoptions(linewidth=np.inf)
@@ -44,9 +44,6 @@ import umap.plot
 import warnings
 #warnings.filterwarnings("ignore", message="Graph is not fully connected", category=UserWarning)
 warnings.filterwarnings("ignore", message="Hammer edge bundling is expensive for large graphs!")
-
-# stuff for taxonomy
-from ete3 import NCBITaxa,Tree
 
 # matplotlib
 import matplotlib.pyplot as plt

@@ -70,6 +70,7 @@ config["rbh_files"] = list(sorted([os.path.join(config["rbh_directory"], f)
 print("ACCESSING THE RBH FILES")
 config["sample_to_rbh_file"] = {rbh_to_samplename(x, config["ALGname"]): x
                                 for x in config["rbh_files"]}
+print("We identified {} RBH files.".format(len(config["sample_to_rbh_file"])))
 
 # Results_base_directory is the prefix to which everything will be saved
 results_base_directory = "GTUMAP"
@@ -140,50 +141,50 @@ rule all:
         #        taxanalysis = config["taxids"],
         #        sizeNaN = odol_size,
         #        weighting = weighting_methods),
-        ##    ┓
-        ## ┏┓┏┫┏┓┏┓ - One-Dot-One-Genome plots
-        ## ┗┛┗┻┗┛┗┫   Each dot represents a single genome, and the data vector is the distance pairs
-        ##        ┛
-        #expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
-        #        n = odog_n,
-        #        m = odog_m,
-        #        sizeNaN = odog_size),
-        #expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
-        #        sample = config["sample_to_rbh_file"].keys(),
-        #        n = odog_n,
-        #        m = odog_m,
-        #        sizeNaN = odog_size),
-        #expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.pdf",
-        #        n = odog_n,
-        #        m = odog_m,
-        #        sizeNaN = odog_size),
-        #expand(results_base_directory + "/allsamples/allsamples.missing_{sizeNaN}.paramsweep.pdf",
-        #        sizeNaN = odog_size)
+        #    ┓
+        # ┏┓┏┫┏┓┏┓ - One-Dot-One-Genome plots
+        # ┗┛┗┻┗┛┗┫   Each dot represents a single genome, and the data vector is the distance pairs
+        #        ┛
+        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
+                n = odog_n,
+                m = odog_m,
+                sizeNaN = odog_size),
+        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
+                sample = config["sample_to_rbh_file"].keys(),
+                n = odog_n,
+                m = odog_m,
+                sizeNaN = odog_size),
+        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.pdf",
+                n = odog_n,
+                m = odog_m,
+                sizeNaN = odog_size),
+        expand(results_base_directory + "/allsamples/allsamples.missing_{sizeNaN}.paramsweep.pdf",
+                sizeNaN = odog_size)
         #    ┓     ┏┓┓ ┏┓┳┓┏┓┏┓
         # ┏┓┏┫┏┓┏┓ ┃ ┃ ┣┫┃┃┣ ┗┓ - One-Dot-One-Genome plots FOR SPECIFIC CLADES
         # ┗┛┗┻┗┛┗┫ ┗┛┗┛┛┗┻┛┗┛┗┛   Each dot represents a single genome, and the data vector is the distance pairs
         #        ┛
-        expand(results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
-               n       = codog_n,
-               m       = codog_m,
-               sizeNaN = codog_size,
-               taxanalysis = config["taxids"]),
-        expand(results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
-               n       = codog_n,
-               m       = codog_m,
-               sizeNaN = codog_size,
-               taxanalysis = config["taxids"]),
-        expand(results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.phylogeny.pdf",
-               n       = codog_n,
-               m       = codog_m,
-               sizeNaN = codog_size,
-               taxanalysis = config["taxids"]),
-        expand(results_base_directory + "/ODOG/clades/{taxanalysis}.missing_{sizeNaN}.paramsweep.pdf",
-               sizeNaN = codog_size,
-               taxanalysis = config["taxids"]),
-        expand(results_base_directory + "/ODOG/clades/{taxanalysis}.pairwise_distance.missing_{sizeNaN}.tsv",
-               sizeNaN = codog_size,
-               taxanalysis = config["taxids"])
+        #expand(results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
+        #       n       = codog_n,
+        #       m       = codog_m,
+        #       sizeNaN = codog_size,
+        #       taxanalysis = config["taxids"]),
+        #expand(results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
+        #       n       = codog_n,
+        #       m       = codog_m,
+        #       sizeNaN = codog_size,
+        #       taxanalysis = config["taxids"]),
+        #expand(results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.phylogeny.pdf",
+        #       n       = codog_n,
+        #       m       = codog_m,
+        #       sizeNaN = codog_size,
+        #       taxanalysis = config["taxids"]),
+        #expand(results_base_directory + "/ODOG/clades/{taxanalysis}.missing_{sizeNaN}.paramsweep.pdf",
+        #       sizeNaN = codog_size,
+        #       taxanalysis = config["taxids"]),
+        #expand(results_base_directory + "/ODOG/clades/{taxanalysis}.pairwise_distance.missing_{sizeNaN}.tsv",
+        #       sizeNaN = codog_size,
+        #       taxanalysis = config["taxids"])
 
 # ┏┓    ┓        ┓         ┓
 # ┗┓┏┓┏┓┃┏┏┓┏┳┓┏┓┃┏┏┓  ┏┓┓┏┃┏┓┏

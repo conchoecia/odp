@@ -297,7 +297,7 @@ rule filter_prots:
     resources:
         io_slots = 1,
         mem_mb = odpf.filtprot_get_mem_mb, # should be small
-        runtime   = 10  # ten minutes
+        runtime   = 10  # ten minutes # might need to change this with genome size
     threads: 1
     shell:
         """
@@ -801,8 +801,7 @@ rule plot_synteny_nocolor:
         mem_mb = 5000, # usually takes ??Gb of RAM
         runtime   = 30  # 30 minutes
     params:
-        analysis = lambda wildcards: wildcards.analysis,
-        orthology_method = config["diamond_or_blastp"]
+        analysis = lambda wildcards: wildcards.analysis
     run:
         from synteny_plot_sheet import synteny_plot_sheet
         xsample = params.analysis.split("_")[0]
@@ -814,6 +813,8 @@ rule plot_synteny_nocolor:
 
         s2c2s = odpf.chromsize_to_s2c2s(input.chromsize)
 
+        orthology_method = config.get("diamond_or_blastp", "diamond")
+
         # figure out how to sort the scaffolds
         sort_y_by_x = True
         if "sort_by_x_coord_blast" in config["species"][ysample]:
@@ -823,7 +824,7 @@ rule plot_synteny_nocolor:
                      s2c2s,
                      xorder, yorder,
                      xbreaks, ybreaks,
-                     params.orthology_method,
+                     orthology_method,
                      sort_y_by_x = sort_y_by_x)
         # check again for sort
         if "sort_by_x_coord_blast" in config["species"][xsample]:
@@ -833,7 +834,7 @@ rule plot_synteny_nocolor:
                      s2c2s,
                      yorder, xorder,
                      ybreaks, xbreaks,
-                     params.orthology_method,
+                     orthology_method,
                      sort_y_by_x = sort_y_by_x)
 
 rule temp_unzip_protein:
@@ -1241,7 +1242,6 @@ rule plot_synteny_coloredby:
     threads: 1
     params:
         analysis = lambda wildcards: wildcards.analysis,
-        orthology_method = config["diamond_or_blastp"],
         coloredby = lambda wildcards: wildcards.coloredby,
         coloredbydir = lambda wildcards: config["prot_to_color"][wildcards.coloredby]
     run:
@@ -1256,7 +1256,7 @@ rule plot_synteny_coloredby:
 
         s2c2s = odpf.chromsize_to_s2c2s(input.chromsize)
 
-
+        orthology_method = config.get("diamond_or_blastp", "diamond")
         # figure out how to sort the scaffolds
         sort_y_by_x = True
         if "sort_by_x_coord_blast" in config["species"][ysample]:
@@ -1266,7 +1266,7 @@ rule plot_synteny_coloredby:
                      s2c2s,
                      xorder, yorder,
                      xbreaks, ybreaks,
-                     params.orthology_method,
+                     orthology_method,
                      sort_y_by_x = sort_y_by_x,
                      prot_to_color_name = params.coloredby,
                      prot_to_color_dir  = params.coloredbydir,
@@ -1280,7 +1280,7 @@ rule plot_synteny_coloredby:
                      s2c2s,
                      yorder, xorder,
                      ybreaks, xbreaks,
-                     params.orthology_method,
+                     orthology_method,
                      sort_y_by_x = sort_y_by_x,
                      prot_to_color_name = params.coloredby,
                      prot_to_color_dir  = params.coloredbydir,
@@ -1313,8 +1313,7 @@ rule plot_synteny_of_ALGs_plus_species:
         runtime   = 30  # 30 minutes in seconds
     threads: 1
     params:
-        orthology_method = config["diamond_or_blastp"],
-        coloredby = lambda wildcards: wildcards.hmm,
+        coloredby = lambda wildcards: wildcards.hmm
     run:
         from synteny_plot_sheet import synteny_plot_sheet
         xsample = wildcards.hmm
@@ -1324,6 +1323,7 @@ rule plot_synteny_of_ALGs_plus_species:
         xbreaks = []
         ybreaks = config["species"][ysample]["manual_breaks"] if "manual_breaks" in config["species"][ysample] else []
 
+        orthology_method = config.get("diamond_or_blastp", "diamond")
         s2c2s = odpf.chromsize_to_s2c2s(input.chromsize)
         # In this case we look in the dataframe and for each scaffold, just get the largest
         #  gene pos and use that as the size. TODO - this should be done in a smarter
@@ -1345,7 +1345,7 @@ rule plot_synteny_of_ALGs_plus_species:
                      s2c2s,
                      xorder, yorder,
                      xbreaks, ybreaks,
-                     params.orthology_method,
+                     orthology_method,
                      sort_y_by_x = sort_y_by_x,
                      prot_to_color_name = None,
                      prot_to_color_dir  = None,
@@ -1358,7 +1358,7 @@ rule plot_synteny_of_ALGs_plus_species:
                      s2c2s,
                      yorder, xorder,
                      ybreaks, xbreaks,
-                     params.orthology_method,
+                     orthology_method,
                      sort_y_by_x = sort_y_by_x,
                      prot_to_color_name = None,
                      prot_to_color_dir  = None,
