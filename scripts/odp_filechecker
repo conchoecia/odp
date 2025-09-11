@@ -347,6 +347,9 @@ rule all:
         expand(config["tool"] + "/db/input_check/{sample}_proteins_pass.txt",
             sample = config["species"].keys()),
         expand(config["tool"] + "/db/input_check/{sample}_chrom_pass.txt",
+            sample = config["species"].keys()),
+        # config legality
+        expand(config["tool"] + "/db/input_check/{sample}_config_pass.txt",
             sample = config["species"].keys())
 
 def legality_get_mem_mb(wildcards, attempt):
@@ -360,6 +363,53 @@ def legality_get_mem_mb(wildcards, attempt):
                    5: 256000,
                    6: 512000}
     return attemptdict.get(attempt, attemptdict[max(attemptdict)])
+
+rule config_legality:
+    """
+    Check that the input config file is legal.
+    There are some specific issues we can check for.
+
+    1. Make sure that in the config file, there is only one top-level species field.
+       If there are more than one, this was probably from an error in concatenating two
+       smaller config files together.
+    """
+    input:
+        configfile = "config.yaml"
+    output:
+        sample_pass = config["tool"] + "/db/input_check/{sample}_config_pass.txt"
+    resources:
+        mem_mb = 1000,
+        runtime = 5
+    threads: 1
+    run:
+        # Process the config file and check that there is only one top-level species field
+        toplevel_species = 0
+        with open(input.configfile, "r") as inf:
+            for line in inf:
+                line = line.strip()
+                if line.startswith("species:"):
+                    toplevel_species += 1
+        if not toplevel_species == 1:
+            raise IOError("Your config file must have exactly one top-level 'species:' field. We found {}.".format(toplevel_species))
+
+        # write a pass file
+        with open(output.sample_pass, "w") as outf:
+            outf.write("pass")
+
+#rule check_sample_legality:
+#    """
+#    Check that the config entry of this file is legal.
+#    Mostly use this to check if there are string formatting issues that will interfere
+#
+#    """
+#    output:
+#        sample_pass = config["tool"] + "/db/input_check/{sample}_sample_pass.txt"
+#    resources:
+#        mem_mb = 1000,
+#        runtime = 5
+#    threads: 1
+#    run:
+#        # check that
 
 rule check_genome_legality:
     """Check that genome fasta files are legal."""
@@ -380,7 +430,6 @@ rule check_genome_legality:
         if check_genome_file_legality(input.fasta):
             with open(output.genome_pass, "w") as outf:
                 outf.write("pass")
-
 
 rule check_protein_legality:
     """Check that protein fasta files are legal."""

@@ -7,6 +7,7 @@ import numpy as np
 import os
 import pandas as pd
 import random
+import re
 import sys
 
 import matplotlib.pyplot as plt
@@ -155,22 +156,12 @@ def parse_args():
 
     return args
 
+
 def generate_df_dict(args):
-    """
-    Reads .df files from a directory or file list, extracts parameters from filenames,
-    and returns a dictionary where keys are (num_neighbors, min_dist) and values are DataFrames.
-
-    Parameters:
-    - args: Argument object with `directory` or `filelist` attributes.
-
-    Returns:
-    - df_dict: {(num_neighbors, min_dist): pd.DataFrame}
-    """
-    df_filelist = []
     if args.directory:
-        df_filelist = [x for x in os.listdir(args.directory) if x.endswith(".df")]
-        df_filelist = [os.path.join(args.directory, f) for f in df_filelist]
-    elif args.filelist:
+        df_filelist = [os.path.join(args.directory, f)
+                       for f in os.listdir(args.directory) if f.endswith(".df")]
+    else:
         df_filelist = args.filelist.split(" ")
 
     df_dict = {}
@@ -178,24 +169,49 @@ def generate_df_dict(args):
     for filepath in df_filelist:
         filename = os.path.basename(filepath)
 
-        try:
-            # Decapodiformes_215450_without_None.method_phylogenetic.neighbors_50.mind_0.9.missing_large.subchrom.df
-            samplename  =       filename.split(".")[0]
-            avgmethod   =       filename.split(".method_")[0].split(".")[0]
-            miss_size   =       filename.split(".missing_")[1].split(".")[0]
-            num_neighbors = int(filename.split(".neighbors_")[1].split(".")[0])
-            min_dist    = float(filename.split(".mind_")[1].split(".missing_")[0])
-        except (IndexError, ValueError):
-            raise ValueError(f"Invalid filename: {filename}")
+        # Defaults (optional fields)
+        samplename = filename.split(".neighbors_")[0] if ".neighbors_" in filename else filename.split(".")[0]
+        avgmethod  = None
+        miss_size  = None
+        metric     = None
 
-        # Read DataFrame
+        # Optional: method
+        m = re.search(r"\.method_([^.]+)", filename)
+        if m: avgmethod = m.group(1)
+
+        # neighbors (required)
+        m = re.search(r"\.neighbors_(\d+)", filename)
+        if not m:
+            raise ValueError(f"Invalid filename (neighbors): {filename}")
+        num_neighbors = int(m.group(1))
+
+        # min_dist (required)
+        m = re.search(r"\.mind_([0-9]*\.?[0-9]+)", filename)
+        if not m:
+            raise ValueError(f"Invalid filename (mind): {filename}")
+        min_dist = float(m.group(1))
+
+        # Optional: missing size
+        m = re.search(r"\.missing_([^.]+)", filename)
+        if m: miss_size = m.group(1)
+
+        # Optional: metric before .df (euclidean/cosine/etc.)
+        m = re.search(r"\.(euclidean|cosine|manhattan|chebyshev|minkowski)\.df$", filename)
+        if m: metric = m.group(1)
+
+        # Load DF
         df = pd.read_csv(filepath, sep="\t", index_col=0, header=0)
-        results = {"df": df, "samplename": samplename,
-                   "filepath": filepath,
-                   "num_neighbors": num_neighbors,
-                   "min_dist": min_dist,
-                   "size": miss_size,
-                   "method": avgmethod}
+
+        results = {
+            "df": df,
+            "samplename": samplename,
+            "filepath": filepath,
+            "num_neighbors": num_neighbors,
+            "min_dist": min_dist,
+            "size": miss_size,          # may be None
+            "method": avgmethod,        # may be None
+            "metric": metric            # may be None
+        }
         df_dict[(num_neighbors, min_dist)] = results
 
     return df_dict

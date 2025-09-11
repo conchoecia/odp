@@ -54,7 +54,6 @@ scripts_path = os.path.join(thisfile_path, "../scripts")
 sys.path.insert(1, scripts_path)
 import odp_plotting_functions as odp_plot
 
-
 from plot_ALG_fusions_v3 import assign_colors_to_nodes, SplitLossColocTree, hex_to_rgb, rgb_255_float_to_hex
 
 # odp-specific imports
@@ -190,6 +189,217 @@ def taxids_of_interest_to_analyses():
     #          ]
 
     return taxids_to_analyses(taxids)
+
+def odog_iter_pairwise_distance_matrix(sampledffile, outfilepath,
+                                       metric: str = "mad"):
+    """Iteratively compute a pairwise distance matrix between genomes.
+
+    Progress is printed every ~60 seconds during both data loading and
+    distance computation, reporting elapsed time and an estimated time to
+    completion.
+
+    Parameters
+    ----------
+    sampledffile : str
+        Path to the sample dataframe. This dataframe must contain two
+        columns: ``sample`` with the genome name and ``dis_filepath`` with
+        the path to the ``.gb.gz`` file for that genome.
+    outfilepath : str
+        File path for the resulting distance matrix. The matrix is written
+        as a tab-separated file with both index and columns as sample names.
+    metric : str, optional
+        Distance metric to use. ``"mad"`` calculates the mean absolute
+        difference of shared distances, while ``"corr"`` uses one minus the
+        Pearson correlation coefficient. Defaults to ``"mad"``.
+
+    RAM usage during loading
+    544 10   GB RAM 20 GB VIRT
+    675 12.5 GB RAM 20 GB VIRT
+    881 15.9 GB RAM 22 GB VIRT
+    915 17.1 GB RAM 25.1 GB VIRT
+    1004 22.2 GB RAM 29.4 GB VIRT
+    1115 26.4 GB RAM 33.7 GB VIRT
+    1420 34.5 GB RAM 42.5 GB VIRT
+    2578 47.3 GB RAM 55.1 GB VIRT
+    4382 67 GB RAM 74.8 GB VIRT
+    4519 69 GB RAM 77 GB VIRT
+    4736 72 GB RAM 79 GB VIRT
+    4950 74 GB RAM 82 GB VIRT
+    5125 76 GB RAM 84 GB VIRT
+    5246 77 GB RAM 84 GB VIRT
+    5346 79 GB RAM 87 GB VIRT
+    5600 82 GB RAM 90 GB VIRT
+    5821 85 GB RAM 93 GB VIRT
+
+    Distance
+    after starting to calculate the pairwise distance matrix:
+    90 GB 97 GB VIRT
+    101 GB 110 GB VIRT
+    111 GB 118 GB VIRT
+    """
+
+    if metric not in {"mad", "corr"}:
+        raise ValueError("metric must be 'mad' or 'corr'")
+
+    if not outfilepath.endswith(".tsv"):
+        raise ValueError(
+            f"The outfilepath {outfilepath} does not end with '.tsv'. Exiting.")
+
+    if not os.path.exists(sampledffile):
+        raise IOError(f"The file {sampledffile} does not exist. Exiting.")
+
+    cdf = pd.read_csv(sampledffile, sep="\t", index_col=0)
+    if "dis_filepath" not in cdf.columns:
+        raise ValueError(
+            "The sample dataframe must contain a 'dis_filepath' column.")
+
+    if "sample" in cdf.columns:
+        sample_names = list(cdf["sample"])
+        paths = cdf.set_index("sample")["dis_filepath"].to_dict()
+    else:
+        sample_names = list(cdf.index)
+        paths = cdf["dis_filepath"].to_dict()
+
+    # Load each genome file into memory one at a time with progress reporting
+    data = {}
+    total_files = len(paths)
+    loaded_files = 0
+    load_start = time.time()
+    last_report = load_start
+    for sample, path in paths.items():
+        if not os.path.exists(path):
+            raise IOError(f"The file {path} does not exist. Exiting.")
+        df = pd.read_csv(path, sep="\t", compression="gzip")
+        df["pair"] = list(zip(df["rbh1"], df["rbh2"]))
+        data[sample] = df.set_index("pair")["distance"]
+        loaded_files += 1
+        now = time.time()
+        # updates every 5 seconds
+        if now - last_report >= 5 or loaded_files == total_files:
+            elapsed = now - load_start
+            rate = loaded_files / elapsed if elapsed > 0 else float("inf")
+            remaining = (
+                (total_files - loaded_files) / rate if rate > 0 else float("inf")
+            )
+            print(
+                f"Loaded {loaded_files}/{total_files} genomes "
+                f"({loaded_files / total_files:.2%}). "
+                f"Elapsed: {elapsed:.1f}s, ETA: {remaining:.1f}s",
+                flush=True,
+            )
+            last_report = now
+    print("\nFinished loading all genomes.")
+    print("Starting distance computations...")
+    n = len(sample_names)
+    print(f"Making an {n} x {n} empty distance matrix.")
+    matrix = np.zeros((n, n), dtype=float)
+    print(f"Filling the diagonal with 0.0")
+    matrix[np.arange(n), np.arange(n)] = 0.0
+
+    print("Calculating total pairs")
+    total_pairs = n * (n - 1) // 2
+    processed_pairs = 0
+    print("Starting timer")
+    start_time = time.time()
+    last_report = start_time
+
+    print("Computing pairwise distances...")
+    for i in range(n):
+        si = data[sample_names[i]]
+        for j in range(i + 1, n):
+            sj = data[sample_names[j]]
+            common = si.index.intersection(sj.index)
+            if len(common) == 0:
+                dist = np.nan
+            else:
+                if metric == "mad":
+                    dist = np.mean(np.abs(si.loc[common] - sj.loc[common]))
+                else:  # metric == 'corr'
+                    corr = si.loc[common].corr(sj.loc[common])
+                    dist = 1 - corr if pd.notnull(corr) else np.nan
+            matrix[i, j] = matrix[j, i] = dist
+
+        processed_pairs += n - i - 1
+        now = time.time()
+        # updates every 5 seconds
+        if now - last_report >= 5 or processed_pairs == total_pairs:
+            elapsed = now - start_time
+            rate = processed_pairs / elapsed if elapsed > 0 else float("inf")
+            remaining = (
+                (total_pairs - processed_pairs) / rate if rate > 0 else float("inf")
+            )
+            print(
+                f"Computed {processed_pairs}/{total_pairs} pairs "
+                f"({processed_pairs / total_pairs:.2%}). "
+                f"Elapsed: {elapsed:.1f}s, ETA: {remaining:.1f}s",
+                flush=True,
+            )
+            last_report = now
+
+    dist_df = pd.DataFrame(matrix, index=sample_names, columns=sample_names)
+    dist_df.to_csv(outfilepath, sep="\t")
+    return 0
+
+def plot_precomputed_umap(sampledffile, distance_matrix_file,
+                          smalllargeNaN, n_neighbors, min_dist,
+                          dfoutfilepath, htmloutfilepath,
+                          missing_value_as: float = 9999999999):
+    """Run UMAP on a precomputed distance matrix.
+
+    Parameters
+    ----------
+    sampledffile : str
+        Path to the sample dataframe used for plotting annotations.
+    distance_matrix_file : str
+        Path to a square distance matrix where both axes correspond to the
+        order of samples in ``sampledffile``.
+    smalllargeNaN : str
+        Either ``"small"`` or ``"large"`` indicating how missing values
+        should be filled. ``"large"`` replaces missing values with
+        ``missing_value_as``; ``"small"`` replaces them with 0.
+    n_neighbors, min_dist : int, float
+        UMAP parameters.
+    dfoutfilepath, htmloutfilepath : str
+        Output files for the embedding dataframe and bokeh plot.
+    missing_value_as : float, optional
+        Value used to fill missing entries when ``smalllargeNaN`` is
+        ``"large"``. Defaults to ``9999999999``.
+    """
+
+    for fp in [sampledffile, distance_matrix_file]:
+        if not os.path.exists(fp):
+            raise IOError(f"The file {fp} does not exist. Exiting.")
+
+    if smalllargeNaN not in {"small", "large"}:
+        raise ValueError("smalllargeNaN must be 'small' or 'large'")
+
+    cdf = pd.read_csv(sampledffile, sep="\t", index_col=0)
+    dist_df = pd.read_csv(distance_matrix_file, sep="\t", index_col=0)
+
+    if dist_df.shape[0] != dist_df.shape[1]:
+        raise ValueError("The distance matrix is not square. Exiting.")
+    if dist_df.shape[0] != len(cdf):
+        raise ValueError(
+            "Distance matrix size does not match number of samples.")
+
+    if smalllargeNaN == "large":
+        dist_df = dist_df.fillna(missing_value_as)
+    else:
+        dist_df = dist_df.fillna(0)
+
+    reducer = umap.UMAP(low_memory=True,
+                        n_neighbors=n_neighbors,
+                        min_dist=min_dist,
+                        metric="precomputed")
+    mapper = reducer.fit(dist_df.values)
+
+    umap_mapper_to_bokeh(mapper, cdf, htmloutfilepath,
+                         plot_title=(f"UMAP with precomputed distances,"
+                                     f" n_neighbors={n_neighbors},"
+                                     f" min_dist={min_dist}"))
+    umap_df = umap_mapper_to_df(mapper, cdf)
+    umap_df.to_csv(dfoutfilepath, sep="\t", index=True)
+    return 0
 
 class PhyloTree:
     """
@@ -332,6 +542,7 @@ class PhyloTree:
         All this does is merge all of the samples in the sample_to_locdict to the locdf.
         Then we will modify the locdf to have the correct format, in which we can link the individual samples to the distances.
         """
+        import umap
         # since we're plotting everything, now is a good time to add the extra information to the nodes for plotting
         # add the lineage information to all the nodes
         self.add_taxname_to_all_nodes()
@@ -1021,18 +1232,18 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
         ])
         plot.add_tools(hover)
         # Text input fields for search (placed BELOW the plot)
-        search_rbh = bokeh.models.TextInput(title="Search RBH Ortholog:")
+        search_rbh   = bokeh.models.TextInput(title="Search RBH Ortholog:")
         search_group = bokeh.models.TextInput(title="Search Gene Group:")
 
         # Button to toggle between OR (||) and AND (&&) search logic
         search_toggle = bokeh.models.Button(label="Search Type: OR (||)", button_type="primary")
-        search_mode = bokeh.models.Toggle(label="Search Mode")  # False = OR (||), True = AND (&&)
+        search_mode   = bokeh.models.Toggle(label="Search Mode")  # False = OR (||), True = AND (&&)
 
         # Button to update the plot based on search terms
         update_button = bokeh.models.Button(label="Update Plot", button_type="success")
 
         # Dynamically determine the max width needed for RBH column
-        max_rbh_length = max(plot_data["rbh"].astype(str).apply(len))  # Get max string length
+        max_rbh_length   = max(plot_data["rbh"].astype(str).apply(len))  # Get max string length
         rbh_column_width = min(max(80, max_rbh_length * 5), 250)
 
         # Create table columns with optimized widths
@@ -1201,7 +1412,6 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
 
     return plot
 
-
 def umap_mapper_to_bokeh(mapper, sampledf, outhtml, plot_title = "UMAP"):
     """
     This takes a UMAP mapper and a sampledf and returns a bokeh plot.
@@ -1233,7 +1443,6 @@ def umap_mapper_to_bokeh(mapper, sampledf, outhtml, plot_title = "UMAP"):
                                  color_key = color_dict,
                                  labels = sampledf["sample"], # TODO this needs to be changd to a list comprehension
                                  hover_data = hover_data,
-                                 tools=[], # this needs to be deleted, or else the zoom tool will not work.
                                  point_size = 4
                                  )
     # add a title to the plot
@@ -1282,74 +1491,288 @@ def algcomboix_file_to_dict(ALGcomboixfile) -> dict:
                 alg_combo_to_ix[tuple([rbh1, rbh2])] = int(value)
     return alg_combo_to_ix
 
-def construct_coo_matrix_from_sampledf(sampledf, alg_combo_to_ix, print_prefix = ""):
+def construct_coo_matrix_from_sampledf(
+    sampledf,
+    alg_combo_to_ix,
+    print_prefix: str = "",
+    gbgz_paths=None,
+    path_column: str = "dis_filepath_abs",
+):
     """
-    This takes in a sampledf, and constructs a coo matrix of all of the distance matrices.
-    This method is used for ODOG plots, in which each "row" is a genome, and each "column" is
-      the topological linkage quantificiation of two loci from one another.
+    Build a COO sparse matrix where rows = genomes (sampledf rows) and
+    columns = ALG locus-pair indices (from alg_combo_to_ix). Distances are
+    read from per-sample .gb.gz files.
 
-    Inputs:
-      - sampledf: A pandas dataframe that contains the information about the samples. This is the output of ??
-      - alg_combo_to_ix: A dictionary that contains the unique ALG combinations to an index.
-          First column is a tuple of strings of the loci. Second column is the column index of that relationship.
-          The dataframe is tab-separated. An example is:
-           ('Simakov2022BCnS_genefamily_11671', 'Simakov2022BCnS_genefamily_8892') 0
-           ('Simakov2022BCnS_genefamily_11122', 'Simakov2022BCnS_genefamily_11671')        1
-           ('Simakov2022BCnS_genefamily_11671', 'Simakov2022BCnS_genefamily_3642') 2
-           ('Simakov2022BCnS_genefamily_11671', 'Simakov2022BCnS_genefamily_2277') 3
-      - print_prefix: A string that is printed before the print statements. This is useful for debugging.
-    Outputs:
-      - Outputs a coo sparse matrix object described above. The "rows" are genomes, the "columns" are the
-         topological quantification between two loci.
+    Parameters
+    ----------
+    sampledf : pd.DataFrame
+        Must have one row per genome. By default, must contain a
+        'dis_filepath_abs' column with the original absolute paths.
+        The index should be 0..N-1; this function will sort by index.
+    alg_combo_to_ix : dict[tuple[str,str], int]
+        Maps (rbh1, rbh2) -> column index.
+    print_prefix : str
+        Optional prefix for timing prints.
+    gbgz_paths : Optional[list[str] | dict]
+        Optional override for file paths, useful when using Snakemake shadow
+        copy on node-local storage.
+        - If list/tuple: length must equal len(sampledf); paths are matched to
+          sampledf rows after sorting by index ascending.
+        - If dict: may map any of the following to a replacement path:
+            * row index (int) -> path
+            * original absolute path (str) -> path
+            * basename of original path (str) -> path
+          The first matching key wins in the order above.
+    path_column : str
+        Column in sampledf that holds the original absolute path. Used for
+        fallback when gbgz_paths is not provided or dict lookups miss.
+
+    Returns
+    -------
+    scipy.sparse.coo_matrix
     """
-    # take the first couple of keys from the alg_combo_to_ix and check that they are type tuple with two type strings
-    counter = 0
-    for key in alg_combo_to_ix:
-        if not type(key) == tuple:
-            raise ValueError(f"The key {key} is not a tuple. Exiting.")
-        if not len(key) == 2:
-            raise ValueError(f"The key {key} is not of length 2. Exiting.")
-        if not all([type(x) == str for x in key]):
-            raise ValueError(f"The key {key} is not of type string. Exiting.")
-        counter += 1
-        if counter == 5:
+    import os, time
+    import pandas as pd
+    from scipy.sparse import coo_matrix
+
+    def _p(msg):  # always flush for HPC logs
+        print(f"{print_prefix}{msg}", flush=True)
+
+    t0 = time.time()
+    n_alg_cols = len(alg_combo_to_ix)
+    _p(f"Starting COO construction | samples={len(sampledf):,} | ALG pairs={n_alg_cols:,}")
+
+
+    # Basic sanity on alg_combo_to_ix keys
+    for n, key in enumerate(alg_combo_to_ix):
+        if not isinstance(key, tuple):
+            raise ValueError(f"ALG key {key!r} is not a tuple.")
+        if len(key) != 2:
+            raise ValueError(f"ALG key {key!r} does not have length 2.")
+        if not all(isinstance(x, str) for x in key):
+            raise ValueError(f"ALG key {key!r} must contain strings.")
+        if n == 4:
             break
 
-    # check if the max index is greater than the length of the sampledf -1
-    # We require that the sampledf is indexed from 0-len(sampledf)-1 because the sampledf will later be
-    #  used to index the rows of the sparse matrix. The way the sparse matrix object is stored in numpy
-    #  is that there is no metadata associated with the rows
-    if max(sampledf.index) > len(sampledf) - 1:
-        raise ValueError(f"The maximum index of the sampledf is greater than the length of the sampledf. Exiting.")
+    # Ensure 0..N-1 indexing and stable order for list-based overrides
+    sampledf = sampledf.sort_index()
+    if sampledf.index.min() != 0 or sampledf.index.max() != len(sampledf) - 1:
+        raise ValueError("sampledf index must run from 0..len(sampledf)-1 after sort_index().")
 
-    # This is annoying to create this temporary data structure, but it helps us pinpoint broken distance matrix .gb.gz files.
-    tempdfs = []
-    for i, row in sampledf.iterrows():
-        thisfile = row["dis_filepath_abs"]
+    # Print how we'll resolve paths
+    if gbgz_paths is None:
+        _p(f"Path source: sampledf['{path_column}'] (no overrides provided)")
+    elif isinstance(gbgz_paths, (list, tuple)):
+        if len(gbgz_paths) != len(sampledf):
+            raise ValueError(f"gbgz_paths length {len(gbgz_paths)} != len(sampledf) {len(sampledf)}")
+        _p(f"Path overrides: LIST/TUPLE (len={len(gbgz_paths):,}); matched by row order after sort_index()")
+    elif isinstance(gbgz_paths, dict):
+        # Quick summary of common key types in the dict
+        n_idx = sum(1 for k in gbgz_paths.keys() if isinstance(k, int))
+        n_abs = sum(1 for k in gbgz_paths.keys() if isinstance(k, str) and os.sep in k)
+        n_base = sum(1 for k in gbgz_paths.keys() if isinstance(k, str) and os.sep not in k)
+        _p(f"Path overrides: DICT (keys by type: index={n_idx:,}, abs={n_abs:,}, base={n_base:,})")
+    else:
+        raise TypeError("gbgz_paths must be None, list/tuple, or dict.")
+
+    # Helper to resolve the path for a given row
+    def _resolve_path(pos, idx, row):
+        # list/tuple override by position
+        if isinstance(gbgz_paths, (list, tuple)):
+            if len(gbgz_paths) != len(sampledf):
+                raise ValueError(
+                    f"gbgz_paths length {len(gbgz_paths)} != len(sampledf) {len(sampledf)}"
+                )
+            return gbgz_paths[pos]
+
+        # dict override by index, then absolute path, then basename
+        if isinstance(gbgz_paths, dict):
+            if idx in gbgz_paths:
+                return gbgz_paths[idx]
+            orig = row.get(path_column, None)
+            if orig is not None:
+                if orig in gbgz_paths:
+                    return gbgz_paths[orig]
+                base = os.path.basename(orig)
+                if base in gbgz_paths:
+                    return gbgz_paths[base]
+
+        # Fallback to the original column
+        if path_column not in row:
+            raise KeyError(
+                f"Row {idx} lacks '{path_column}' and no usable gbgz_paths override was provided."
+            )
+        return row[path_column]
+
+    # Preview first few path mappings
+    preview_n = min(3, len(sampledf))
+    _p("Preview of path resolution (first few rows):")
+    for pos in range(preview_n):
+        idx = sampledf.index[pos]
+        orig = sampledf.iloc[pos].get(path_column, "<missing>")
         try:
-            tempdfs.append(pd.read_csv(thisfile, sep = "\t", compression = "gzip"))
-            # add a column with the index of the sampledf
-            tempdfs[-1]["row_indices"] = i
-            # assert that all of the values of rbh1 are less than the values of rbh2
-            assert all(tempdfs[-1]["rbh1"] < tempdfs[-1]["rbh2"])
-        except:
-            raise IOError(f"The file {thisfile} could not be read in with pandas. There probably was something wrong wth the compression. Try deleteing this file. It will be regenerated. Exiting.")
-    concatdf = pd.concat(tempdfs)
-    start = time.time()
-    concatdf["pair"] = concatdf.apply(lambda x: (x["rbh1"], x["rbh2"]), axis = 1)
-    stop = time.time()
-    print ("{}It took {} seconds to add the pair column with apply".format(print_prefix, stop - start))
-    start = time.time()
+            resolved = _resolve_path(pos, idx, sampledf.iloc[pos])
+        except Exception as e:
+            resolved = f"<ERROR: {e}>"
+        _p(f"  row {idx}: orig={orig}  ->  used={resolved}")
 
+
+    # Read all per-sample distance rows with progress prints
+    tempdfs = []
+    n_rows_total = 0
+    t_read0 = time.time()
+    # Print roughly 10 times across the loop (min every 1, max every 200)
+    progress_every = max(1, min(200, max(1, len(sampledf)//10)))
+
+    for pos, (idx, row) in enumerate(sampledf.iterrows(), 1):
+        thisfile = _resolve_path(pos-1, idx, row)
+        try:
+            df = pd.read_csv(thisfile, sep="\t", compression="gzip")
+        except Exception as e:
+            raise IOError(
+                f"Could not read '{thisfile}' as gzipped TSV. Delete and regenerate this file."
+            ) from e
+
+        # Basic column checks (fail fast with a clear message)
+        for col in ("rbh1", "rbh2", "distance"):
+            if col not in df.columns:
+                raise KeyError(f"File '{thisfile}' missing required column '{col}'.")
+
+        # Attach row index and check ordering
+        df["row_indices"] = idx
+        if not (df["rbh1"] < df["rbh2"]).all():
+            raise ValueError(f"File '{thisfile}' contains rows where rbh1 >= rbh2.")
+
+        tempdfs.append(df)
+        n_rows_total += len(df)
+
+        if pos % progress_every == 0 or pos == len(sampledf):
+            elapsed = time.time() - t_read0
+            rate = n_rows_total / elapsed if elapsed > 0 else float("inf")
+            pct = 100.0 * pos / len(sampledf)
+            # ETA based on files, not rows (simpler, stable)
+            eta = (elapsed / pos) * (len(sampledf) - pos) if pos > 0 else float("inf")
+            _p(f"[{pos:>5}/{len(sampledf):<5} | {pct:5.1f}%] "
+               f"rows={n_rows_total:,} | rate={rate:,.0f} rows/s | elapsed={elapsed:,.1f}s | ETA≈{eta:,.1f}s")
+
+    _p(f"Finished reading inputs: total_rows={n_rows_total:,} | files={len(sampledf):,} "
+       f"| read_time={time.time()-t_read0:,.1f}s")
+
+    # Concatenate
+    t_cat0 = time.time()
+    concatdf = pd.concat(tempdfs, ignore_index=True)
+    _p(f"Finished concatenating dataframes in {time.time()-t_cat0:,.3f}s")
+    # Pair column
+    t_pair0 = time.time()
+    _p(f"Adding a 'pair' column.")
+    concatdf["pair"] = list(zip(concatdf["rbh1"], concatdf["rbh2"]))
+    _p(f"Added 'pair' column in {time.time()-t_pair0:,.3f}s")
+
+
+    # Map to col indices
+    t_map0 = time.time()
+    _p(f"Mapping 'col_indices' from alg_combo_to_ix...")
     concatdf["col_indices"] = concatdf["pair"].map(alg_combo_to_ix)
-    stop = time.time()
-    print("{}It took {} seconds to add the col_indices column with map".format(print_prefix, stop - start))
+    map_secs = time.time() - t_map0
+    n_missing = int(concatdf["col_indices"].isna().sum())
+    if n_missing > 0:
+        _p(f"WARNING: {n_missing:,} pairs not found in alg_combo_to_ix (will raise).")
+        # Fail explicitly to avoid silent NaNs in COO
+        missing_examples = concatdf.loc[concatdf["col_indices"].isna(), "pair"].head(5).tolist()
+        raise KeyError(f"{n_missing:,} pairs missing from alg_combo_to_ix; examples: {missing_examples}")
+    _p(f"Mapped 'col_indices' in {map_secs:,.3f}s")
 
-    sparse_matrix = coo_matrix(( concatdf["distance"],
-                                (concatdf["row_indices"], concatdf["col_indices"])),
-                                shape = (len(sampledf), len(alg_combo_to_ix)))
-    del concatdf
+    # Distance dtype check
+    dist_dtype = concatdf["distance"].dtype
+    if not pd.api.types.is_numeric_dtype(dist_dtype):
+        _p(f"Converting 'distance' from dtype {dist_dtype} to numeric...")
+        concatdf["distance"] = pd.to_numeric(concatdf["distance"], errors="raise")
+    # Quick stats
+    dmin = float(concatdf["distance"].min())
+    dmax = float(concatdf["distance"].max())
+    _p(f"Distance stats: min={dmin:g}, max={dmax:g}")
+
+    # COO build
+    t_coo0 = time.time()
+    _p(f"Running the COO matrix constructor...")
+    sparse_matrix = coo_matrix(
+        (concatdf["distance"], (concatdf["row_indices"], concatdf["col_indices"].astype(int))),
+        shape=(len(sampledf), n_alg_cols),
+    )
+    build_secs = time.time() - t_coo0
+    nnz = sparse_matrix.nnz
+    _p(f"Built COO matrix: shape=({len(sampledf):,}, {n_alg_cols:,}), nnz={nnz:,} in {build_secs:,.3f}s")
+
     return sparse_matrix
+
+#def construct_coo_matrix_from_sampledf(sampledf, alg_combo_to_ix, print_prefix = ""):
+#    """
+#    This takes in a sampledf, and constructs a coo matrix of all of the distance matrices.
+#    This method is used for ODOG plots, in which each "row" is a genome, and each "column" is
+#      the topological linkage quantificiation of two loci from one another.
+#
+#    Inputs:
+#      - sampledf: A pandas dataframe that contains the information about the samples. This is the output of ??
+#      - alg_combo_to_ix: A dictionary that contains the unique ALG combinations to an index.
+#          First column is a tuple of strings of the loci. Second column is the column index of that relationship.
+#          The dataframe is tab-separated. An example is:
+#           ('Simakov2022BCnS_genefamily_11671', 'Simakov2022BCnS_genefamily_8892') 0
+#           ('Simakov2022BCnS_genefamily_11122', 'Simakov2022BCnS_genefamily_11671')        1
+#           ('Simakov2022BCnS_genefamily_11671', 'Simakov2022BCnS_genefamily_3642') 2
+#           ('Simakov2022BCnS_genefamily_11671', 'Simakov2022BCnS_genefamily_2277') 3
+#      - print_prefix: A string that is printed before the print statements. This is useful for debugging.
+#    Outputs:
+#      - Outputs a coo sparse matrix object described above. The "rows" are genomes, the "columns" are the
+#         topological quantification between two loci.
+#    """
+#    # take the first couple of keys from the alg_combo_to_ix and check that they are type tuple with two type strings
+#    counter = 0
+#    for key in alg_combo_to_ix:
+#        if not type(key) == tuple:
+#            raise ValueError(f"The key {key} is not a tuple. Exiting.")
+#        if not len(key) == 2:
+#            raise ValueError(f"The key {key} is not of length 2. Exiting.")
+#        if not all([type(x) == str for x in key]):
+#            raise ValueError(f"The key {key} is not of type string. Exiting.")
+#        counter += 1
+#        if counter == 5:
+#            break
+#
+#    # check if the max index is greater than the length of the sampledf -1
+#    # We require that the sampledf is indexed from 0-len(sampledf)-1 because the sampledf will later be
+#    #  used to index the rows of the sparse matrix. The way the sparse matrix object is stored in numpy
+#    #  is that there is no metadata associated with the rows
+#    if max(sampledf.index) > len(sampledf) - 1:
+#        raise ValueError(f"The maximum index of the sampledf is greater than the length of the sampledf. Exiting.")
+#
+#    # This is annoying to create this temporary data structure, but it helps us pinpoint broken distance matrix .gb.gz files.
+#    tempdfs = []
+#    for i, row in sampledf.iterrows():
+#        thisfile = row["dis_filepath_abs"]
+#        try:
+#            tempdfs.append(pd.read_csv(thisfile, sep = "\t", compression = "gzip"))
+#            # add a column with the index of the sampledf
+#            tempdfs[-1]["row_indices"] = i
+#            # assert that all of the values of rbh1 are less than the values of rbh2
+#            assert all(tempdfs[-1]["rbh1"] < tempdfs[-1]["rbh2"])
+#        except:
+#            raise IOError(f"The file {thisfile} could not be read in with pandas. There probably was something wrong wth the compression. Try deleteing this file. It will be regenerated. Exiting.")
+#    concatdf = pd.concat(tempdfs)
+#    start = time.time()
+#    concatdf["pair"] = concatdf.apply(lambda x: (x["rbh1"], x["rbh2"]), axis = 1)
+#    stop = time.time()
+#    print ("{}It took {} seconds to add the pair column with apply".format(print_prefix, stop - start))
+#    start = time.time()
+#
+#    concatdf["col_indices"] = concatdf["pair"].map(alg_combo_to_ix)
+#    stop = time.time()
+#    print("{}It took {} seconds to add the col_indices column with map".format(print_prefix, stop - start))
+#
+#    sparse_matrix = coo_matrix(( concatdf["distance"],
+#                                (concatdf["row_indices"], concatdf["col_indices"])),
+#                                shape = (len(sampledf), len(alg_combo_to_ix)))
+#    del concatdf
+#    return sparse_matrix
 
 def construct_lil_matrix_from_sampledf(sampledf, alg_combo_to_ix, print_prefix = "") -> lil_matrix:
     """
@@ -2153,7 +2576,8 @@ def mlt_umapHTML(sample, sampledffile, algrbhfile, coofile,
     print("   - Done with the topoumap_plotumap function")
     return 0
 
-def plot_umap_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, min_dist, color_by_clade = True):
+def plot_umap_pdf(sampledfumapfile, outpdf, title,
+                  color_by_clade = True):
     """
     Makes a UMAP plot from a .df file. Each row will have the samples, the UMAP coordinates,
     and the colors.
@@ -2238,7 +2662,6 @@ def plot_umap_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_neighbors, 
     fig.legend(handles = legend_patches, loc = "upper right", fontsize = figfontsize)
 
     # compose the title from the other arguments
-    title = f"UMAP of {sample} with {smalllargeNaN} missing vals, n_neighbors = {n_neighbors}, min_dist = {min_dist}"
     ax[0].set_title(title, fontsize = figfontsize)
 
     # change the tick size to be the same size as the other stuff
@@ -2561,7 +2984,6 @@ def plot_umap_phylogeny_pdf(sampledfumapfile, outpdf, sample, smalllargeNaN, n_n
     # save the figure as a pdf
     plt.savefig(outpdf, bbox_inches='tight')
 
-
 def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
                          sample, smalllargeNaN, n_neighbors,
                          min_dist, dfoutfilepath, htmloutfilepath,
@@ -2700,212 +3122,150 @@ def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
                 # If it's a different warning, re-raise it
                 raise e
 
-#def parse_args():
-#    """
-#    This has all of the args that we need to parse.
-#    The args that we need to parse are:
-#      -d --directory : The directory that contains the RBH files. These RBH files
-#      -V --overwrite : If this is set, then we will overwrite the files in the output directory.
-#                       Otherwise, try to load the existing files. This is not required.
-#      -a --ALGname   : The name of the ALG that we are looking at. This is required.
-#      -r --rbhfile   : The ALG rbh file. This is required, as we will use this information later.
-#      -c --cladestoplot : This is a list of the clades that we want to plot. This is not required. Use comma-separated values.
-#      -q --qualitycontrol : If this is set, then we will run the quality control on the distance matrices. This is not required.
-#    """
-#    parser = argparse.ArgumentParser(description='This program takes in a list of RBH files. It constructs a phylogenetic tree with those files, and then uses UMAP to visualize the tree based on the distance of ALG ortholog pairs from each other.')
-#    parser.add_argument('-d', '--directory',
-#                        required = True,
-#                        type=str,
-#                        help='The directory that contains the RBH files. These RBH files')
-#    parser.add_argument('-V', '--overwrite', action='store_true',
-#                        help='If this is set, then we will overwrite the files in the output directory. Otherwise, try to load the existing files. This is not required.')
-#    parser.add_argument('-a', '--ALGname', type=str,
-#                        required = True,
-#                        help='The name of the ALG that we are looking at. This is required.')
-#    parser.add_argument('-r', '--rbhfile', type=str,
-#                        required = True,
-#                        help='The ALG rbh file. This is required, as we will use this information later.')
-#    parser.add_argument('-c', '--cladestoplot', type=str, default = "33208,6605", # the default is Metazoa and Cephalopoda
-#                        help='This is a list of the clades that we want to plot. This is not required. Use comma-separated values.')
-#    parser.add_argument('-q', '--qualitycontrol', action='store_true',
-#                        help='If this is set, then we will generate quality control plots of the data. This is not required.')
-#    args = parser.parse_args()
-#
-#    # check that the directory exists
-#    if not os.path.exists(args.directory):
-#        raise IOError(f"The directory {args.directory} does not exist. Exiting.")
-#    # go through clades to plot, split on commas, check that everything can be parsed as an int, and reassign to args
-#    fields = args.cladestoplot.split(",")
-#    for thisfield in fields:
-#        if not re.match(r"^[0-9]*$", thisfield):
-#            raise ValueError(f"The field {thisfield} is not a number. Exiting.")
-#    args.cladestoplot = [int(x) for x in fields]
-#
-#    return args
+def plot_umap_from_files_just_df(
 
+    sampledffile, ALGcomboixfile, coofile,
+    sample, smalllargeNaN, n_neighbors, min_dist,
+    dfoutfilepath,
+    missing_value_as=999_999_999_999,
+    print_prefix = ""
+):
+    """
+    Like plot_umap_from_files, but only writes the .df (no HTML).
+    Keeps the same 'small'/'large' missing-value behavior and sentinel.
+    """
+    import os, time, warnings
+    import pandas as pd
+    import umap
+    from scipy.sparse import load_npz
 
-#def main():
-#    """
-#    This program interprets many RBH files, and handles the way that they are visualized.
-#
-#    Steps:
-#      1. Generate a sampledf from the RBH files. This dataframe contains important information.
-#        - Columns:
-#          - index: The index of the dataframe is important because this will be the order of the samples in the distance matrix. Everything will be ordered by this index.
-#          - sample: This is the sample name. This is the same sample information that will be in the rbh file columns, and in the distance matrix.
-#          - color: This is the color of the sample. This is based on a custom annotation from plot_ALG_fusions_v3.py
-#          - taxid: This is the NCBI TAXid of the sample.
-#          - taxname: This is the name of the taxid. For example 7777 is "Condrichthyes".
-#          - taxid_list: This is a list of all the taxids in the lineage of the sample from closest to root to furthest.
-#          - taxid_list_str: A string version of taxid_list joined together with ';' characters
-#          - taxname_list: This is a list of all the taxnames in the lineage of the sample from closest to root to furthest. Matches the indices of taxid_list.
-#          - taxname_list_str: A string version of taxname_list joined together with ';' characters
-#          - level_1: Here, the level_1, level_2, et cetera are splits of the NCBI taxid for easy plotting. These go up to level_10.
-#              - Some examples are:
-#                ```
-#                level_1: root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)
-#                level_2: Metazoa (2); Eumetazoa (6072); Bilateria (33213); Protostomia (33317)
-#                et cetera
-#                ```
-#          - printstring: This is the printstring of the taxid, like "root (1); cellular organisms (131567); Eukaryota (2759); Opisthokonta (33154)"
-#          - #NOT YET annotation_method: This shows what method was used to annotate the sample, for example "BCnSSimakov2022_protmap" or "NCBI/Existing"
-#          - genome_size: This is the size of the genome in base pairs.
-#          - #NOT YET gc_content: This is the GC content of the genome. This is expressed as a value from 0 to 1.
-#          - number_of_chromosomes: The haploid number of chromosomes that this species has.
-#          - filepath: The filepath, as provided, of the rbh file that was used to generate this information.
-#          - filepath_abs: The filepath, resolved, of the rbh file that was used to generate this information.
-#          - filename: The filename of the rbh file that was used to generate this information.
-#      2. Read in the RBH files and convert them to distance matrix files
-#      (Steps 1 and 2 are combined in the function rbh_directory_to_distance_matrix)
-#      3. Generate the LIL matrix of the data. Save this to disk.
-#      4. Generate UMAP projections of the data. In this step we use different parameters to test how they affect the UMAP.
-#      5. Visualize the data with plotly, bokeh, and matplotlib. For these plots, also generate QC plots.
-#    """
-#    args = parse_args()
-#
-#    results_base_directory = "GTUMAP"
-#    # ┏┓┓ ┏┓  ┏┓┏┓┏┓┏┓┳┏┓┏┓  •  ┏
-#    # ┣┫┃ ┃┓━━┗┓┃┃┣ ┃ ┃┣ ┗┓  ┓┏┓╋┏┓
-#    # ┛┗┗┛┗┛  ┗┛┣┛┗┛┗┛┻┗┛┗┛  ┗┛┗┛┗┛
-#    rbh_files = list(sorted([os.path.join(args.directory, f)
-#                 for f in os.listdir(args.directory)
-#                 if f.endswith('.rbh')], reverse = True))
-#    # Generate the distance matrices. This is the part that saves the .gb.gz files.
-#    outtsv = f"{results_base_directory}/sampledf.tsv"
-#    outputdir = f"{results_base_directory}/distance_matrices/"
-#    sampledf = None
-#    if not os.path.exists(outtsv):
-#        print("generating the distance matrices")
-#        sampledf = rbh_directory_to_distance_matrix(args.directory, args.ALGname, outtsv = outtsv, outputdir = outputdir)
-#    else:
-#        print("The sampledf file already exists. Not overwriting it. Instead, we will read it in.")
-#        print("If you would rather overwrite it, delete it in the file system and run this program again.")
-#        sampledf = pd.read_csv(outtsv, sep = "\t", index_col = 0)
-#
-#    # We will need to calculate the rbh combo to index dictionary.
-#    # DO NOT bother reading in the existing file. It takes 5x longer
-#    #  to read in the file than it does to generate it.
-#    outfile = f"{results_base_directory}/combo_to_index.txt"
-#    alg_combo_to_ix = ALGrbh_to_algcomboix(args.rbhfile)
-#    # save the dictionary pairs
-#    with open(outfile, "w") as f:
-#        for key, value in alg_combo_to_ix.items():
-#            f.write(f"{key}\t{value}\n")
-#
-#    ncbi = NCBITaxa()
-#    # Now we must construct a lil matrix from the distance matrices. This takes up significant disk space.
-#    # We now parse through different sets of species and parameters to see how the UMAP is affected.
-#    # Usage notes:
-#    # For about 100 samples for molluscs, took up about 29Gb virtual memory and about 8Gb of RAM.
-#    for thissp in args.cladestoplot:
-#        thiscladename = ncbi.get_taxid_translator([thissp])[thissp]
-#        sample_outfix = f"{thiscladename}_{thissp}"
-#        sampleoutdir = f"{results_base_directory}/analyses/{sample_outfix}"
-#        # safely make the dirs for the output files
-#        create_directories_if_not_exist(sampleoutdir)
-#        print(f"We are making a plot for this NCBI taxid: {thissp}")
-#
-#
-#        # LIL FILE
-#        # This whole thing could be sped up for repeated runs if I allowed the LIL matrix to be saved to disk.
-#        # Right now it is not saved to disk, because it is a large file.
-#        # This wouldn't be such a big deal if I compressed the output. I need to optimize this to make
-#        #  sure that I understand the inputs for constructing the LIL matrix object, though.
-#        print(f"  - Constructing the LIL matrix")
-#        samplecdf1 = f"{sampleoutdir}/{sample_outfix}.sampledf.tsv"
-#        samplecdf2 = f"{sampleoutdir}/{sample_outfix}.sampledf.matrixindices.tsv"
-#        cdf = filter_sample_df_by_clades(sampledf, [thissp])
-#        # Save the cdf as a tsv
-#        cdf.to_csv(samplecdf1, sep = "\t", index = True)
-#        # reset the indices, because that is what we need for the lil matrix
-#        cdf = cdf.reset_index(drop = True)
-#        cdf.to_csv(samplecdf2, sep = "\t", index = True)
-#        # now get the lil matrix
-#        lil = construct_lil_matrix_from_sampledf(cdf, alg_combo_to_ix, print_prefix = "  - ")
-#
-#        # UMAP section
-#        # Levels for plotting text:
-#        # We are making a plot for this NCBI taxid: 33208
-#        #  - Constructing the LIL matrix for {sample_outfix}
-#        for missing in ["small", "large"]:
-#            if missing == "large":
-#                # we have to flip the values of the lil matrix
-#                lil.data[lil.data == 0] = 999999999999
-#            for n in [2, 5, 10, 20, 50, 100, 250]: # this is the number of neighbors
-#                for min_dist in [0.0, 0.1, 0.2, 0.5, 0.75, 0.9]:
-#                    # We need a unique set of files for each of these
-#                    if len(cdf) <= n:
-#                        print(f"    The number of samples, {len(cdf)}, is less than the number of neighbors, {n}. Skipping.")
-#                    if len(cdf) > n: # we have this condition for smaller datasets
-#                        # First check if the UMAP exists
-#                        UMAPdf           = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.df"
-#                        UMAPbokeh        = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.bokeh.html"
-#                        UMAPfit = None
-#                        if os.path.exists(UMAPbokeh):
-#                            print(f"    FOUND - UMAP with {missing} missing vals, with n_neighbors = {n}, and min_dist = {min_dist}")
-#                        else:
-#                            try:
-#                                print(f"    PLOTTING - UMAP with {missing} missing vals, with n_neighbors = {n}, and min_dist = {min_dist}")
-#                                reducer = umap.UMAP(low_memory=True, n_neighbors = n, min_dist = min_dist)
-#                                start = time.time()
-#                                mapper = reducer.fit(lil)
-#                                stop = time.time()
-#                                print("   - It took {} seconds to fit_transform the UMAP".format(stop - start))
-#                                # save the UMAP as a bokeh plot
-#                                umap_mapper_to_bokeh(mapper, cdf, UMAPbokeh,
-#                                    plot_title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
-#                                umap_df = umap_mapper_to_df(mapper, cdf)
-#                                umap_df.to_csv(UMAPdf, sep = "\t", index = True)
-#                                # save the connectivity figure
-#                                if args.qualitycontrol:
-#                                    UMAPconnectivity = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.connectivity.jpeg"
-#                                    UMAPconnectivit2 = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.connectivity2.jpeg"
-#                                    try:
-#                                        umap_mapper_to_connectivity(mapper, UMAPconnectivity,
-#                                                                    title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
-#                                    except:
-#                                        print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivity}")
-#                                    try:
-#                                        umap_mapper_to_connectivity(mapper, UMAPconnectivit2, bundled = True,
-#                                                                    title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
-#                                    except:
-#                                        print(f"    Warning: Could not make the connectivity plot for {UMAPconnectivit2}")
-#                                    #QCplot = f"{sampleoutdir}/{sample_outfix}.neighbors_{n}.mind_{min_dist}.missing_{missing}.QC.jpeg"
-#                                    ##try:
-#                                    #umap_mapper_to_QC_plots(mapper, QCplot,
-#                                    #                title = f"UMAP of {sample_outfix} with {missing} missing vals, n_neighbors = {n}, min_dist = {min_dist}")
-#                                    ##except:
-#                                    ##    print(f"    Warning: failed to make the QC plot for {QCplot}.")
-#                            except UserWarning as e:
-#                                # Catch the specific warning about graph not being fully connected
-#                                if "Graph is not fully connected" in str(e):
-#                                    print("    Warning: Graph is not fully connected. Can't run UMAP with these parameters.")
-#                                    # we check for file UMAPbokeh, so write this message to it
-#                                    with open(UMAPbokeh, "w") as f:
-#                                        f.write("The graph is not fully connected. Can't run UMAP with these parameters.")
-#                                else:
-#                                    # If it's a different warning, re-raise it
-#                                    raise e
-#
-#if __name__ == "__main__":
-#    main()
+    def _p(msg):  # always flush for HPC logs
+        print(f"{print_prefix}{msg}", flush=True)
+
+    # type/arg checks
+    if not isinstance(missing_value_as, int):
+        raise ValueError(f"The missing_value_as {missing_value_as} is not of type int. Exiting.")
+    for p in (sampledffile, ALGcomboixfile, coofile):
+        if not os.path.exists(p):
+            raise ValueError(f"The filepath {p} does not exist. Exiting.")
+    if not dfoutfilepath.endswith(".df"):
+        raise ValueError(f"The dfoutfilepath {dfoutfilepath} does not end with '.df'. Exiting.")
+    _p(f"Making the directory for {dfoutfilepath} if needed")
+    time_start = time.time()
+    os.makedirs(os.path.dirname(dfoutfilepath) or ".", exist_ok=True)
+    _p(f"  - Made directory in {time.time()-time_start:.3f}s")
+
+    # load inputs
+    _p(f"Loading the input sample dataframe.")
+    time_start = time.time()
+    cdf = pd.read_csv(sampledffile, sep="\t", index_col=0)
+    _p(f"  - Loaded dataframe with {len(cdf)} rows in {time.time()-time_start:.3f}s")
+    _p(f"Loading the ALGcomboix file.")
+    time_start = time.time()
+    ALGcomboix = algcomboix_file_to_dict(ALGcomboixfile)
+    _p(f"  - Loaded ALGcomboix with {len(ALGcomboix)} entries in {time.time()-time_start:.3f}s")
+    _p(f"Loading the coo file and converting it to a lil object. This will take a long time.")
+    time_start = time.time()
+    lil = load_npz(coofile).tolil()
+    _p(f"  - Loaded coo file with shape {lil.shape} in {time.time()-time_start:.3f}s")
+
+    # sanity checks as in your original
+    if lil.shape[0] > max(cdf.index) + 1:
+        raise ValueError(
+            f"The largest row index of the lil matrix, {lil.shape[0]}, "
+            f"is greater than the largest index of cdf, {max(cdf.index)}. Exiting."
+        )
+    if max(ALGcomboix.values()) > lil.shape[1] - 1:
+        raise ValueError(
+            f"The largest value of the ALGcomboix, {max(ALGcomboix.values())}, "
+            f"is greater than the number of columns of the lil matrix, {lil.shape[1]}. Exiting."
+        )
+
+    if smalllargeNaN not in ("small", "large"):
+        raise ValueError(f"The smalllargeNaN {smalllargeNaN} is not 'small' or 'large'. Exiting.")
+    if not (0 <= min_dist <= 1):
+        raise IOError(f"The min_dist {min_dist} is not between 0 and 1. Exiting.")
+
+    # matrix construction (kept "dumb" on purpose)
+    _p(f"Constructing the matrix with '{smalllargeNaN}' missing values")
+    time_start = time.time()
+    if smalllargeNaN == "large":
+        # BUGFIX: flip zeros in COO before densifying; LIL doesn't support vectorized .data ops
+        _p(f"Converting from the lil to the coo format to set zeros to -1")
+        time_coo_start = time.time()
+        coo = lil.tocoo(copy=True)
+        _p(f"  - Converted to coo in {time.time()-time_coo_start:.3f}s")
+        if coo.nnz:
+            _p(f"Setting zeros to -1 in coo.data")
+            time_coo_start = time.time()
+            zmask = (coo.data == 0)
+            _p(f"  - Set the zeros to -1 in coo.data in {time.time()-time_coo_start:.3f}s")
+            if zmask.any():
+                _p(f"    - Found {zmask.sum()} zeros in coo.data (zmask)")
+                _p(f"Setting zmask to -1")
+                time_zmask_start = time.time()
+                coo.data[zmask] = -1
+                _p(f"  - Set zeros to -1 in {time.time()-time_zmask_start:.3f}s")
+
+        _p(f"Converting to a dense matrix. The RAM usage will increase now.")
+        time_coo_start = time.time()
+        matrix = coo.toarray()
+        _p(f"  - Converted to dense matrix in {time.time()-time_coo_start:.3f}s")
+        _p(f"Deleting lil and coo to save RAM.")
+        time_coo_start = time.time()
+        del lil, coo
+        _p(f"  - Deleted lil and coo in {time.time()-time_coo_start:.3f}s")
+
+        _p(f"Setting zeros to {missing_value_as}. The RAM will increase now.")
+        time_coo_start = time.time()
+        matrix[matrix == 0] = missing_value_as
+        _p(f"  - Set zeros to {missing_value_as} in {time.time()-time_coo_start:.3f}s")
+        _p(f"Converting -1s to 0")
+        time_coo_start = time.time()
+        matrix[matrix == -1] = 0
+        _p(f"  - Converted -1s to 0 in {time.time()-time_coo_start:.3f}s")
+    else:
+        matrix = lil
+        del lil
+    _p(f"  - Constructed matrix in {time.time()-time_start:.3f}s")
+
+    # If too few samples for the chosen neighbors, write an empty df
+    if len(cdf) <= int(n_neighbors):
+        _p(f"    The number of samples, {len(cdf)}, is <= n_neighbors={n_neighbors}. Writing empty df.")
+        with open(dfoutfilepath, "w") as f:
+            f.write("")
+        return
+
+    # Treat "Graph is not fully connected" as an error so we can write an empty df
+    warnings.filterwarnings("error", message=".*Graph is not fully connected.*")
+
+    try:
+        _p(f"UMAP (df-only) with {smalllargeNaN} missing vals, n_neighbors={n_neighbors}, min_dist={min_dist}")
+        _p(f"Running the umap.UMAP() reducer")
+        time_start = time.time()
+        reducer = umap.UMAP(low_memory=True, n_neighbors=int(n_neighbors), min_dist=float(min_dist))
+        _p(f"  - Created reducer in {time.time()-time_start:.1f}s")
+        # This step started around 180GB with 5831 genomes and started climbing in the middle of the algorithm
+        #  up to 261 RES 262 VIRT. Process needs at least 0.05GB of RAM per genome
+        _p(f"Fitting the UMAP reducer to the matrix. (This is the UMAP calculation step).")
+        _p(f" The RAM usage will climb about 50% more than the usage at the start of this step.")
+        time_start = time.time()
+        mapper = reducer.fit(matrix)  # keep your original pattern
+        _p(f"   - fit time: {time.time()-time_start:.1f}s")
+
+        # Build a minimal output df (coordinates + original index)
+        _p(f"Extracting the UMAP embedding and writing to {dfoutfilepath}")
+        emb = getattr(mapper, "embedding_", None)
+        if emb is None:
+            raise RuntimeError("UMAP produced no embedding_")
+        umap_df = pd.DataFrame(emb, index=cdf.index, columns=["UMAP1", "UMAP2"])
+        umap_df.to_csv(dfoutfilepath, sep="\t", index=True)
+
+    except UserWarning as e:
+        # specific catch for connectivity warning (promoted to error above)
+        print("    Warning: Graph is not fully connected. Can't run UMAP with these parameters.")
+        with open(dfoutfilepath, "w") as f:
+            f.write("")  # write empty .df as your pipeline expects
+    finally:
+        # restore warnings if you care (optional)
+        warnings.filterwarnings("default", message=".*Graph is not fully connected.*")

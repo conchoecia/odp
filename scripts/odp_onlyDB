@@ -264,6 +264,9 @@ rule rbh_filelist_for_egt:
     output:
         rbhfull = config["tool"] + "/rbh_file_list_for_egt_fullpath.{hmm}.txt",
         rbhrela = config["tool"] + "/rbh_file_list_for_egt_relative.{hmm}.txt"
+    resources:
+        mem_mb  = 2000,
+        runtime = 10  # ten minutes
     threads: 1
     run:
         full_out     = open(output.rbhfull, "w")
@@ -2505,7 +2508,7 @@ rule plot_synteny_coloredby:
 
         s2c2s = chromsize_to_s2c2s(input.chromsize)
 
-        orthology_method = config.get("diamond_or_blastp", "diamond")
+        orthology_method = config.get("diamond_or_blastp", "blastp")
 
         # figure out how to sort the scaffolds
         sort_y_by_x = True
