@@ -24,9 +24,7 @@ from PhyloTreeUMAP import (algcomboix_file_to_dict,
                            odog_pairwise_distance_matrix,
                            odog_iter_pairwise_distance_matrix, # these are new functions with the pairwise option
                            plot_precomputed_umap,
-                           plot_umap_from_files_just_df
-                           )              # new functions with the pairwise option
-
+                           plot_umap_from_files_just_df)
 
 # get the path of this script, so we know where to look for the plotdfs file
 # This block imports fasta-parser as fasta
@@ -91,6 +89,12 @@ odog_m    = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
 odog_n    = [150]
 odog_m    = [0.75]
 odog_size = ["large"]
+if "odog_size" in config:
+    odog_size = [config["odog_size"]]
+if "odog_n" in config:
+    odog_n = config["odog_n"]
+if "odog_m" in config:
+    odog_m = config["odog_m"]
 
 odol_n    = [2, 5, 10, 15, 25, 50]
 odol_m    = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
@@ -1109,12 +1113,38 @@ def coo_get_runtime(wildcards, attempt):
 
 def allsample_coo_get_mem_mb(wildcards, attempt):
     """
-    The amount of RAM needed for the script depends on the size of the input genome.
+    The amount of RAM needed for the script depends on the number of input genomes.
+    The script needs about 0.05 GB per genome.
+    So 5831 genomes needs around 300 GB of RAM.
     """
-    attemptdict = {1: 200000,
-                   2: 300000,
-                   3: 400000}
-    return attemptdict[attempt]
+    import os
+
+    sampledf_path = results_base_directory + "/sampledf.tsv"
+
+    # Count genomes (lines - header), ignore blank/comment lines
+    n = 0
+    try:
+        with open(sampledf_path, "r", encoding="utf-8", errors="ignore") as f:
+            next(f, None)  # header
+            for line in f:
+                s = line.strip()
+                if s and not s.startswith("#"):
+                    n += 1
+    except FileNotFoundError:
+        # Safe fallback if file isn't available at DAG eval time
+        n = int(config.get("umap_default_n_genomes", 1000))
+
+    n = max(0, n)
+
+    # Per-attempt tiers (MiB). 0.05 GiB/genome ⇒ 0.05*1024 MiB/genome.
+    tiers = {
+        1: max(30000, int(0.051 * n * 1024)),  # ≥ 30 GiB
+        2: max(35000, int(0.061 * n * 1024)),  # ≥ 35 GiB
+        3: max(40000, int(0.071 * n * 1024)),  # ≥ 40 GiB
+        4: max(50000, int(0.081 * n * 1024)),  # ≥ 50 GiB
+    }
+    return tiers.get(attempt, tiers[max(tiers)])  # use last tier for attempt>=5
+
 
 rule odogCooGen:
     """
@@ -1233,10 +1263,10 @@ def odogPlotUMAP_old_inefficient_get_mem_mb(wildcards, attempt):
 
     # Per-attempt tiers (MiB). 0.05 GiB/genome ⇒ 0.05*1024 MiB/genome.
     tiers = {
-        1: max(30000, int(0.051 * n * 1024)),  # ≥ 30 GiB
-        2: max(35000, int(0.061 * n * 1024)),  # ≥ 35 GiB
-        3: max(40000, int(0.071 * n * 1024)),  # ≥ 40 GiB
-        4: max(50000, int(0.081 * n * 1024)),  # ≥ 50 GiB
+        1: max(30000, int(0.07 * n * 1024)),  # ≥ 30 GiB
+        2: max(35000, int(0.08 * n * 1024)),  # ≥ 35 GiB
+        3: max(40000, int(0.09 * n * 1024)),  # ≥ 40 GiB
+        4: max(50000, int(0.10 * n * 1024)),  # ≥ 50 GiB
     }
     return tiers.get(attempt, tiers[max(tiers)])  # use last tier for attempt>=5
 
@@ -1244,11 +1274,29 @@ def odogPlotUMAP_old_inefficient_get_runtime(wildcards, attempt):
     """
     The amount of RAM needed for the script depends on the size of the input genome.
     """
-    attemptdict = {#1: 300,
-                   1: 360,
-                   2: 420,
-                   3: 480,
-                   4: 540}
+    sampledf_path = results_base_directory + "/sampledf.tsv"
+
+    # Count genomes (lines - header), ignore blank/comment lines
+    n = 0
+    try:
+        with open(sampledf_path, "r", encoding="utf-8", errors="ignore") as f:
+            next(f, None)  # header
+            for line in f:
+                s = line.strip()
+                if s and not s.startswith("#"):
+                    n += 1
+    except FileNotFoundError:
+        # Safe fallback if file isn't available at DAG eval time
+        n = int(config.get("umap_default_n_genomes", 1000))
+
+    n = max(10, n)
+
+    # this is the number of minutes per sample. Scale it by threads
+    # was 1 min per sample for single-threaded
+    attemptdict = {1: int(1.0 * n * 0.5),
+                   2: int(1.2 * n * 0.5),
+                   3: int(1.4 * n * 0.5),
+                   4: int(1.6 * n * 0.5)}
     return attemptdict[attempt]
 
 rule odogPlotUMAP_old_inefficient:
@@ -1258,12 +1306,14 @@ rule odogPlotUMAP_old_inefficient:
         coo          = results_base_directory + "/allsamples.coo.npz",
     output:
         df   = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
-    threads: 1
+    threads: 32
     retries: 3
     resources:
         mem_mb  = odogPlotUMAP_old_inefficient_get_mem_mb,
         runtime = odogPlotUMAP_old_inefficient_get_runtime,
         bigUMAPSlots = 1,
+    benchmark:
+        results_base_directory + "/benchmarks/odog_umap_from_coo.neighbors_{n}.mind_{m}.missing_{sizeNaN}.tsv"
     params:
         sentinel_missing = 999_999_999_999
     run:
@@ -1305,6 +1355,7 @@ rule odogPlotUMAP_old_inefficient:
                 min_dist         = float(wildcards.m),
                 dfoutfilepath    = output.df,
                 missing_value_as = params.sentinel_missing,
+                threads          = threads,
                 print_prefix     = "[ODOG-UMAP] ",
             )
             print(f"[ODOG-UMAP] Wrote {output.df}", flush=True)

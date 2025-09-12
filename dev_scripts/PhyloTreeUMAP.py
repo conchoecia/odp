@@ -3123,24 +3123,54 @@ def plot_umap_from_files(sampledffile, ALGcomboixfile, coofile,
                 raise e
 
 def plot_umap_from_files_just_df(
-
     sampledffile, ALGcomboixfile, coofile,
     sample, smalllargeNaN, n_neighbors, min_dist,
     dfoutfilepath,
     missing_value_as=999_999_999_999,
-    print_prefix = ""
+    print_prefix = "",
+    threads = None
 ):
     """
     Like plot_umap_from_files, but only writes the .df (no HTML).
     Keeps the same 'small'/'large' missing-value behavior and sentinel.
     """
+    def _p(msg):  # always flush for HPC logs
+        print(f"{print_prefix}{msg}", flush=True)
+
+    # --- THREAD LIMITS: set *before* importing numpy/scipy/umap ---
+    import os, time, warnings
+    if threads is None:
+        threads = os.cpu_count() or 1
+    threads = max(1, int(threads))
+    _p(f"Setting thread limit to {threads} (of {os.cpu_count() or '?'} available)")
+
+    # Keep BLAS + NumPy + Numba from over-spawning. Leave one core free if you like.
+    clamp = str(threads)
+    for v in (
+        "OMP_NUM_THREADS",        # OpenMP
+        "OPENBLAS_NUM_THREADS",   # NumPy on OpenBLAS
+        "MKL_NUM_THREADS",        # NumPy on MKL/oneMKL
+        "BLIS_NUM_THREADS",       # NumPy on blis
+        "NUMEXPR_NUM_THREADS",    # numexpr, if used anywhere
+        "NUMBA_NUM_THREADS",      # Numba parallel sections (UMAP’s NN-descent)
+    ):
+        os.environ[v] = clamp
+
+    # Choose Numba threading backend (omp is safest on most clusters)
+    os.environ.setdefault("NUMBA_THREADING_LAYER", "omp")
+
+    # Optional: avoid OpenMP fork issues on some clusters
+    os.environ.setdefault("KMP_INIT_AT_FORK", "FALSE")
+    os.environ.setdefault("KMP_AFFINITY", "disabled")
+
+    # The thing that matters is NUMBA_NUM_THREADS, print out its value
+    _p(f"NUMBA_NUM_THREADS is {os.environ['NUMBA_NUM_THREADS']}")
+    # now it is OK to import the heavier stuff.
     import os, time, warnings
     import pandas as pd
     import umap
     from scipy.sparse import load_npz
 
-    def _p(msg):  # always flush for HPC logs
-        print(f"{print_prefix}{msg}", flush=True)
 
     # type/arg checks
     if not isinstance(missing_value_as, int):
@@ -3251,15 +3281,13 @@ def plot_umap_from_files_just_df(
         _p(f" The RAM usage will climb about 50% more than the usage at the start of this step.")
         time_start = time.time()
         mapper = reducer.fit(matrix)  # keep your original pattern
-        _p(f"   - fit time: {time.time()-time_start:.1f}s")
+        _p(f"   - UMAP fit time: {time.time()-time_start:.1f}s")
 
         # Build a minimal output df (coordinates + original index)
         _p(f"Extracting the UMAP embedding and writing to {dfoutfilepath}")
-        emb = getattr(mapper, "embedding_", None)
-        if emb is None:
-            raise RuntimeError("UMAP produced no embedding_")
-        umap_df = pd.DataFrame(emb, index=cdf.index, columns=["UMAP1", "UMAP2"])
-        umap_df.to_csv(dfoutfilepath, sep="\t", index=True)
+        # save the UMAP as a bokeh plot
+        umap_df = umap_mapper_to_df(mapper, cdf)
+        umap_df.to_csv(dfoutfilepath, sep = "\t", index = True)
 
     except UserWarning as e:
         # specific catch for connectivity warning (promoted to error above)
