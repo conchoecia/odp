@@ -159,6 +159,20 @@ rule all:
         #        ┛
         # odog old inefficient implementation
         results_base_directory + "/allsamples.coo.npz",
+        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
+                n = odog_n,
+                m = odog_m,
+                sizeNaN = odog_size),
+        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
+                sample = config["sample_to_rbh_file"].keys(),
+                n = odog_n,
+                m = odog_m,
+                sizeNaN = odog_size),
+        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.pdf",
+                n = odog_n,
+                m = odog_m,
+                sizeNaN = odog_size),
+        # newer implementation
         #results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
         #results_base_directory + "/reduced/pcs.tsv", # this is from feature selection
         #results_base_directory + "/reduced/pca.explained_variance.tsv", # this is also from feature selection
@@ -186,19 +200,6 @@ rule all:
         #        n = odog_n,
         #        m = odog_m,
         #        metric = "euclidean"),
-        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
-                n = odog_n,
-                m = odog_m,
-                sizeNaN = odog_size),
-        #expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
-        #        sample = config["sample_to_rbh_file"].keys(),
-        #        n = odog_n,
-        #        m = odog_m,
-        #        sizeNaN = odog_size),
-        #expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.pdf",
-        #        n = odog_n,
-        #        m = odog_m,
-        #        sizeNaN = odog_size),
         #expand(results_base_directory + "/allsamples/allsamples.missing_{sizeNaN}.paramsweep.pdf",
         #        sizeNaN = odog_size)
         #    ┓     ┏┓┓ ┏┓┳┓┏┓┏┓
@@ -1292,11 +1293,13 @@ def odogPlotUMAP_old_inefficient_get_runtime(wildcards, attempt):
     n = max(10, n)
 
     # this is the number of minutes per sample. Scale it by threads
-    # was 1 min per sample for single-threaded
-    attemptdict = {1: int(1.0 * n * 0.5),
-                   2: int(1.2 * n * 0.5),
-                   3: int(1.4 * n * 0.5),
-                   4: int(1.6 * n * 0.5)}
+    # was 1 min per sample for single-threaded. It took about 9 hours for 5831 samples.
+    # Now we have 32 threads, so it should be much faster.
+    # Tuning it to 1/4 of a minute per sample with 32 threads.
+    attemptdict = {1: int(1.0 * n * 0.25),
+                   2: int(1.2 * n * 0.25),
+                   3: int(1.4 * n * 0.25),
+                   4: int(1.6 * n * 0.25)}
     return attemptdict[attempt]
 
 rule odogPlotUMAP_old_inefficient:
@@ -1368,6 +1371,40 @@ rule odogPlotUMAP_old_inefficient:
                     shutil.rmtree(work, ignore_errors=True)
             except Exception as e:
                 print(f"[ODOG-UMAP] Warning: failed to remove scratch dir {work}: {e}", flush=True)
+
+rule odog_umap_oldinefficient_plot_html:
+    input:
+        df = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
+    output:
+        html = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
+    threads: 1
+    retries: 4
+    resources:
+        mem_mb  = pdf_get_mem_mb,
+        runtime = 10
+    run:
+        # write bokeh
+        n_neighbors = int(wildcards.n)
+        min_dist    = float(wildcards.m)
+        sizeNaN     = str(wildcards.sizeNaN)
+        mgt_mlt_plot_HTML(input.df, output.html,
+                          plot_title=f"UMAP (PCs) n={n_neighbors}, min_dist={min_dist}, missing size={sizeNaN}",
+                          analysis_type = "MGT")
+
+rule odog_umap_oldinefficient_plot_pdf:
+    input:
+        df = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df"
+    output:
+        pdf  = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.pdf"
+    threads: 1
+    retries: 4
+    resources:
+        mem_mb = pdf_get_mem_mb,
+        runtime = 10
+    run:
+        title = f"UMAP (PCs) n={wildcards.n}, min_dist={wildcards.m}, missing size={wildcards.sizeNaN}"
+        plot_umap_pdf(input.df, output.pdf,
+                      title, color_by_clade = True)
 
 def odogPlotUMAP_get_mem_mb(wildcards, attempt):
     """
