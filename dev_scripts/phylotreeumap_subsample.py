@@ -6,10 +6,111 @@ from pathlib import Path
 import random
 import sys
 
+def return_kingdom_full_sort_order():
+    """Return a list of the sort order for the taxonomic rankings."""
+    return ["superkingdom",
+            "kingdom",
+            "subkingdom",
+            "infrakingdom",
+            "superphylum",
+            "phylum",
+            "subphylum",
+            "infraphylum",
+            "superclass",
+            "class",
+            "subclass",
+            "infraclass",
+            "parvclass",
+            "cohort",
+            "subcohort",
+            "superorder",
+            "order",
+            "suborder",
+            "infraorder",
+            "parvorder",
+            "superfamily",
+            "family",
+            "subfamily",
+            "tribe",
+            "subtribe",
+            "genus",
+            "subgenus",
+            "section",
+            "subsection",
+            "series",
+            "subseries",
+            "species group",
+            "species subgroup",
+            "species",
+            "subspecies"]
+
+def rank_sort_full():
+    """Return a dictionary mapping taxonomic rankings to their sort order index."""
+    return {rank: index for index, rank in enumerate(return_kingdom_full_sort_order())}
+
+def return_kingdom_limited_order():
+    """Return a list of the sort order for the limited set of taxonomic rankings."""
+    return ["kingdom",
+            "phylum",
+            "subphylum",
+            "superclass",
+            "class",
+            "subclass",
+            "superorder",
+            "order",
+            "suborder",
+            "infraorder",
+            "superfamily",
+            "family",
+            "subfamily",
+            "genus"]
+
+def generate_subsample_priorities(smallest_level = "family",
+                                  largest_level  = "phylum",
+                                  custom_sample_set = None):
+    """
+    Generate a list of lists of sampling priorities and their fallbacks.
+    The list starts with the smallest level and ends with the largest level.
+
+    Inputs:
+      - smallest_level: The lowest taxonomic rank to include (default: "genus").
+      - largest_level: The highest taxonomic rank to include (default: "class").
+      - custom_sample_set: An optional set of samples to prioritize (default: None).
+                           Could be a sortable iterable like ["family", "order", "class"].
+                           This will limit the outputs and their fallbacks to these ranks,
+                           adding the higher rankins than the largest level to avoid
+                           incorrectly getting them ranked as None.
+    """
+    # check that smallest_level is less than largest_level
+    full_order = return_kingdom_full_sort_order()
+    if full_order.index(smallest_level) <= full_order.index(largest_level):
+        print(f"Error: smallest_level '{smallest_level}' must be lower than largest_level '{largest_level}'")
+        sys.exit(1)
+    sample_order = []
+    if custom_sample_set is None:
+        sample_order = return_kingdom_limited_order()
+    else:
+        sample_order = list(custom_sample_set)
+        # Add any higher ranks than the largest_level to avoid None rankings
+        largest_index = full_order.index(largest_level)
+        for rank in full_order[largest_index+1:]:
+            if rank not in sample_order:
+                sample_order.append(rank)
+    # sort sample order from lower to higher rank based on the reverse full order
+    sample_order = sorted(sample_order, key=lambda x: full_order.index(x), reverse=True)
+
+    # Make a list of lists of priorities and their fallbacks, peeling back the lowest
+    #  rank with each iteration.
+    output = []
+    for i in range(len(sample_order)):
+        output.append(sample_order[i:])
+        if sample_order[i] == largest_level:
+            break
+    return output
 
 def subsample_phylogenetically(
     df,
-    max_per_order   = 10,
+    max_per_bucket   = 10,
     sep             = ";",
     seed            = 42,
     bucket_priority = ("infraorder", "suborder", "order",
@@ -20,7 +121,17 @@ def subsample_phylogenetically(
     """
     df columns:
       - 'sample'           : ID to return (e.g., assembly accession)
-      - 'taxid_list_str'   : semicolon-separated lineage taxids (root→…→species)
+      - 'taxid_list_str'   : semicolon-separated lineage taxids (root > ... > species)
+
+    Args:
+        df: pandas DataFrame with 'sample' and 'taxid_list_str' columns
+        max_per_bucket: maximum number of samples to select per bucket
+        sep: separator used in 'taxid_list_str'
+        seed: random seed for reproducibility
+        bucket_priority: iterable of taxonomic ranks to use for bucketing (in order of preference, so lower ranks first)
+        priority: if True, try to include at most one representative per species of the priority_taxids set
+        priority_taxids: set of species-level taxids to prioritize if priority=True
+
     Returns:
       selected_buckets: {bucket_tid: {
           "rank": str,
@@ -128,7 +239,7 @@ def subsample_phylogenetically(
                     priority_count += 1
 
         # remaining capacity
-        remaining_k = max_per_order - len(chosen)
+        remaining_k = max_per_bucket - len(chosen)
         cap_exceeded = remaining_k < 0
 
         if remaining_k > 0:
@@ -149,19 +260,6 @@ def subsample_phylogenetically(
 
     return selected_buckets, flat_selected
 
-# Full rank ordering + helpers (can live next to your other report fns)
-FULL_RANKS = (
-    "superkingdom","kingdom","subkingdom",
-    "superphylum","phylum","subphylum","infraphylum",
-    "superclass","class","subclass","infraclass",
-    "cohort","subcohort",
-    "superorder","order","suborder","infraorder","parvorder",
-    "superfamily","family","subfamily","tribe","subtribe",
-    "genus","subgenus","species"
-)
-RANK_SORT_FULL = {r:i for i,r in enumerate(FULL_RANKS)}
-METAZOA_TAXID_DEFAULT = 33208  # anchor if present
-
 def _rank_name_maps_full(selected_buckets):
     ncbi = NCBITaxa()
     all_ids = set()
@@ -172,35 +270,50 @@ def _rank_name_maps_full(selected_buckets):
             all_ids.update(rec["path"])
     return ncbi.get_rank(list(all_ids)), ncbi.get_taxid_translator(list(all_ids))
 
-def _ranked_nodes_from_path(path, rank_map, name_map, root_taxid=METAZOA_TAXID_DEFAULT):
-    """Ordered [(tid,name,rank)] along FULL_RANKS; clip to root_taxid if present."""
-    if root_taxid is not None and root_taxid in path:
-        path = path[path.index(root_taxid):]
-    seen = set()
-    nodes = []
-    for t in path:
-        rk = rank_map.get(t)
-        if rk in FULL_RANKS and rk not in seen:
-            nodes.append((t, name_map.get(t, str(t)), rk))
-            seen.add(rk)
-    return nodes
-
-def make_subsampling_report_breadcrumbs(selected_buckets, root_taxid=METAZOA_TAXID_DEFAULT):
+def make_subsampling_report_breadcrumbs(selected_buckets, root_taxid=33208, include_unranked=True):
     """
-    One line per selected sample, sorted by full ranked lineage (Metazoa-anchored).
-    Bucket node in each line is annotated with [rank] <selected/original>.
+    One line per selected sample, sorted by the *full* lineage (incl. 'no rank' clades as 'unranked').
+    The node corresponding to the bucket taxid is annotated with [rank] <selected/original>.
     """
+    # Reuse your helper to collect all taxids and fetch rank/name maps
     rank_map, name_map = _rank_name_maps_full(selected_buckets)
-    bucket_info = {tid: info for tid, info in selected_buckets.items()}
 
-    # Build rows: (sort_key, line)
+    FULL_RANKS = set(return_kingdom_full_sort_order())
+    RANK_POS   = rank_sort_full()  # rank -> position (lower = higher level). Unknown/unranked -> 999.
+
+    def lineage_nodes(path):
+        """
+        Return [(tid, name, rank)] along the lineage, clipped to root_taxid if present.
+        - Ranked nodes: keep first occurrence per rank (prevents duplicates like multiple 'class').
+        - Unranked nodes: keep *each taxid* (so Bilateria, Protostomia, etc., are preserved).
+        """
+        if root_taxid is not None and root_taxid in path:
+            path = path[path.index(root_taxid):]
+
+        nodes = []
+        seen_ranks = set()
+        seen_taxa  = set()
+        for t in path:
+            rk = rank_map.get(t)
+            nm = name_map.get(t, str(t))
+            if rk in FULL_RANKS:
+                if rk not in seen_ranks:
+                    nodes.append((t, nm, rk))
+                    seen_ranks.add(rk)
+            else:
+                if include_unranked and t not in seen_taxa:
+                    nodes.append((t, nm, "unranked"))
+                    seen_taxa.add(t)
+        return nodes
+
     rows = []
     for tid, info in selected_buckets.items():
         sel, orig = info["final_size"], info["original_size"]
-        for rec in info["chosen"]:
-            nodes = _ranked_nodes_from_path(rec["path"], rank_map, name_map, root_taxid=root_taxid)
 
-            # format breadcrumb, marking the bucket node
+        for rec in info["chosen"]:
+            nodes = lineage_nodes(rec["path"])
+
+            # Build the breadcrumb text, marking the bucket node inline
             parts = []
             for t, nm, rk in nodes:
                 if t == tid:
@@ -209,15 +322,17 @@ def make_subsampling_report_breadcrumbs(selected_buckets, root_taxid=METAZOA_TAX
                     parts.append(nm)
             line = " › ".join(parts) + f"  -  {rec['sample']}"
 
-            # full-tree sort key: ((rank_idx, name_lower) ... , sample)
-            key = tuple((RANK_SORT_FULL.get(rk, 999), nm.lower()) for _, nm, rk in nodes) + (str(rec["sample"]),)
+            # Uniform sort key: sequence of (rank_pos, name_lower) pairs + tie-break on sample
+            key = tuple((RANK_POS.get(rk, 999), nm.lower()) for (_, nm, rk) in nodes) \
+                  + ((1000, str(rec["sample"]).lower()),)
+
             rows.append((key, line))
 
     rows.sort(key=lambda x: x[0])
 
     out = []
     out.append("=" * 78)
-    out.append("Subsampling Report (breadcrumbs, full-tree order; anchored at Metazoa if present)")
+    out.append("Subsampling Report (breadcrumbs; full-lineage sort, incl. unranked clades)")
     out.append("=" * 78)
     out.extend(l for _, l in rows)
     out.append("-" * 78)
@@ -268,27 +383,22 @@ def make_subsampling_summary_table(selected_buckets):
     out.append(line)
     return "\n".join(out)
 
-# A comprehensive ordered rank list (top → bottom). Adjust if you like.
-FULL_RANKS = (
-    "superkingdom","kingdom","subkingdom",
-    "superphylum","phylum","subphylum","infraphylum",
-    "superclass","class","subclass","infraclass",
-    "cohort","subcohort",
-    "superorder","order","suborder","infraorder","parvorder",
-    "superfamily","family","subfamily","tribe","subtribe",
-    "genus","subgenus","species"
-)
-RANK_SORT_FULL = {r:i for i,r in enumerate(FULL_RANKS)}
-METAZOA_TAXID_DEFAULT = 33208  # Metazoa
+def make_subsampling_report_tree(
+    selected_buckets,
+    root_taxid=33208,
+    include_unranked=True,
+    suppress_higher_fallback_labels=True
+):
+    """
+    Indented tree from Metazoa (if present) → species, including 'no rank' clades.
+    - Internal nodes that are buckets get [rank] <sel/orig>, unless suppressed.
+    - Species leaves get:  [bucket: NAME (RANK) <sel/orig>]
+    """
+    from ete4 import NCBITaxa
 
-def make_subsampling_report_tree(selected_buckets, root_taxid=METAZOA_TAXID_DEFAULT):
-    """
-    Indented tree from Metazoa (if present) → species, using FULL_RANKS order.
-    Bucket nodes are annotated with [rank] <sel/orig>.
-    """
     ncbi = NCBITaxa()
 
-    # gather taxids to translate
+    # ---- Collect IDs to translate ----
     all_ids = set()
     for tid, info in selected_buckets.items():
         if tid is not None:
@@ -296,33 +406,50 @@ def make_subsampling_report_tree(selected_buckets, root_taxid=METAZOA_TAXID_DEFA
         for rec in info["chosen"]:
             all_ids.update(rec["path"])
 
-    rank_map = ncbi.get_rank(list(all_ids))
-    name_map = ncbi.get_taxid_translator(list(all_ids))
+    rank_map = ncbi.get_rank(list(all_ids))                 # taxid -> rank (e.g., 'phylum', 'no rank', ...)
+    name_map = ncbi.get_taxid_translator(list(all_ids))     # taxid -> name
 
     bucket_info = {tid: info for tid, info in selected_buckets.items()}
 
-    # Build tree
-    root = {"tid": None, "name": "ROOT", "rank": "unranked", "children": {}, "samples": []}
+    # sample -> its bucket (for leaf labels)
+    bucket_for_sample = {}
+    for tid, inf in selected_buckets.items():
+        for rec in inf["chosen"]:
+            bucket_for_sample[rec["sample"]] = {
+                "name": inf["name"],
+                "rank": inf["rank"],
+                "sel":  inf["final_size"],
+                "orig": inf["original_size"],
+            }
+
+    FULL_RANKS = set(return_kingdom_full_sort_order())
+    RANK_POS   = rank_sort_full()  # used only to sort siblings; unknown/unranked -> 999
 
     def ranked_nodes_from_path(path):
-        """Return ordered [(tid,name,rank)] along the path, filtered to FULL_RANKS and
-           clipped to start at root_taxid if present."""
-        # clip to Metazoa root if available
+        """Return [(tid,name,rank)] along the lineage, preserving multiple 'no rank' clades."""
         if root_taxid is not None and root_taxid in path:
-            start_idx = path.index(root_taxid)
-            path2 = path[start_idx:]
-        else:
-            # start at the first ranked node we know (top-most in FULL_RANKS)
-            path2 = path
+            path = path[path.index(root_taxid):]
 
         nodes = []
-        seen_ranks = set()
-        for t in path2:
+        seen_ranks = set()  # for ranked nodes
+        seen_taxa  = set()  # for unranked nodes so multiple clades survive
+
+        for t in path:
             rk = rank_map.get(t)
-            if rk in FULL_RANKS and rk not in seen_ranks:
-                nodes.append((t, name_map.get(t, str(t)), rk))
-                seen_ranks.add(rk)
+            nm = name_map.get(t, str(t))
+
+            if rk in FULL_RANKS:
+                if rk not in seen_ranks:
+                    nodes.append((t, nm, rk))
+                    seen_ranks.add(rk)
+            else:
+                if include_unranked and t not in seen_taxa:
+                    nodes.append((t, nm, "unranked"))
+                    seen_taxa.add(t)
         return nodes
+
+    # Build a simple tree
+    root = {"tid": None, "name": "ROOT", "rank": "unranked", "children": {}, "samples": []}
 
     def insert_record(rec):
         nodes = ranked_nodes_from_path(rec["path"])
@@ -337,56 +464,93 @@ def make_subsampling_report_tree(selected_buckets, root_taxid=METAZOA_TAXID_DEFA
         for rec in info["chosen"]:
             insert_record(rec)
 
+    # Helpers to decide when to hide fallback labels
+    def deepest_bucket_rank_pos_in_subtree(node):
+        best = None
+        if node["tid"] in bucket_info:
+            rk = bucket_info[node["tid"]]["rank"]
+            best = RANK_POS.get(rk, 999)
+        for ch in node["children"].values():
+            child_best = deepest_bucket_rank_pos_in_subtree(ch)
+            if child_best is not None:
+                best = child_best if best is None else max(best, child_best)
+        return best
+
+    def has_deeper_bucket_than(node_rank_pos, node):
+        best = deepest_bucket_rank_pos_in_subtree(node)
+        return best is not None and best > node_rank_pos
+
+    # Emit lines
     def emit(node, depth=0):
         lines = []
         if node["tid"] is not None:
             label = node["name"]
             if node["tid"] in bucket_info:
                 inf = bucket_info[node["tid"]]
-                label += f" [{inf['rank']}] <{inf['final_size']}/{inf['original_size']}>"
+                node_rank_pos = RANK_POS.get(inf["rank"], 999)
+                if suppress_higher_fallback_labels and inf["rank"] in {"class", "subclass"} and has_deeper_bucket_than(node_rank_pos, node):
+                    pass
+                else:
+                    label += f" [{inf['rank']}] <{inf['final_size']}/{inf['original_size']}>"
             lines.append(" " * (2 * depth) + label)
 
-        # sort children by rank, then name (stable)
+        # Sort children primarily by rank position, then name
         children_sorted = sorted(
             node["children"].values(),
-            key=lambda c: (RANK_SORT_FULL.get(c["rank"], 999), c["name"].lower())
+            key=lambda c: (RANK_POS.get(c["rank"], 999), c["name"].lower())
         )
         for ch in children_sorted:
             lines.extend(emit(ch, depth + (0 if node["tid"] is None else 1)))
 
+        # Species leaves with bucket annotation
         if node["samples"]:
+            indent = " " * (2 * (depth + 1))
             for s in sorted(node["samples"], key=str):
-                lines.append(" " * (2 * (depth + 1)) + s)
+                b = bucket_for_sample.get(s)
+                if b:
+                    leaf = f"{s}  [bucket: {b['name']} ({b['rank']}) <{b['sel']}/{b['orig']}>]"
+                else:
+                    leaf = s
+                lines.append(indent + leaf)
         return lines
 
     lines = []
     lines.append("=" * 78)
-    lines.append("Subsampling Report (full tree, anchored at Metazoa if present)")
+    lines.append("Subsampling Report (full tree, incl. unranked clades; anchored at Metazoa if present)")
     lines.append("=" * 78)
-    # print each top-level child (e.g., Metazoa) from ROOT
+
     for ch in sorted(root["children"].values(),
-                     key=lambda c: (RANK_SORT_FULL.get(c["rank"], 999), c["name"].lower())):
+                     key=lambda c: (RANK_POS.get(c["rank"], 999), c["name"].lower())):
         lines.extend(emit(ch, 0))
         lines.append("-" * 78)
+
     return "\n".join(lines)
 
-rbhdir    = "/lisc/scratch/molevo/dts/manifold/BCnSSimakov2022_current_rbh_202509"
-sampletsv = "/lisc/scratch/molevo/dts/manifold/UMAP_snakemake_202509/GTUMAP/sampledf.tsv"
+def main():
+    rbhdir    = "/lisc/scratch/molevo/dts/manifold/BCnSSimakov2022_current_rbh_202509"
+    sampletsv = "/lisc/scratch/molevo/dts/manifold/UMAP_snakemake_202509/GTUMAP/sampledf.tsv"
 
-df = pd.read_csv(sampletsv, sep="\t", index_col=0)
-print(df.columns)
+    df = pd.read_csv(sampletsv, sep="\t", index_col=0)
+    print(df.columns)
 
-selected_buckets, flat = subsample_phylogenetically(df, max_per_order=10, priority=True)
-summary_txt    = make_subsampling_summary_table(selected_buckets)
-breadcrumbs_txt = make_subsampling_report_breadcrumbs(selected_buckets)
-tree_txt        = make_subsampling_report_tree(selected_buckets)
+    selected_buckets, flat = subsample_phylogenetically(df, max_per_bucket=10, priority=True)
+    summary_txt     = make_subsampling_summary_table(selected_buckets)
+    breadcrumbs_txt = make_subsampling_report_breadcrumbs(selected_buckets)
+    tree_txt        = make_subsampling_report_tree(selected_buckets)
 
-outdir = Path("subsampling_reports")
-outdir.mkdir(parents=True, exist_ok=True)
+    outdir = Path("subsampling_reports")
+    outdir.mkdir(parents=True, exist_ok=True)
 
-(outdir / "summary_table.txt").write_text(summary_txt, encoding="utf-8")
-(outdir / "breadcrumbs.txt").write_text(breadcrumbs_txt, encoding="utf-8")
-(outdir / "tree.txt").write_text(tree_txt, encoding="utf-8")
+    (outdir / "summary_table.txt").write_text(summary_txt, encoding="utf-8")
+    (outdir / "breadcrumbs.txt").write_text(breadcrumbs_txt, encoding="utf-8")
+    (outdir / "tree.txt").write_text(tree_txt, encoding="utf-8")
 
-# Save flat list of selected samples
-(outdir / "selected_samples.txt").write_text("\n".join(sorted(flat)), encoding="utf-8")
+    # Save flat list of selected samples
+    (outdir / "selected_samples.txt").write_text("\n".join(sorted(flat)), encoding="utf-8")
+
+    # print out the sort orders for testing
+    for sortorder in generate_subsample_priorities():
+        print(sortorder)
+
+if __name__ == "__main__":
+    main()

@@ -1,8 +1,5 @@
 """
-This is a snakefile that is used to parallelize constructing a chromosomal linkage UMAP.
- For this UMAP, each dot is a genome or an inferred pseudogenome at one node.
-
-I am writing a snakefile to do this, because it takes too long in a for loop.
+The point of this script is to subsample the availble rbh files based on taxonomy
 """
 
 from PhyloTreeUMAP import (algcomboix_file_to_dict,
@@ -25,6 +22,12 @@ from PhyloTreeUMAP import (algcomboix_file_to_dict,
                            odog_iter_pairwise_distance_matrix, # these are new functions with the pairwise option
                            plot_precomputed_umap,
                            plot_umap_from_files_just_df)
+
+from phylotreeumap_subsample import (generate_subsample_priorities,
+                                     subsample_phylogenetically,
+                                     make_subsampling_summary_table,
+                                     make_subsampling_report_breadcrumbs,
+                                     make_subsampling_report_tree)
 
 # get the path of this script, so we know where to look for the plotdfs file
 # This block imports fasta-parser as fasta
@@ -86,6 +89,8 @@ if results_base_directory.endswith("/"):
 # use these parameters for the full space exploration
 odog_n    = [20, 35, 50, 75, 100, 150, 250]
 odog_m    = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
+odog_n    = [50, 75, 100, 150, 250]
+odog_m    = [0.5, 0.75, 0.9]
 #odog_n    = [150]
 #odog_m    = [0.75]
 odog_size = ["large"]
@@ -96,84 +101,37 @@ if "odog_n" in config:
 if "odog_m" in config:
     odog_m = config["odog_m"]
 
-odol_n    = [2, 5, 10, 15, 25, 50]
-odol_m    = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
-#odol_n    = [5, 10]
-#odol_m    = [0.0, 0.01]
-#odol_n    = [10]
-#odol_m    = [0.9]
-odol_size = ["large"]
-weighting_methods = ["phylogenetic"]
+subsample_dict = {x[0]: x for x in generate_subsample_priorities()}
 
-# use these parameters for the clade-specific exploration
-codog_n    = [2, 5, 7, 10, 20, 40]
-codog_n    = [2, 3, 4, 5, 6]
-codog_m    = [0.0, 0.1]
-codog_m    = [0.0, 0.001, 0.01, 0.05, 0.1, 0.25]
-
-codog_size = ["large"]
-
+wildcard_constraints:
+    rank="[A-Za-z]+"
 
 rule all:
     input:
-        ##    ┓  ┓
-        ## ┏┓┏┫┏┓┃ - One-Dot-One-Locus plots
-        ## ┗┛┗┻┗┛┗   Each dot represents a single locus, and the data vector is the distance to all other loci
-        ## These two sets of files are generated during the rule odolGenCoo and the function topoumap_genmatrix()
-        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.coo.npz",
-        #        taxanalysis = config["taxids"],
-        #        weighting = weighting_methods,
-        #        sizeNaN = odol_size),
-        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.sampledf.tsv",
-        #        taxanalysis = config["taxids"],
-        #        weighting = weighting_methods,
-        #        sizeNaN = odol_size),
-        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
-        #        n = odol_n,
-        #        m = odol_m,
-        #        taxanalysis = config["taxids"],
-        #        sizeNaN = odol_size,
-        #        weighting = weighting_methods),
-        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.bokeh.html",
-        #        n = odol_n,
-        #        m = odol_m,
-        #        taxanalysis = config["taxids"],
-        #        sizeNaN = odol_size,
-        #        weighting = weighting_methods),
-        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.pdf",
-        #        n = odol_n,
-        #        m = odol_m,
-        #        taxanalysis = config["taxids"],
-        #        sizeNaN = odol_size,
-        #        weighting = weighting_methods),
-        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.paramsweep.pdf",
-        #        taxanalysis = config["taxids"],
-        #        sizeNaN = odol_size,
-        #        weighting = weighting_methods),
-        #expand(results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.paramsweep.html",
-        #        taxanalysis = config["taxids"],
-        #        sizeNaN = odol_size,
-        #        weighting = weighting_methods),
         #    ┓
-        # ┏┓┏┫┏┓┏┓ - One-Dot-One-Genome plots
+        # ┏┓┏┫┏┓┏┓ - One-Dot-One-Genome plots - SUBSAMPLING
         # ┗┛┗┻┗┛┗┫   Each dot represents a single genome, and the data vector is the distance pairs
         #        ┛
         # odog old inefficient implementation
-        results_base_directory + "/allsamples.coo.npz",
-        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
+        expand(results_base_directory + "/coo_matrices/subsample_{rank}.coo.npz",
+                rank = list(subsample_dict.keys())),
+        expand(results_base_directory + "/subsample_umaps/{rank}/subsample_{rank}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
                 n = odog_n,
                 m = odog_m,
+                rank = list(subsample_dict.keys()),
                 sizeNaN = odog_size),
-        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
-                sample = config["sample_to_rbh_file"].keys(),
+        expand(results_base_directory + "/subsample_umaps/{rank}/subsample_{rank}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
                 n = odog_n,
                 m = odog_m,
+                rank = list(subsample_dict.keys()),
                 sizeNaN = odog_size),
-        expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.pdf",
+        expand(results_base_directory + "/subsample_umaps/{rank}/subsample_{rank}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.pdf",
                 n = odog_n,
                 m = odog_m,
+                rank = list(subsample_dict.keys()),
                 sizeNaN = odog_size),
-        expand(results_base_directory + "/allsamples/allsamples.missing_{sizeNaN}.paramsweep.pdf",
+        expand(results_base_directory + "/subsample_umaps/subsample_{rank}.missing_{sizeNaN}.paramsweep.pdf",
+                rank = list(subsample_dict.keys()),
                 sizeNaN = odog_size),
         # newer implementation
         #results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
@@ -1123,7 +1081,7 @@ def allsample_coo_get_mem_mb(wildcards, attempt):
     """
     import os
 
-    sampledf_path = results_base_directory + "/sampledf.tsv"
+    sampledf_path = results_base_directory + f"/subsample_info/subsample_{wildcards.rank}_sampledf.tsv"
 
     # Count genomes (lines - header), ignore blank/comment lines
     n = 0
@@ -1149,13 +1107,78 @@ def allsample_coo_get_mem_mb(wildcards, attempt):
     }
     return tiers.get(attempt, tiers[max(tiers)])  # use last tier for attempt>=5
 
+rule subsampling_df:
+    """
+    This time, use the subsampling function to make lists of which samples per subsampling to use.
+    These lists will be used later to make the smaller coo files.
+    """
+    input:
+        sampletsv = results_base_directory + "/sampledf.tsv"
+    output:
+        breadcrumbs = results_base_directory + "/subsample_info/subsample_{rank}_breadcrumbs.txt",
+        selectedsam = results_base_directory + "/subsample_info/subsample_{rank}_selected_samples.txt",
+        summarytabl = results_base_directory + "/subsample_info/subsample_{rank}_summary_table.tsv",
+        sampletree  = results_base_directory + "/subsample_info/subsample_{rank}_sample_tree.txt"
+    threads: 1
+    resources:
+        mem_mb = 2000,
+        runtime = 10
+    run:
+        from pathlib import Path
+        df = pd.read_csv(input.sampletsv, sep="\t", index_col=0)
+        list_of_ranks = subsample_dict[wildcards.rank]
+        selected_buckets, flat = subsample_phylogenetically(df,
+                                                            bucket_priority = list_of_ranks,
+                                                            max_per_bucket = 10,
+                                                            priority = True)
+        summary_txt     = make_subsampling_summary_table(selected_buckets)
+        breadcrumbs_txt = make_subsampling_report_breadcrumbs(selected_buckets)
+        tree_txt        = make_subsampling_report_tree(selected_buckets)
 
-rule odogCooGen:
+        basedir = os.path.dirname(output.breadcrumbs)
+        outdir = Path(basedir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        Path(output.breadcrumbs).write_text(breadcrumbs_txt, encoding="utf-8")
+        Path(output.selectedsam).write_text("\n".join(sorted(flat)) + "\n", encoding="utf-8")
+        Path(output.summarytabl).write_text(summary_txt, encoding="utf-8")
+        Path(output.sampletree).write_text(tree_txt, encoding="utf-8")
+
+rule sampletsv_of_subsampling:
+    """
+    Make a sample table just for the subsampled genomes.
+    Read in the full sample table, then use the list of selected samples to filter it down.
+    """
+    input:
+        sampletsv = results_base_directory + "/sampledf.tsv",
+        selectedsam = results_base_directory + "/subsample_info/subsample_{rank}_selected_samples.txt",
+    output:
+        outtsv = results_base_directory + "/subsample_info/subsample_{rank}_sampledf.tsv"
+    threads: 1
+    resources:
+        mem_mb = 2000,
+        runtime = 5
+    run:
+        import pandas as pd
+        selected = set()
+        with open(input.selectedsam, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                s = line.strip()
+                if s:
+                    selected.add(s)
+        df = pd.read_csv(input.sampletsv, sep="\t", index_col=0)
+        # select on the "sample" column
+        df_sub = df[df["sample"].isin(selected)].copy()
+        df_sub = df_sub.reset_index(drop=True)
+        df_sub.to_csv(output.outtsv, sep="\t", index=True)
+
+rule odogCooGen_subsample:
     """
     This generates a coo matrix of the distance matrices for all genomes.
       Each row is a genome, and each column is the distance between every locus pair.
       There is no pre-processing performed on the distance matrices. These are the raw
       distances between every locus pair.
+
+    This is for the old, inefficient version of the UMAP plotting that uses all of the distances.
 
     This takes up a lot of RAM and time. For 3600 genomes, it took:
         CPU Efficiency: 97.32% of 01:57:32 core-walltime
@@ -1167,9 +1190,9 @@ rule odogCooGen:
         gbgzfiles = expand(results_base_directory + "/distance_matrices/{sample}.gb.gz",
                            sample = config["sample_to_rbh_file"].keys()),
         combotoindex = results_base_directory + "/combo_to_index.txt",
-        sampletsv    = results_base_directory + "/sampledf.tsv"
+        sampletsv = results_base_directory + "/subsample_info/subsample_{rank}_sampledf.tsv"
     output:
-        coo    = results_base_directory + "/allsamples.coo.npz"
+        coo    = results_base_directory + "/coo_matrices/subsample_{rank}.coo.npz"
     threads: 1
     retries: 3
     shadow: "copy-minimal"
@@ -1177,7 +1200,7 @@ rule odogCooGen:
         slurm_extra = "--no-requeue",
         tmpdir = "/tmp",
         mem_mb = allsample_coo_get_mem_mb,
-        highio = 10,
+        #highio = 10, # I don't think we need this now since we stage to local disk
         runtime = 300
     run:
         import os, shutil, tempfile, time
@@ -1199,31 +1222,48 @@ rule odogCooGen:
 
             # -------- copy inputs with progress ----------
             t0 = time.time()
-            combo_local    = work / "combo_to_index.txt"
-            sampledf_local = work / "sampledf.tsv"
+            combo_local    = work / Path(input.combotoindex).name
+            sampledf_local = work / Path(input.sampletsv).name
             shutil.copy2(input.combotoindex, combo_local)
             shutil.copy2(input.sampletsv,    sampledf_local)
 
-            local_gbgz = []
-            N = len(input.gbgzfiles)
+            # get the gb.gz list from sample TSV
+            sampledf  = pd.read_csv(sampledf_local, sep="\t", index_col=0)
+            pathcol   = "dis_filepath_abs"
+            samplecol = "sample"
+            for checking_this_col in (pathcol, samplecol):
+                if checking_this_col not in sampledf.columns:
+                    raise ValueError(f"Expected column '{checking_this_col}' in sample TSV")
+
+            # check for duplicate sample names - this would break everything
+            duplicate_sample_names = sampledf[samplecol][sampledf[samplecol].duplicated()].unique()
+            if len(duplicate_sample_names) > 0:
+                raise ValueError(f"Duplicate sample names found in sample TSV: {duplicate_sample_names}")
+
+            # ---------- Stage only those files -----------------
+            local_gbgz = {}
+            N = len(sampledf)
             tcopy = time.time()
-            for i, p in enumerate(input.gbgzfiles, 1):
-                src = Path(p)
+
+            for i, (_, row) in enumerate(sampledf.iterrows(), 1):
+                samp = str(row[samplecol])
+                src  = Path(str(row[pathcol]))
+                if not src.name.endswith(".gb.gz"):
+                    raise ValueError(f"Sample '{samp}' path does not end with .gb.gz: {src}")
+                if not src.exists():
+                    raise IOError(f"Input .gb.gz file does not exist: {src}")
+
                 dst = work / src.name
                 shutil.copy2(src, dst)
-                local_gbgz.append(str(dst))
+                local_gbgz[samp] = str(dst)
+
                 if i % max(1, N // 10) == 0 or i == N:
                     elapsed = time.time() - tcopy
                     print(f"[DOG-COO] Copied {i}/{N} files (elapsed {elapsed:.1f}s)", flush=True)
-            # print the head of local_gbgz and the tail
-            print(f"[DOG-COO] Sample of local gbgz files: {local_gbgz[:3]} ... {local_gbgz[-3:]}", flush=True)
-            # print the sampledf
-            print(f"[DOG-COO] Sample of sampledf:\n{sampledf.head()}\n...", flush=True)
 
             # -------- run computation using local copies ----------
             print("[DOG-COO] Generating COO...", flush=True)
             alg_combo_to_ix = algcomboix_file_to_dict(str(combo_local))
-            sampledf = pd.read_csv(sampledf_local, sep="\t", index_col=0)
 
             coo = construct_coo_matrix_from_sampledf(
                 sampledf,
@@ -1232,6 +1272,7 @@ rule odogCooGen:
                 gbgz_paths=local_gbgz,          # force local paths
                 path_column="dis_filepath_abs", # ignored since list is passed
             )
+            Path(output.coo).parent.mkdir(parents=True, exist_ok=True)
             save_npz(output.coo, coo)
             print(f"[DOG-COO] Done. Total stage+compute time {time.time()-t0:.1f}s", flush=True)
 
@@ -1252,7 +1293,7 @@ def odogPlotUMAP_old_inefficient_get_mem_mb(wildcards, attempt):
     """
     import os
 
-    sampledf_path = results_base_directory + "/sampledf.tsv"
+    sampledf_path = results_base_directory + f"/subsample_info/subsample_{wildcards.rank}_sampledf.tsv"
 
     # Count genomes (lines - header), ignore blank/comment lines
     n = 0
@@ -1282,7 +1323,7 @@ def odogPlotUMAP_old_inefficient_get_runtime(wildcards, attempt):
     """
     The amount of RAM needed for the script depends on the size of the input genome.
     """
-    sampledf_path = results_base_directory + "/sampledf.tsv"
+    sampledf_path = results_base_directory + f"/subsample_info/subsample_{wildcards.rank}_sampledf.tsv"
 
     # Count genomes (lines - header), ignore blank/comment lines
     n = 0
@@ -1311,11 +1352,11 @@ def odogPlotUMAP_old_inefficient_get_runtime(wildcards, attempt):
 
 rule odogPlotUMAP_old_inefficient:
     input:
-        sampletsv    = results_base_directory + "/sampledf.tsv",
-        combotoindex = results_base_directory + "/combo_to_index.txt",
-        coo          = results_base_directory + "/allsamples.coo.npz",
+        sampletsv    = results_base_directory + "/subsample_info/subsample_{rank}_sampledf.tsv",
+        coo          = results_base_directory + "/coo_matrices/subsample_{rank}.coo.npz",
+        combotoindex = results_base_directory + "/combo_to_index.txt"
     output:
-        df   = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
+        df   = results_base_directory + "/subsample_umaps/{rank}/subsample_{rank}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df"
     threads: 32
     retries: 3
     resources:
@@ -1323,15 +1364,28 @@ rule odogPlotUMAP_old_inefficient:
         runtime = odogPlotUMAP_old_inefficient_get_runtime,
         bigUMAPSlots = 1,
     benchmark:
-        results_base_directory + "/benchmarks/odog_umap_from_coo.neighbors_{n}.mind_{m}.missing_{sizeNaN}.tsv"
+        results_base_directory + "/benchmarks/odogPlotUMAP_old_inefficient/subsample_{rank}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.tsv"
     params:
         sentinel_missing = 999_999_999_999
     run:
         import os, shutil, tempfile, time
         from pathlib import Path
+        import pandas as pd
 
         os.makedirs(os.path.dirname(output.df), exist_ok=True)
 
+        # check if the input sampletsv has enough samples, else write the header of sampleTSV plus the columns "UMAP1" and "UMAP2"
+        df = pd.read_csv(input.sampletsv, sep="\t", index_col=0)
+        if df.shape[0] <= int(wildcards.n):
+            print(f"[ODOG-UMAP] n_samples={df.shape[0]} <= n_neighbors={wildcards.n}. Writing empty outputs.")
+            # write header only
+            with open(output.df, "w", encoding="utf-8") as fh:
+                column_string = "\t".join(df.columns)
+                print("Column string is: ", column_string)
+                fh.write(f"{column_string}\tUMAP1\tUMAP2\n")
+            return # exit cleanly. SystemExit(0) would be a failure in Snakemake
+
+        # There are enough samples, so the UMAP should always produce something.
         work = None
         try:
             # -------- scratch directory selection ----------
@@ -1381,28 +1435,53 @@ rule odogPlotUMAP_old_inefficient:
 
 rule odog_umap_oldinefficient_plot_html:
     input:
-        df = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
+        df   = results_base_directory + "/subsample_umaps/{rank}/subsample_{rank}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
     output:
-        html = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
+        html = results_base_directory + "/subsample_umaps/{rank}/subsample_{rank}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
     threads: 1
     retries: 4
     resources:
         mem_mb  = pdf_get_mem_mb,
         runtime = 10
     run:
-        # write bokeh
+        import os
+        import pandas as pd
+        from pandas.errors import EmptyDataError
+        os.makedirs(os.path.dirname(output.html), exist_ok=True)
+
         n_neighbors = int(wildcards.n)
         min_dist    = float(wildcards.m)
         sizeNaN     = str(wildcards.sizeNaN)
-        mgt_mlt_plot_HTML(input.df, output.html,
-                          plot_title=f"UMAP (PCs) n={n_neighbors}, min_dist={min_dist}, missing size={sizeNaN}",
-                          analysis_type = "MGT")
+        plot_title = f"UMAP (PCs) n={n_neighbors}, min_dist={min_dist}, missing size={sizeNaN}"
+
+        # Detect "empty df" robustly
+        empty = False
+        try:
+            if not os.path.exists(input.df) or os.path.getsize(input.df) == 0:
+                empty = True
+            else:
+                _df = pd.read_csv(input.df, sep="\t", index_col=0, nrows=1)
+                empty = (_df.shape[0] == 0)
+        except EmptyDataError:
+            empty = True
+
+        if empty:
+            # Minimal HTML with your message
+            msg = (f"The input DF with n_neighbors={n_neighbors}, "
+                   f"min_dist={min_dist}, missing size={sizeNaN} had an empty df")
+            with open(output.html, "w", encoding="utf-8") as fh:
+                fh.write(f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                         f"<title>Empty UMAP</title></head><body>"
+                         f"<h3>{msg}</h3></body></html>")
+        else:
+            # Normal plotting path
+            mgt_mlt_plot_HTML(input.df, output.html, plot_title=plot_title, analysis_type="MGT")
 
 rule odog_umap_oldinefficient_plot_pdf:
     input:
-        df = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df"
+        df   = results_base_directory + "/subsample_umaps/{rank}/subsample_{rank}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
     output:
-        pdf  = results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.pdf"
+        pdf  = results_base_directory + "/subsample_umaps/{rank}/subsample_{rank}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.pdf"
     threads: 1
     retries: 4
     resources:
@@ -1413,20 +1492,20 @@ rule odog_umap_oldinefficient_plot_pdf:
         plot_umap_pdf(input.df, output.pdf,
                       title, color_by_clade = True)
 
-rule odogSweep_inefficient:
+rule odogSweep_oldinefficient:
     """
     Makes a pdf of the parameter sweep of the all-species UMAP plots.
     """
     input:
-        dfs = expand(results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{{sizeNaN}}.df",
-                        n = odog_n,
-                        m = odog_m),
+        dfs = expand(results_base_directory + "/subsample_umaps/{{rank}}/subsample_{{rank}}.neighbors_{n}.mind_{m}.missing_{{sizeNaN}}.df",
+                     n = odog_n,
+                     m = odog_m),
         plotdfs = os.path.join(snakefile_path, "PhyloTreeUMAP_plotdfs.py")
     output:
-        pdf    = results_base_directory + "/allsamples/allsamples.missing_{sizeNaN}.paramsweep.pdf",
-        html   = results_base_directory + "/allsamples/allsamples.missing_{sizeNaN}.paramsweep.html",
+        pdf    = results_base_directory + "/subsample_umaps/subsample_{rank}.missing_{sizeNaN}.paramsweep.pdf",
+        html   = results_base_directory + "/subsample_umaps/subsample_{rank}.missing_{sizeNaN}.paramsweep.html",
     params:
-        prefix = results_base_directory + "/allsamples/allsamples.missing_{sizeNaN}.paramsweep"
+        prefix = results_base_directory + "/subsample_umaps/subsample_{rank}.missing_{sizeNaN}.paramsweep"
     threads: 1
     retries: 4
     resources:
@@ -1437,6 +1516,7 @@ rule odogSweep_inefficient:
         """
         python {input.plotdfs} -f "{input.dfs}" -p {params.prefix} --pdf --html
         """
+
 
 def odogPlotUMAP_get_mem_mb(wildcards, attempt):
     """
@@ -1887,334 +1967,199 @@ rule odog_umap_full_sentinel:
         print(f"[UMAP-FULL] wrote {output.df} in {t_df1 - t_df0:.1f}s "
               f"| rows={len(umap_df):,} cols={umap_df.shape[1]:,}", flush=True)
 
-rule odog_allsamples_umap_old_inefficient:
-    """
-    This is the old inefficient way of doing the UMAP. It loads the entire coo matrix
-    into RAM as a dense matrix. This is not feasible for large datasets.
-    """
 
-#    ┓     ┏┓┓ ┏┓┳┓┏┓┏┓
-# ┏┓┏┫┏┓┏┓ ┃ ┃ ┣┫┃┃┣ ┗┓ - One-Dot-One-Genome plots FOR SPECIFIC CLADES
-# ┗┛┗┻┗┛┗┫ ┗┛┗┛┛┗┻┛┗┛┗┛   Each dot represents a single genome, and the data vector is the distance pairs
-#        ┛
-rule odogClCooGen:
-    """
-    This generates a coo matrix of the distance matrices for the genomes in this clade.
-
-    **This is a modification of the rule called odogCooGen.**
-      Each row is a genome, and each column is the distance between every locus pair.
-      There is no pre-processing performed on the distance matrices. These are the raw
-      distances between every locus pair.
-
-    This takes up a lot of RAM and time. For 3600 genomes, it took:
-        CPU Efficiency: 97.32% of 01:57:32 core-walltime
-        Job Wall-clock time: 01:57:32
-        Memory Utilized: 216.61 GB
-        Memory Efficiency: 110.91% of 195.31 GB
-    """
-    input:
-        gbgzfiles = expand(results_base_directory + "/distance_matrices/{sample}.gb.gz",
-                           sample = config["sample_to_rbh_file"].keys()),
-        combotoindex = results_base_directory + "/combo_to_index.txt",
-        sampletsv    = results_base_directory + "/sampledf.tsv"
-    output:
-        coo       = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.coo.npz",
-        sampletsv = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.sampledf.tsv"
-    threads: 1
-    retries: 6
-    resources:
-        mem_mb = coo_get_mem_mb,
-        highio = 1,
-        bigUMAPSlots = 1,
-        runtime = 300
-    params:
-        taxids_to_keep    = lambda wildcards: config["taxids"][wildcards.taxanalysis][0],
-        taxids_to_remove  = lambda wildcards: config["taxids"][wildcards.taxanalysis][1]
-    run:
-        # filter the sample df
-        sampledf = pd.read_csv(input.sampletsv, sep = "\t", index_col = 0)
-        sampledf = filter_sample_df_by_clades(sampledf, params.taxids_to_keep, params.taxids_to_remove)
-        # Reset the index. We need to reset the indices so that we can associate the annotated sampledf with the
-        #   metadata-less coo matrix.
-        sampledf = sampledf.reset_index(inplace = False)
-        # save the sampledf. Keep the column.
-        sampledf.to_csv(output.sampletsv, sep = "\t")
-        print(sampledf)
-
-        # read in the combo_to_index file as a df, then convert to a dict
-        alg_combo_to_ix = algcomboix_file_to_dict(input.combotoindex)
-        coo = construct_coo_matrix_from_sampledf(sampledf, alg_combo_to_ix)
-        save_npz(output.coo, coo)
-
-
-def odogPlotCladeUMAP_get_mem_mb(wildcards, attempt):
-    """
-    The amount of RAM needed for the script depends on the size of the input genome.
-    """
-    attemptdict = {1: 20000,
-                   2: 40000,
-                   3: 80000,
-                   4: 160000}
-    return attemptdict[attempt]
-
-def odogPlotCladeUMAP_get_runtime(wildcards, attempt):
-    """
-    The amount of RAM needed for the script depends on the size of the input genome.
-    """
-    attemptdict = {1: 5,
-                   2: 10,
-                   3: 20,
-                   4: 40}
-    return attemptdict[attempt]
-
-rule odogCl_calculate_umap:
-    input:
-        sampletsv    = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.sampledf.tsv",
-        combotoindex = results_base_directory + "/combo_to_index.txt",
-        coo          = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.coo.npz",
-    output:
-        df   = results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df"
-    threads: 1
-    #retries: 3
-    resources:
-        mem_mb  = odogPlotCladeUMAP_get_mem_mb,
-        runtime = odogPlotCladeUMAP_get_runtime,
-        bigUMAPSlots = 1
-    run:
-        # note 20250612 - updated this method to just generate the df. All plotting is handled elsewhere.
-        mgt_mlt_umap(input.sampletsv, input.combotoindex, input.coo,
-                     wildcards.sizeNaN, int(wildcards.n), float(wildcards.m),
-                     output.df, missing_value_as = 9999999999)
-
-rule odogCl_pairwise_distance:
-    input:
-        sampletsv    = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.sampledf.tsv",
-        combotoindex = results_base_directory + "/combo_to_index.txt",
-        coo          = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.coo.npz",
-    output:
-        matrix = results_base_directory + "/ODOG/clades/{taxanalysis}.pairwise_distance.missing_{sizeNaN}.tsv"
-    threads: 1
-    resources:
-        mem_mb  = odogPlotCladeUMAP_get_mem_mb,
-        runtime = odogPlotCladeUMAP_get_runtime,
-        bigUMAPSlots = 1
-    run:
-        odog_pairwise_distance_matrix(input.sampletsv, input.combotoindex, input.coo,
-                                      wildcards.sizeNaN, output.matrix,
-                                      missing_value_as = 9999999999)
-
-def odol_plot_get_mem_mb(wildcards, attempt):
-    """
-    The amount of RAM needed for the script depends on the size of the input genome.
-    """
-    attemptdict = {1: 2000,
-                   2: 30000,
-                   3: 50000,
-                   4: 100000,
-                   5: 200000,
-                   6: 300000,
-                   7: 400000}
-    return attemptdict[attempt]
-
-def odol_plot_get_runtime(wildcards, attempt):
-    """
-    The amount of RAM needed for the script depends on the size of the input genome.
-    """
-    attemptdict = {1: 5,
-                   2: 120,
-                   3: 150,
-                   4: 180,
-                   5: 210,
-                   6: 240,
-                   7: 270}
-    return attemptdict[attempt]
-
-rule odogCl_GenHTML:
-    """
-    This makes an interactive .html file of the clade-specific UMAP plot.
-    """
-    input:
-        df   = results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df"
-    output:
-        html = results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html"
-    params:
-        outdir = results_base_directory + "/subchrom",
-    retries: 6
-    threads: 1
-    resources:
-        mem_mb = odol_plot_get_mem_mb,
-        highio = 1,
-        runtime = odol_plot_get_runtime
-    run:
-        plottitle = f"MGT plot of {wildcards.taxanalysis}, n = {wildcards.n} m={wildcards.m} NaN Size={wildcards.sizeNaN}"
-        mgt_mlt_plot_HTML(input.df, output.html, plot_title=plottitle, analysis_type = "MGT")
-
-rule odogClPDF:
-    input:
-        df  = results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
-    output:
-        pdf = results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.phylogeny.pdf"
-    threads: 1
-    retries: 3
-    resources:
-        mem_mb = pdf_get_mem_mb,
-        highio = 1,
-        runtime = 10
-    run:
-        plot_umap_phylogeny_pdf(input.df, output.pdf, wildcards.taxanalysis, wildcards.sizeNaN, wildcards.n, wildcards.m)
-
-rule odogClSweep:
-    """
-    Makes a pdf of the parameter sweep of the all-species UMAP plots.
-    """
-    input:
-        dfs = expand(results_base_directory + "/ODOG/clades/{{taxanalysis}}.neighbors_{n}.mind_{m}.missing_{{sizeNaN}}.df",
-                n = codog_n,
-                m = codog_m),
-        plotdfs = os.path.join(snakefile_path, "PhyloTreeUMAP_plotdfs.py")
-    output:
-        pdf    = results_base_directory + "/ODOG/clades/{taxanalysis}.missing_{sizeNaN}.paramsweep.pdf",
-        html   = results_base_directory + "/ODOG/clades/{taxanalysis}.missing_{sizeNaN}.paramsweep.html"
-    params:
-        prefix = results_base_directory + "/ODOG/clades/{taxanalysis}.missing_{sizeNaN}.paramsweep"
-    threads: 1
-    retries: 4
-    resources:
-        mem_mb = pdf_get_mem_mb,
-        highio = 1,
-        runtime = 5
-    shell:
-        """
-        python {input.plotdfs} -f "{input.dfs}" -p {params.prefix} --pdf --html
-        """
-
-#    ┓  ┓
-# ┏┓┏┫┏┓┃ - One-Dot-One-Locus plots
-# ┗┛┗┻┗┛┗   Each dot represents a single locus, and the data vector is the distance to all other loci
+##    ┓     ┏┓┓ ┏┓┳┓┏┓┏┓
+## ┏┓┏┫┏┓┏┓ ┃ ┃ ┣┫┃┃┣ ┗┓ - One-Dot-One-Genome plots FOR SPECIFIC CLADES
+## ┗┛┗┻┗┛┗┫ ┗┛┗┛┛┗┻┛┗┛┗┛   Each dot represents a single genome, and the data vector is the distance pairs
+##        ┛
+#rule odogClCooGen:
+#    """
+#    This generates a coo matrix of the distance matrices for the genomes in this clade.
 #
-rule odolGenCoo:
-    input:
-        sampletsv    = results_base_directory + "/sampledf.tsv",
-        combotoindex = results_base_directory + "/combo_to_index.txt",
-        coo          = results_base_directory + "/allsamples.coo.npz",
-        ALGrbh       = config["ALG_rbh_file"]
-    output:
-        coo      = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.coo.npz",
-        sampledf = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.sampledf.tsv"
-    threads: 1
-    params:
-        outdir = results_base_directory + "/allsamples",
-        taxids_to_keep    = lambda wildcards: config["taxids"][wildcards.taxanalysis][0],
-        taxids_to_remove  = lambda wildcards: config["taxids"][wildcards.taxanalysis][1]
-    retries: 5
-    resources:
-        mem_mb = coo_get_mem_mb,
-        highio = 1,
-        runtime = 60
-    run:
-        topoumap_genmatrix(input.sampletsv, input.combotoindex, input.coo, input.ALGrbh,
-                           wildcards.taxanalysis, params.taxids_to_keep, params.taxids_to_remove,
-                           output.coo, output.sampledf,
-                           wildcards.sizeNaN,
-                           method = wildcards.weighting,
-                           missing_value_as = 9999999999)
-
-
-rule odolGenUMAP:
-    """
-    The jpeg option does not work well in that it takes a lot of RAM and time. Disabling for now.
-
-    This is what it was:
-    #jpeg   = results_base_directory + "/subchrom/{weighting}/mixxing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.connectivity.jpeg"
-    """
-    input:
-        sampletsv    = results_base_directory + "/sampledf.tsv",
-        coo = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.coo.npz",
-        ALGrbh = config["ALG_rbh_file"]
-    output:
-        df     = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
-    retries: 6
-    threads: 1
-    resources:
-        mem_mb = odol_plot_get_mem_mb,
-        highio = 1,
-        runtime = odol_plot_get_runtime
-    run:
-        mgt_mlt_umap(input.sampletsv, input.ALGrbh, input.coo,
-                     wildcards.sizeNaN, int(wildcards.n), float(wildcards.m),
-                     output.df, missing_value_as = 9999999999)
-
-rule odolGenHTML:
-    """
-    The jpeg option does not work well in that it takes a lot of RAM and time. Disabling for now.
-
-    This is what it was:
-    #jpeg   = results_base_directory + "/subchrom/{weighting}/mixxing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.connectivity.jpeg"
-    """
-    input:
-        df     = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df"
-    output:
-        html   = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.bokeh.html"
-    params:
-        outdir = results_base_directory + "/subchrom",
-    retries: 6
-    threads: 1
-    resources:
-        mem_mb = odol_plot_get_mem_mb,
-        highio = 1,
-        runtime = odol_plot_get_runtime
-    run:
-        plottitle = f"MLT plot of {wildcards.taxanalysis}, {wildcards.weighting} weighting, n = {wildcards.n} m={wildcards.m} NaN Size={wildcards.sizeNaN}"
-        mlt_plot_HTML(input.df, output.html, plot_title=plottitle)
-
-def odolPlotPdf_get_mem_mb(wildcards, attempt):
-    """
-    The amount of RAM needed for the script depends on the size of the input genome.
-    """
-    attemptdict = {1: 1000,
-                   2: 2000,
-                   3: 4000,
-                   4: 8000,
-                   5: 16000,
-                  }
-    return attemptdict[attempt]
-
-rule odolPlotPdf:
-    input:
-        df  = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.df",
-    output:
-        pdf = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.subchrom.pdf"
-    threads: 1
-    retries: 4
-    resources:
-        mem_mb = odolPlotPdf_get_mem_mb,
-        highio = 1,
-        runtime = 20
-    run:
-        plot_umap_pdf(input.df, output.pdf, wildcards.taxanalysis, wildcards.sizeNaN, wildcards.n, wildcards.m, color_by_clade = False)
-
-rule odolSweep:
-    """
-    Makes a pdf of the parameter sweep of the clade-specific UMAP plots.
-    """
-    input:
-        dfs = expand(results_base_directory + "/subchrom/{{weighting}}/missing_{{sizeNaN}}/{{taxanalysis}}.method_{{weighting}}.neighbors_{n}.mind_{m}.missing_{{sizeNaN}}.subchrom.df",
-                      n = odol_n,
-                      m = odol_m),
-        plotdfs = os.path.join(snakefile_path, "PhyloTreeUMAP_plotdfs.py")
-    output:
-        pdf  = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.paramsweep.pdf",
-        html = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.paramsweep.html"
-    params:
-        prefix = results_base_directory + "/subchrom/{weighting}/missing_{sizeNaN}/{taxanalysis}.method_{weighting}.missing_{sizeNaN}.paramsweep"
-    threads: 1
-    retries: 4
-    resources:
-        mem_mb = pdf_get_mem_mb,
-        highio = 1,
-        runtime = 5
-    shell:
-        """
-        python {input.plotdfs} -f "{input.dfs}" -p {params.prefix} --pdf --html
-        """
-
+#    **This is a modification of the rule called odogCooGen.**
+#      Each row is a genome, and each column is the distance between every locus pair.
+#      There is no pre-processing performed on the distance matrices. These are the raw
+#      distances between every locus pair.
+#
+#    This takes up a lot of RAM and time. For 3600 genomes, it took:
+#        CPU Efficiency: 97.32% of 01:57:32 core-walltime
+#        Job Wall-clock time: 01:57:32
+#        Memory Utilized: 216.61 GB
+#        Memory Efficiency: 110.91% of 195.31 GB
+#    """
+#    input:
+#        gbgzfiles = expand(results_base_directory + "/distance_matrices/{sample}.gb.gz",
+#                           sample = config["sample_to_rbh_file"].keys()),
+#        combotoindex = results_base_directory + "/combo_to_index.txt",
+#        sampletsv    = results_base_directory + "/sampledf.tsv"
+#    output:
+#        coo       = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.coo.npz",
+#        sampletsv = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.sampledf.tsv"
+#    threads: 1
+#    retries: 6
+#    resources:
+#        mem_mb = coo_get_mem_mb,
+#        highio = 1,
+#        bigUMAPSlots = 1,
+#        runtime = 300
+#    params:
+#        taxids_to_keep    = lambda wildcards: config["taxids"][wildcards.taxanalysis][0],
+#        taxids_to_remove  = lambda wildcards: config["taxids"][wildcards.taxanalysis][1]
+#    run:
+#        # filter the sample df
+#        sampledf = pd.read_csv(input.sampletsv, sep = "\t", index_col = 0)
+#        sampledf = filter_sample_df_by_clades(sampledf, params.taxids_to_keep, params.taxids_to_remove)
+#        # Reset the index. We need to reset the indices so that we can associate the annotated sampledf with the
+#        #   metadata-less coo matrix.
+#        sampledf = sampledf.reset_index(inplace = False)
+#        # save the sampledf. Keep the column.
+#        sampledf.to_csv(output.sampletsv, sep = "\t")
+#        print(sampledf)
+#
+#        # read in the combo_to_index file as a df, then convert to a dict
+#        alg_combo_to_ix = algcomboix_file_to_dict(input.combotoindex)
+#        coo = construct_coo_matrix_from_sampledf(sampledf, alg_combo_to_ix)
+#        save_npz(output.coo, coo)
+#
+#
+#def odogPlotCladeUMAP_get_mem_mb(wildcards, attempt):
+#    """
+#    The amount of RAM needed for the script depends on the size of the input genome.
+#    """
+#    attemptdict = {1: 20000,
+#                   2: 40000,
+#                   3: 80000,
+#                   4: 160000}
+#    return attemptdict[attempt]
+#
+#def odogPlotCladeUMAP_get_runtime(wildcards, attempt):
+#    """
+#    The amount of RAM needed for the script depends on the size of the input genome.
+#    """
+#    attemptdict = {1: 5,
+#                   2: 10,
+#                   3: 20,
+#                   4: 40}
+#    return attemptdict[attempt]
+#
+#rule odogCl_calculate_umap:
+#    input:
+#        sampletsv    = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.sampledf.tsv",
+#        combotoindex = results_base_directory + "/combo_to_index.txt",
+#        coo          = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.coo.npz",
+#    output:
+#        df   = results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df"
+#    threads: 1
+#    #retries: 3
+#    resources:
+#        mem_mb  = odogPlotCladeUMAP_get_mem_mb,
+#        runtime = odogPlotCladeUMAP_get_runtime,
+#        bigUMAPSlots = 1
+#    run:
+#        # note 20250612 - updated this method to just generate the df. All plotting is handled elsewhere.
+#        mgt_mlt_umap(input.sampletsv, input.combotoindex, input.coo,
+#                     wildcards.sizeNaN, int(wildcards.n), float(wildcards.m),
+#                     output.df, missing_value_as = 9999999999)
+#
+#rule odogCl_pairwise_distance:
+#    input:
+#        sampletsv    = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.sampledf.tsv",
+#        combotoindex = results_base_directory + "/combo_to_index.txt",
+#        coo          = results_base_directory + "/coo/coo_odog_clade/{taxanalysis}.coo.npz",
+#    output:
+#        matrix = results_base_directory + "/ODOG/clades/{taxanalysis}.pairwise_distance.missing_{sizeNaN}.tsv"
+#    threads: 1
+#    resources:
+#        mem_mb  = odogPlotCladeUMAP_get_mem_mb,
+#        runtime = odogPlotCladeUMAP_get_runtime,
+#        bigUMAPSlots = 1
+#    run:
+#        odog_pairwise_distance_matrix(input.sampletsv, input.combotoindex, input.coo,
+#                                      wildcards.sizeNaN, output.matrix,
+#                                      missing_value_as = 9999999999)
+#
+#def odol_plot_get_mem_mb(wildcards, attempt):
+#    """
+#    The amount of RAM needed for the script depends on the size of the input genome.
+#    """
+#    attemptdict = {1: 2000,
+#                   2: 30000,
+#                   3: 50000,
+#                   4: 100000,
+#                   5: 200000,
+#                   6: 300000,
+#                   7: 400000}
+#    return attemptdict[attempt]
+#
+#def odol_plot_get_runtime(wildcards, attempt):
+#    """
+#    The amount of RAM needed for the script depends on the size of the input genome.
+#    """
+#    attemptdict = {1: 5,
+#                   2: 120,
+#                   3: 150,
+#                   4: 180,
+#                   5: 210,
+#                   6: 240,
+#                   7: 270}
+#    return attemptdict[attempt]
+#
+#rule odogCl_GenHTML:
+#    """
+#    This makes an interactive .html file of the clade-specific UMAP plot.
+#    """
+#    input:
+#        df   = results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df"
+#    output:
+#        html = results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html"
+#    params:
+#        outdir = results_base_directory + "/subchrom",
+#    retries: 6
+#    threads: 1
+#    resources:
+#        mem_mb = odol_plot_get_mem_mb,
+#        highio = 1,
+#        runtime = odol_plot_get_runtime
+#    run:
+#        plottitle = f"MGT plot of {wildcards.taxanalysis}, n = {wildcards.n} m={wildcards.m} NaN Size={wildcards.sizeNaN}"
+#        mgt_mlt_plot_HTML(input.df, output.html, plot_title=plottitle, analysis_type = "MGT")
+#
+#rule odogClPDF:
+#    input:
+#        df  = results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
+#    output:
+#        pdf = results_base_directory + "/ODOG/clades/{taxanalysis}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.phylogeny.pdf"
+#    threads: 1
+#    retries: 3
+#    resources:
+#        mem_mb = pdf_get_mem_mb,
+#        highio = 1,
+#        runtime = 10
+#    run:
+#        plot_umap_phylogeny_pdf(input.df, output.pdf, wildcards.taxanalysis, wildcards.sizeNaN, wildcards.n, wildcards.m)
+#
+#rule odogClSweep:
+#    """
+#    Makes a pdf of the parameter sweep of the all-species UMAP plots.
+#    """
+#    input:
+#        dfs = expand(results_base_directory + "/ODOG/clades/{{taxanalysis}}.neighbors_{n}.mind_{m}.missing_{{sizeNaN}}.df",
+#                n = codog_n,
+#                m = codog_m),
+#        plotdfs = os.path.join(snakefile_path, "PhyloTreeUMAP_plotdfs.py")
+#    output:
+#        pdf    = results_base_directory + "/ODOG/clades/{taxanalysis}.missing_{sizeNaN}.paramsweep.pdf",
+#        html   = results_base_directory + "/ODOG/clades/{taxanalysis}.missing_{sizeNaN}.paramsweep.html"
+#    params:
+#        prefix = results_base_directory + "/ODOG/clades/{taxanalysis}.missing_{sizeNaN}.paramsweep"
+#    threads: 1
+#    retries: 4
+#    resources:
+#        mem_mb = pdf_get_mem_mb,
+#        highio = 1,
+#        runtime = 5
+#    shell:
+#        """
+#        python {input.plotdfs} -f "{input.dfs}" -p {params.prefix} --pdf --html
+#        """
+#

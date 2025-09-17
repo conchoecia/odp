@@ -27,6 +27,7 @@ __pycache__
 *.pyc
 # specific ignore patterns for this project
 subsampling_reports/*
+subsampling_report.txt
 LG_db/*/*.check
 LG_db/*/*.hmm
 LG_db/*/*.rbh

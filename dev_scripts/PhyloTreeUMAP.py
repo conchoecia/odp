@@ -190,6 +190,7 @@ def taxids_of_interest_to_analyses():
 
     return taxids_to_analyses(taxids)
 
+
 def odog_iter_pairwise_distance_matrix(sampledffile, outfilepath,
                                        metric: str = "mad"):
     """Iteratively compute a pairwise distance matrix between genomes.
@@ -1495,8 +1496,10 @@ def construct_coo_matrix_from_sampledf(
     sampledf,
     alg_combo_to_ix,
     print_prefix: str = "",
-    gbgz_paths=None,
+    gbgz_paths=None, # should be a dict
     path_column: str = "dis_filepath_abs",
+    sample_column = "sample",
+    check_paths_exist: bool = True #checks if the individual files exist
 ):
     """
     Build a COO sparse matrix where rows = genomes (sampledf rows) and
@@ -1538,12 +1541,23 @@ def construct_coo_matrix_from_sampledf(
     def _p(msg):  # always flush for HPC logs
         print(f"{print_prefix}{msg}", flush=True)
 
-    t0 = time.time()
-    n_alg_cols = len(alg_combo_to_ix)
-    _p(f"Starting COO construction | samples={len(sampledf):,} | ALG pairs={n_alg_cols:,}")
+    # checkt that gb_gz_paths is a dict or None
+    if gbgz_paths is not None and not isinstance(gbgz_paths, dict):
+        raise ValueError("gbgz_paths must be a dict or None.")
 
+    # --- Basic checks ---
+    if sample_column not in sampledf.columns:
+        raise KeyError(f"sampledf missing required column '{sample_column}'.")
+    if path_column not in sampledf.columns and gbgz_paths is None:
+        raise KeyError(f"sampledf missing required column '{path_column}' and no gbgz_paths override was provided.")
 
-    # Basic sanity on alg_combo_to_ix keys
+    # ensure sample names are unique (critical for dict mapping)
+    if not sampledf[sample_column].is_unique:
+        dupes = sampledf[sample_column][sampledf[sample_column].duplicated()].unique()[:5]
+        raise ValueError(f"Duplicate '{sample_column}' values found (e.g., {dupes!r}). "
+                 f"Sample names must be unique to map files safely.")
+
+    # Basic sanity on alg_combo_to_ix keys should make sense
     for n, key in enumerate(alg_combo_to_ix):
         if not isinstance(key, tuple):
             raise ValueError(f"ALG key {key!r} is not a tuple.")
@@ -1554,70 +1568,62 @@ def construct_coo_matrix_from_sampledf(
         if n == 4:
             break
 
-    # Ensure 0..N-1 indexing and stable order for list-based overrides
-    sampledf = sampledf.sort_index()
+    t0 = time.time()
+    n_alg_cols = len(alg_combo_to_ix)
+    _p(f"Starting COO construction | samples={len(sampledf):,} | ALG pairs={n_alg_cols:,}")
+
+    # validate ALG keys (first few)
+    for i,k in enumerate(alg_combo_to_ix):
+        if not (isinstance(k, tuple) and len(k) == 2 and all(isinstance(x, str) for x in k)):
+            raise ValueError(f"ALG key {k!r} must be a tuple[str,str] of length 2")
+        if i == 4: break
+
+    # Ensure 0..N-1 indexing and stable order for list-based overrides.
+    # Do this specifically by checking to see whether the indices are sorted.
+    # This should be handled before getting here.
+    if not sampledf.index.is_monotonic_increasing:
+        raise ValueError("sampledf index must be sorted ascending (0..N-1) before calling this function.")
     if sampledf.index.min() != 0 or sampledf.index.max() != len(sampledf) - 1:
         raise ValueError("sampledf index must run from 0..len(sampledf)-1 after sort_index().")
 
     # Print how we'll resolve paths
-    if gbgz_paths is None:
-        _p(f"Path source: sampledf['{path_column}'] (no overrides provided)")
-    elif isinstance(gbgz_paths, (list, tuple)):
-        if len(gbgz_paths) != len(sampledf):
-            raise ValueError(f"gbgz_paths length {len(gbgz_paths)} != len(sampledf) {len(sampledf)}")
-        _p(f"Path overrides: LIST/TUPLE (len={len(gbgz_paths):,}); matched by row order after sort_index()")
-    elif isinstance(gbgz_paths, dict):
-        # Quick summary of common key types in the dict
-        n_idx = sum(1 for k in gbgz_paths.keys() if isinstance(k, int))
-        n_abs = sum(1 for k in gbgz_paths.keys() if isinstance(k, str) and os.sep in k)
-        n_base = sum(1 for k in gbgz_paths.keys() if isinstance(k, str) and os.sep not in k)
-        _p(f"Path overrides: DICT (keys by type: index={n_idx:,}, abs={n_abs:,}, base={n_base:,})")
+    using_override = isinstance(gbgz_paths, dict)
+    if using_override:
+        # sanity: keys should be sample names; warn on extras/missing
+        sample_set = set(sampledf[sample_column].astype(str))
+        override_keys = set(map(str, gbgz_paths.keys()))
+        missing = sample_set - override_keys
+        extra   = override_keys - sample_set
+        if missing:
+            raise KeyError(f"{len(missing)} samples missing in gbgz_paths (e.g., {list(sorted(missing))[:5]!r})")
+        if extra:
+            _p(f"WARNING: {len(extra)} extra keys in gbgz_paths not in sampledf; ignoring (e.g., {list(sorted(extra))[:5]!r})")
     else:
-        raise TypeError("gbgz_paths must be None, list/tuple, or dict.")
+        _p(f"No dict override provided; using sampledf['{path_column}']")
 
-    # Helper to resolve the path for a given row
-    def _resolve_path(pos, idx, row):
-        # list/tuple override by position
-        if isinstance(gbgz_paths, (list, tuple)):
-            if len(gbgz_paths) != len(sampledf):
-                raise ValueError(
-                    f"gbgz_paths length {len(gbgz_paths)} != len(sampledf) {len(sampledf)}"
-                )
-            return gbgz_paths[pos]
+    # Small preview
+    _p("Preview of path resolution from sample name to the dictionary of sample name > sample paths. (first 3):")
+    _p(" - If these match up then the paths will be assigned to the correct rows.")
+    for _, row in sampledf.head(3).iterrows():
+        samp = str(row[sample_column])
+        used = gbgz_paths[samp] if using_override else row.get(path_column, "<missing>")
+        _p(f"  {samp} -> {used}")
 
-        # dict override by index, then absolute path, then basename
-        if isinstance(gbgz_paths, dict):
-            if idx in gbgz_paths:
-                return gbgz_paths[idx]
-            orig = row.get(path_column, None)
-            if orig is not None:
-                if orig in gbgz_paths:
-                    return gbgz_paths[orig]
-                base = os.path.basename(orig)
-                if base in gbgz_paths:
-                    return gbgz_paths[base]
+    # check if the paths exist at all. This won't work if they don't
+    if check_paths_exist:
+        bad = []
+        for _, row in sampledf.iterrows():
+            samp = str(row[sample_column])
+            p = gbgz_paths[samp] if using_override else row[path_column]
+            if not os.path.exists(p):
+                bad.append((samp, p))
+                if len(bad) >= 10:
+                    break
+        if bad:
+            examples = "; ".join(f"{s}:{p}" for s,p in bad[:5])
+            raise FileNotFoundError(f"{len(bad)} paths do not exist (e.g., {examples})")
 
-        # Fallback to the original column
-        if path_column not in row:
-            raise KeyError(
-                f"Row {idx} lacks '{path_column}' and no usable gbgz_paths override was provided."
-            )
-        return row[path_column]
-
-    # Preview first few path mappings
-    preview_n = min(3, len(sampledf))
-    _p("Preview of path resolution (first few rows):")
-    for pos in range(preview_n):
-        idx = sampledf.index[pos]
-        orig = sampledf.iloc[pos].get(path_column, "<missing>")
-        try:
-            resolved = _resolve_path(pos, idx, sampledf.iloc[pos])
-        except Exception as e:
-            resolved = f"<ERROR: {e}>"
-        _p(f"  row {idx}: orig={orig}  ->  used={resolved}")
-
-
-    # Read all per-sample distance rows with progress prints
+    # --- Read all per-sample distance rows with progress prints ---
     tempdfs = []
     n_rows_total = 0
     t_read0 = time.time()
@@ -1625,35 +1631,34 @@ def construct_coo_matrix_from_sampledf(
     progress_every = max(1, min(200, max(1, len(sampledf)//10)))
 
     for pos, (idx, row) in enumerate(sampledf.iterrows(), 1):
-        thisfile = _resolve_path(pos-1, idx, row)
+        samp = str(row[sample_column])
+        thisfile = gbgz_paths[samp] if using_override else row[path_column]
         try:
             df = pd.read_csv(thisfile, sep="\t", compression="gzip")
         except Exception as e:
-            raise IOError(
-                f"Could not read '{thisfile}' as gzipped TSV. Delete and regenerate this file."
-            ) from e
+            raise IOError(f"Failed to read '{thisfile}' for sample '{samp}'. Delete/regenerate it.") from e
 
-        # Basic column checks (fail fast with a clear message)
+        # required columns
         for col in ("rbh1", "rbh2", "distance"):
             if col not in df.columns:
                 raise KeyError(f"File '{thisfile}' missing required column '{col}'.")
 
-        # Attach row index and check ordering
-        df["row_indices"] = idx
         if not (df["rbh1"] < df["rbh2"]).all():
-            raise ValueError(f"File '{thisfile}' contains rows where rbh1 >= rbh2.")
+            raise ValueError(f"File '{thisfile}' has rows where rbh1 >= rbh2.")
 
+        # enforce numeric distances
+        if not pd.api.types.is_numeric_dtype(df["distance"]):
+            df["distance"] = pd.to_numeric(df["distance"], errors="raise")
+
+        df["row_indices"] = idx  # use the *current* DataFrame index (preserved unless reset_row_index=True)
         tempdfs.append(df)
         n_rows_total += len(df)
 
         if pos % progress_every == 0 or pos == len(sampledf):
-            elapsed = time.time() - t_read0
+            elapsed = time.time() - t0
             rate = n_rows_total / elapsed if elapsed > 0 else float("inf")
-            pct = 100.0 * pos / len(sampledf)
-            # ETA based on files, not rows (simpler, stable)
-            eta = (elapsed / pos) * (len(sampledf) - pos) if pos > 0 else float("inf")
-            _p(f"[{pos:>5}/{len(sampledf):<5} | {pct:5.1f}%] "
-               f"rows={n_rows_total:,} | rate={rate:,.0f} rows/s | elapsed={elapsed:,.1f}s | ETA≈{eta:,.1f}s")
+            _p(f"[{pos:>5}/{len(sampledf):<5}] rows={n_rows_total:,} | rate={rate:,.0f}/s | elapsed={elapsed:,.1f}s")
+
 
     _p(f"Finished reading inputs: total_rows={n_rows_total:,} | files={len(sampledf):,} "
        f"| read_time={time.time()-t_read0:,.1f}s")
@@ -1667,7 +1672,6 @@ def construct_coo_matrix_from_sampledf(
     _p(f"Adding a 'pair' column.")
     concatdf["pair"] = list(zip(concatdf["rbh1"], concatdf["rbh2"]))
     _p(f"Added 'pair' column in {time.time()-t_pair0:,.3f}s")
-
 
     # Map to col indices
     t_map0 = time.time()
@@ -1695,6 +1699,12 @@ def construct_coo_matrix_from_sampledf(
     # COO build
     t_coo0 = time.time()
     _p(f"Running the COO matrix constructor...")
+    n_alg_cols = len(alg_combo_to_ix) # number of unique ALG pairs
+    # cheap guard against bad alg_combo_to_ix
+    vals = list(alg_combo_to_ix.values())
+    assert max(vals, default=-1) == len(vals) - 1 and min(vals, default=0) == 0, \
+        "alg_combo_to_ix must have contiguous indices 0..N-1"
+    # construct the sparse matrix
     sparse_matrix = coo_matrix(
         (concatdf["distance"], (concatdf["row_indices"], concatdf["col_indices"].astype(int))),
         shape=(len(sampledf), n_alg_cols),
