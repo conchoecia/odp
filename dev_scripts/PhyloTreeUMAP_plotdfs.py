@@ -37,6 +37,54 @@ def generate_distinct_colors(n, saturation=0.65, lightness=0.5):
         colors.append(hex_color)
     return colors
 
+
+def return_kingdom_full_sort_order():
+    """Return a list of the sort order for the taxonomic rankings."""
+    return ["superkingdom",
+            "kingdom",
+            "subkingdom",
+            "infrakingdom",
+            "superphylum",
+            "phylum",
+            "subphylum",
+            "infraphylum",
+            "superclass",
+            "class",
+            "subclass",
+            "infraclass",
+            "parvclass",
+            "cohort",
+            "subcohort",
+            "superorder",
+            "order",
+            "suborder",
+            "infraorder",
+            "parvorder",
+            "superfamily",
+            "family",
+            "subfamily",
+            "tribe",
+            "subtribe",
+            "genus",
+            "subgenus",
+            "section",
+            "subsection",
+            "series",
+            "subseries",
+            "species group",
+            "species subgroup",
+            "species",
+            "subspecies",
+            "all"]
+
+# Build a fast lookup once
+_CANONICAL_RANKS = return_kingdom_full_sort_order()
+# token form: spaces->underscore, lowercase
+_RANK_TOKEN_MAP = {
+    rk.lower().replace(" ", "_"): rk
+    for rk in _CANONICAL_RANKS
+}
+
 # Official Benedictus stops (alpha 'FF' trimmed)
 BENEDICTUS_HEX = [
     "#9A133D", "#B93961", "#D8527C", "#F28AAA", "#F9B4C9", "#F9E0E8",
@@ -79,6 +127,7 @@ def parse_args():
                     still respecting genome size min/max thresholds but ignoring
                     the custom min/max colors.
       --metadata: space-separated list of metadata files to join against the main dataframe. This will be type list [str] of filenames.
+      --phylo-map
       --pdf: save a {prefix}.pdf file
       --html: save a {prefix}.html file
       --plot_features: Looks in the DF for features to plot. Plots everything on the same plot. Only takes in one dataframe.
@@ -111,13 +160,37 @@ def parse_args():
                         help="Use Benedictus three-color scheme for genome size panels (ignores custom min/max colors but still applies genome size thresholds).")
                         # benedictus is from here: https://emilhvitfeldt.github.io/r-color-palettes/discrete/MetBrewer/Benedictus/index.html
                         #TODO This should also be implemented with other column types, like ALG % retention
+    parser.add_argument("--phylolist", nargs= "+",
+                        help=("space-separated .df files. Rank is inferred from each filename. "
+                          "Enables a vertical phylo-resampling grid (rows=ranks, "
+                          "cols=(n_neighbors,min_dist) inferred from filenames)."))
 
     args = parser.parse_args()
+
+    # --- normalize --phylolist to a list of paths ---
+    files = args.phylolist
+    if files is None:
+        files = []
+    elif isinstance(files, list) and len(files) == 1 and (" " in files[0] or "\n" in files[0]):
+        # User provided one big quoted string → split it into tokens
+        import shlex
+        files = [p for p in shlex.split(files[0]) if p]
+    # overwrite with standardized list
+    args.phylolist = files
 
     # Make sure that both directory and filelist are not specified.
     # If they are both specified, we don't know which one to use.
     if args.directory and args.filelist:
         raise ValueError("Both directory and filelist are specified. We don't know which one to use. Please just use one.")
+
+    # conflicts
+    if args.phylolist and (args.directory or args.filelist):
+        raise ValueError("--phylolist cannot be used with --directory/--filelist.")
+
+    # existence check (optional but nice)
+    for f in args.phylolist:
+        if not os.path.exists(f):
+            raise ValueError(f"File does not exist: {f}")
 
     # If we have turned on the plot_features flag, then we need to make sure that we only have one file in the filelist.
     if args.plot_features:
@@ -737,7 +810,7 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
 #    known_umap_cols = {"UMAP1", "UMAP2", "color"}
 #    metadata_columns = [col for col in df.columns
 #                        if col not in known_umap_cols and (
-#                            col.endswith("_color") or 
+#                            col.endswith("_color") or
 #                            (not col.endswith("_color") and f"{col}_color" in df.columns)
 #                        )
 #                       ]
@@ -1091,9 +1164,268 @@ def parse_metadata_dfs(df_filelist: list):
 
     return merged_df
 
+def infer_rank_from_subsample_filename(filepath: str) -> str:
+    """
+    Expect filenames like: subsample_{rank}.missing_{...}.<whatever>.{df|pdf}
+    Returns the canonical rank string from return_kingdom_full_sort_order().
+
+    Examples that match:
+      subsample_phylum.neighbors_15.mind_0.1.df
+      subsample_species_group.missing_large.paramsweep.pdf
+    """
+    fname = os.path.basename(filepath).lower()
+    m = re.search(r"subsample_([^.]+)\.", fname)   # capture until first dot
+    if not m:
+        raise ValueError(f"Could not find 'subsample_{{rank}}.' pattern in: {filepath}")
+    token = m.group(1).replace("-", "_")          # allow dashes too
+
+    # Direct token match
+    if token in _RANK_TOKEN_MAP:
+        return _RANK_TOKEN_MAP[token]
+
+    # A little forgiveness: collapse multiple underscores, strip stray suffixes
+    token2 = re.sub(r"_+", "_", token).strip("_")
+    if token2 in _RANK_TOKEN_MAP:
+        return _RANK_TOKEN_MAP[token2]
+
+    # Last chance: turn underscores back to spaces and check raw list
+    as_words = token.replace("_", " ")
+    for rk in _CANONICAL_RANKS:
+        if as_words == rk.lower():
+            return rk
+
+    allowed = ", ".join(sorted(_RANK_TOKEN_MAP.keys()))
+    raise ValueError(f"Unrecognized rank token '{token}' in: {filepath}\n"
+                     f"Allowed tokens are: {allowed}")
+
+
+def _parse_df_filename(filepath):
+    """
+    Parse your standard filename:
+      subsample_<rank>.neighbors_<int>.mind_<float>[.missing_<...>][.method_<...>][.<metric>].df
+    Returns: (num_neighbors:int, min_dist:float, method:str|None, size:str|None, metric:str|None, samplename:str)
+    """
+    filename = os.path.basename(filepath)
+
+    # sample name (before .neighbors_)
+    samplename = filename.split(".neighbors_")[0] if ".neighbors_" in filename else filename.split(".")[0]
+
+    m = re.search(r"\.neighbors_(\d+)", filename)
+    if not m:
+        raise ValueError(f"Invalid filename (neighbors): {filename}")
+    num_neighbors = int(m.group(1))
+
+    m = re.search(r"\.mind_([0-9]*\.?[0-9]+)", filename)
+    if not m:
+        raise ValueError(f"Invalid filename (mind): {filename}")
+    min_dist = float(m.group(1))
+
+    # optional pieces
+    method = None
+    m = re.search(r"\.method_([^.]+)", filename)
+    if m: method = m.group(1)
+
+    size = None
+    m = re.search(r"\.missing_([^.]+)", filename)
+    if m: size = m.group(1)
+
+    metric = None
+    m = re.search(r"\.(euclidean|cosine|manhattan|chebyshev|minkowski)\.df$", filename)
+    if m: metric = m.group(1)
+
+    return num_neighbors, min_dist, method, size, metric, samplename
+
+def load_phylo_df_by_rank_from_phylolist(files: list):
+    df_by_rank = {}
+    all_params = set()
+    row_labels = {}
+
+    for path in files:
+        rank = infer_rank_from_subsample_filename(path)
+        n, md, method, size, metric, samplename = _parse_df_filename(path)
+        d = pd.read_csv(path, sep="\t", index_col=0, header=0)
+
+        df_by_rank.setdefault(rank, {})
+        df_by_rank[rank][(n, md)] = {
+            "df": d, "samplename": samplename, "filepath": path,
+            "num_neighbors": n, "min_dist": md, "size": size,
+            "method": method, "metric": metric
+        }
+        row_labels[rank] = rank
+        all_params.add((n, md))
+
+    return df_by_rank, sorted(all_params), row_labels
+
+def auto_point_size(
+    n_points: int,
+    ax=None,
+    *,
+    # Area-based mode (when ax is given)
+    target_fill: float = 0.2,   # fraction of axes area to cover with markers (0.03–0.06 is typical)
+    min_size: float = 0.25,       # clamp (pt²)
+    max_size: float = 6.0,        # clamp (pt²)
+    # Count-only fallback (when ax is None)
+    n_ref: int = 20000,           # reference point count
+    s_ref: float = 1.0,           # size (pt²) to use at n_ref
+    power: float = 0.5            # s ~ (n_ref / n_points)^power
+) -> float:
+    """
+    Returns a scatter size 's' in pt². If 'ax' is provided, uses axes area so the
+    total marker area ~= target_fill * axes area; otherwise uses a count-only power law.
+    """
+    if n_points <= 0:
+        return min_size
+
+    # --- Area-based sizing (uses figure + axes geometry; no renderer needed) ---
+    if ax is not None and getattr(ax, "figure", None) is not None:
+        fig = ax.figure
+        # Axes bbox in figure fraction → convert to inches
+        bbox = ax.get_position()                   # [0..1] figure fraction
+        fig_w_in, fig_h_in = fig.get_size_inches() # inches
+        ax_w_in = bbox.width  * fig_w_in
+        ax_h_in = bbox.height * fig_h_in
+        ax_area_in2 = ax_w_in * ax_h_in
+        ax_area_pt2 = ax_area_in2 * (72.0 ** 2)    # 1 in = 72 pt
+
+        # Share 'target_fill' across all points
+        s = (target_fill * ax_area_pt2) / float(n_points)
+
+    else:
+        # --- Count-only fallback (simple power-law) ---
+        s = s_ref * (float(n_ref) / float(n_points)) ** power
+
+    # Clamp to sane bounds
+    if s < min_size:
+        s = min_size
+    elif s > max_size:
+        s = max_size
+    return float(s)
+
+def plot_phylo_resampling_grid(
+    df_by_rank, all_params, row_labels, outpdf,
+    panel=2.0,                # size of each panel (inches)
+    inner=0.18,               # gap between panels (inches)
+    outer=0.50,               # top/bottom and RIGHT margin (inches)
+    left_gutter=1.20,         # reserved space for row labels (inches)
+    sep_color="#BBBBBB",
+    sep_lw=0.6
+):
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    RANK_ORDER = return_kingdom_full_sort_order()
+    ranks_known   = [rk for rk in RANK_ORDER if rk in df_by_rank]
+    ranks_unknown = sorted([rk for rk in df_by_rank.keys() if rk not in RANK_ORDER])
+    ranks = ranks_known + ranks_unknown
+    if not ranks:
+        raise ValueError("No ranks to plot (df_by_rank is empty).")
+
+    num_rows, num_cols = len(ranks), len(all_params)
+
+    # Figure geometry: left gutter + right outer
+    fig_w = left_gutter + (num_cols * panel + (num_cols - 1) * inner) + outer
+    fig_h = (2 * outer) + (num_rows * panel + (num_rows - 1) * inner)
+    fig = plt.figure(figsize=(fig_w, fig_h))
+
+    # --- axes placement: start at LEFT_GUTTER ---
+    def ax_rect(i, j):
+        # i=row (0=top), j=col (0=left)
+        left   = left_gutter + j * (panel + inner)     # <— was outer + ...
+        bottom = outer + (num_rows - 1 - i) * (panel + inner)
+        return [left / fig_w, bottom / fig_h, panel / fig_w, panel / fig_h]
+
+    axes = [[None for _ in range(num_cols)] for _ in range(num_rows)]
+    for i in range(num_rows):
+        for j in range(num_cols):
+            ax = fig.add_axes(ax_rect(i, j))
+            ax.set_xticks([]); ax.set_yticks([])
+            for sp in ("top", "right", "bottom", "left"):
+                ax.spines[sp].set_visible(False)
+            axes[i][j] = ax
+
+    # column headers
+    for j, (n, md) in enumerate(all_params):
+        ax = axes[0][j]
+        ax.xaxis.set_label_position("top")
+        ax.set_xlabel(f"n={n}, md={md}", fontsize=8)
+
+    # row labels (now the gutter actually exists left of the panels)
+    for i, rank in enumerate(ranks):
+        ax = axes[i][0]
+        ax.yaxis.set_label_position("left")
+        ax.set_ylabel(row_labels.get(rank, rank),
+                      rotation=0, ha="right", va="center",
+                      fontsize=10, labelpad=10)
+
+    # plot cells (unchanged except your auto_point_size & square limits)
+    for i, rank in enumerate(ranks):
+        by_param = df_by_rank.get(rank, {})
+        for j, key in enumerate(all_params):
+            ax = axes[i][j]
+            info = by_param.get(key)
+            if info is None:
+                ax.text(0.5, 0.5, "—", ha="center", va="center", fontsize=8); continue
+            d = info["df"]
+            s = auto_point_size(len(d), ax=ax)
+            if d.empty:
+                ax.text(0.5, 0.5, "Empty", ha="center", va="center", fontsize=6); continue
+            if "color" in d.columns:
+                ax.scatter(d["UMAP1"], d["UMAP2"], s=s, lw=0, alpha=0.5, color=d["color"])
+            else:
+                ax.scatter(d["UMAP1"], d["UMAP2"], s=s, lw=0, alpha=0.5)
+
+            # square, per-axis limits (your latest version)
+            x = d["UMAP1"].to_numpy(dtype=float); y = d["UMAP2"].to_numpy(dtype=float)
+            q = (0.002, 0.998)
+            if q is not None:
+                x0, x1 = np.quantile(x, q); y0, y1 = np.quantile(y, q)
+            else:
+                x0, x1 = x.min(), x.max(); y0, y1 = y.min(), y.max()
+            if x0 == x1: x0 -= 0.5; x1 += 0.5
+            if y0 == y1: y0 -= 0.5; y1 += 0.5
+            pad = 0.03
+            px = (x1 - x0) * pad; py = (y1 - y0) * pad
+            cx, cy = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
+            side = max((x1 - x0) + 2 * px, (y1 - y0) + 2 * py)
+            ax.set_xlim(cx - side / 2, cx + side / 2)
+            ax.set_ylim(cy - side / 2, cy + side / 2)
+            ax.set_aspect("equal", adjustable="box")
+
+    # --- separator lines that span EXACTLY the panels area ---
+    x_axes_left   = left_gutter
+    x_axes_right  = left_gutter + num_cols * panel + (num_cols - 1) * inner
+    y_axes_bottom = outer
+    y_axes_top    = outer + num_rows * panel + (num_rows - 1) * inner
+
+    xmin, xmax = x_axes_left / fig_w,  x_axes_right / fig_w
+    ymin, ymax = y_axes_bottom / fig_h, y_axes_top   / fig_h
+
+    # vertical separators (between columns)
+    for j in range(num_cols - 1):
+        x_mid = (left_gutter + (j + 1) * panel + j * inner + inner / 2) / fig_w
+        fig.add_artist(plt.Line2D([x_mid, x_mid], [ymin, ymax],
+                                  transform=fig.transFigure, color=sep_color, lw=sep_lw))
+    # horizontal separators (between rows)
+    for i in range(num_rows - 1):
+        y_mid = (outer + (i + 1) * panel + i * inner + inner / 2) / fig_h
+        fig.add_artist(plt.Line2D([xmin, xmax], [y_mid, y_mid],
+                                  transform=fig.transFigure, color=sep_color, lw=sep_lw))
+
+    print(f"saving the file to {outpdf}")
+    # IMPORTANT: don't use bbox_inches='tight' or it will clip your gutter
+    plt.savefig(outpdf)
+    plt.close(fig)
+
+
 def main():
     odpf.format_matplotlib()
     args = parse_args()
+
+    if args.phylolist:
+        df_by_rank, all_params, row_labels = load_phylo_df_by_rank_from_phylolist(args.phylolist)
+        outpdf = args.prefix + ".phyloresample.pdf"
+        plot_phylo_resampling_grid(df_by_rank, all_params, row_labels, outpdf)
+        return
 
     if args.plot_features:
         metadatadf = parse_metadata_dfs(args.metadata) if args.metadata else None

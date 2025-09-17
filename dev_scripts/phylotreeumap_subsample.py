@@ -42,7 +42,8 @@ def return_kingdom_full_sort_order():
             "species group",
             "species subgroup",
             "species",
-            "subspecies"]
+            "subspecies",
+            "all"]
 
 def rank_sort_full():
     """Return a dictionary mapping taxonomic rankings to their sort order index."""
