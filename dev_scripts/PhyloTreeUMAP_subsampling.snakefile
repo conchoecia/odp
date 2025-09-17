@@ -89,7 +89,7 @@ if results_base_directory.endswith("/"):
 # use these parameters for the full space exploration
 odog_n    = [20, 35, 50, 75, 100, 150, 250]
 odog_m    = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
-odog_n    = [50, 75, 100, 150, 250]
+odog_n    = [20, 35, 50, 75, 100, 150, 250]
 odog_m    = [0.5, 0.75, 0.9]
 #odog_n    = [150]
 #odog_m    = [0.75]
@@ -132,6 +132,10 @@ rule all:
                 sizeNaN = odog_size),
         expand(results_base_directory + "/subsample_umaps/subsample_{rank}.missing_{sizeNaN}.paramsweep.pdf",
                 rank = list(subsample_dict.keys()),
+                sizeNaN = odog_size),
+        expand(results_base_directory + "/subsample_umaps/allranks.neighbors_{n}.mind_{m}.missing_{sizeNaN}.phyloresample.pdf",
+                n = odog_n,
+                m = odog_m,
                 sizeNaN = odog_size),
         # newer implementation
         #results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
@@ -1517,6 +1521,25 @@ rule odogSweep_oldinefficient:
         python {input.plotdfs} -f "{input.dfs}" -p {params.prefix} --pdf --html
         """
 
+rule odogSweep_subsampling:
+    input:
+        dfs = expand(results_base_directory + "/subsample_umaps/{rank}/subsample_{rank}.neighbors_{{n}}.mind_{{m}}.missing_{{sizeNaN}}.df",
+                        rank = subsample_dict.keys()),
+        plotdfs = os.path.join(snakefile_path, "PhyloTreeUMAP_plotdfs.py")
+    output:
+        pdf    = results_base_directory + "/subsample_umaps/allranks.neighbors_{n}.mind_{m}.missing_{sizeNaN}.phyloresample.pdf",
+    params:
+        prefix = results_base_directory + "/subsample_umaps/allranks.neighbors_{n}.mind_{m}.missing_{sizeNaN}"
+    threads: 1
+    retries: 4
+    resources:
+        mem_mb = pdf_get_mem_mb,
+        highio = 1,
+        runtime = 5
+    shell:
+        """
+        python {input.plotdfs} --phylolist "{input.dfs}" -p {params.prefix} --pdf
+        """
 
 def odogPlotUMAP_get_mem_mb(wildcards, attempt):
     """
