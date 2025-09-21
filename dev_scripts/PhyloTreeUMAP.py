@@ -1206,8 +1206,31 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
     # Store the original colors separately so they are never modified in the table
     plot_data["original_color"] = plot_data["color"]
 
+    # Track the current alpha for each point (used for highlighting)
+    plot_data["alpha"] = 0.8
+
     # Add a 'text_color' column based on original_color
     plot_data["text_color"] = plot_data["original_color"].apply(get_text_color)
+
+    # Determine available taxonomic rank columns for searching
+    level_columns = [col for col in plot_data.columns if col.startswith("level_")]
+
+    def _rank_key(col):
+        try:
+            return int(col.split("_", 1)[1])
+        except (IndexError, ValueError):
+            return float("inf")
+
+    level_columns = sorted(level_columns, key=_rank_key)
+    rank_options = []
+    if "taxname" in plot_data.columns:
+        rank_options.append(("taxname", "Taxname"))
+    if "taxname_list_str" in plot_data.columns:
+        rank_options.append(("taxname_list_str", "Full lineage"))
+    rank_options.extend([(col, col.replace("_", " ").title()) for col in level_columns])
+    has_rank_options = len(rank_options) > 0
+    rank_select_options = rank_options if has_rank_options else [("", "No taxonomic ranks available")]
+    default_rank_value = rank_options[0][0] if has_rank_options else rank_select_options[0][0]
 
     # Create a Bokeh ColumnDataSource (for scatter plot & full table)
     source = bokeh.models.ColumnDataSource(plot_data)
@@ -1223,18 +1246,39 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
     # Add scatter plot
     scatter = plot.scatter(x="UMAP1", y="UMAP2",
                            source=source, size="size",
-                           color="color", alpha=0.7)
+                           color="color", alpha="alpha")
 
     if analysis_type == "MLT":
-        # Add hover tool for metadata display
-        hover = bokeh.models.HoverTool(tooltips=[
-            ("RBH Ortholog", "@rbh"),
-            ("Gene Group", "@gene_group"),
-        ])
+        # Add hover tool for metadata display with wrapped text for readability
+        hover = bokeh.models.HoverTool(
+            tooltips="""
+            <div style="width: 350px;">
+                <div><span style="font-weight: bold;">RBH Ortholog:</span> @rbh</div>
+                <div style="white-space: normal;"><span style="font-weight: bold;">Gene Group:</span> @gene_group</div>
+            </div>
+            """,
+            renderers=[scatter]
+        )
         plot.add_tools(hover)
+
         # Text input fields for search (placed BELOW the plot)
         search_rbh   = bokeh.models.TextInput(title="Search RBH Ortholog:")
         search_group = bokeh.models.TextInput(title="Search Gene Group:")
+        search_taxid = bokeh.models.TextInput(
+            title="Highlight taxid(s):",
+            placeholder="e.g. 9606 or 9606, 7227"
+        )
+        rank_select = bokeh.models.Select(
+            title="Taxonomic rank:",
+            value=default_rank_value,
+            options=rank_select_options,
+            disabled=not has_rank_options
+        )
+        rank_text = bokeh.models.TextInput(
+            title="Highlight text in selected rank:",
+            placeholder="substring match",
+            disabled=not has_rank_options
+        )
 
         # Button to toggle between OR (||) and AND (&&) search logic
         search_toggle = bokeh.models.Button(label="Search Type: OR (||)", button_type="primary")
@@ -1289,20 +1333,36 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
             search_rbh=search_rbh,
             search_group=search_group,
             search_mode=search_mode,
-            scatter=scatter
+            search_taxid=search_taxid,
+            rank_select=rank_select,
+            rank_text=rank_text
         ), code="""
             var data = source.data;
             var filtered_data = filtered_source.data;
             var rbh_input = search_rbh.value.trim().toLowerCase();
             var group_input = search_group.value.trim().toLowerCase();
+            var taxid_raw = search_taxid.value.trim();
+            var taxid_terms = taxid_raw === "" ? [] : taxid_raw.split(/[\s,;]+/).filter(t => t.length > 0);
+            var rank_field = rank_select.value;
+            var rank_input = rank_text.value.trim().toLowerCase();
+
             var colors = data['color'];
             var sizes = data['size'];
-            var selected_indices = [];
+            var alphas = data['alpha'];
+            var original_colors = data['original_color'];
+            var lineage_field = data.hasOwnProperty('taxid_list_str') ? data['taxid_list_str'] : null;
 
             var use_and_logic = search_mode.active; // True for AND (&&), False for OR (||)
 
+            var apply_rbh = rbh_input !== "";
+            var apply_group = group_input !== "";
+            var apply_taxid = taxid_terms.length > 0;
+            var apply_rank = rank_field !== "" && rank_input !== "";
+
             // If no search term is provided, show all data in the table and reset colors
-            var show_all_data = (rbh_input === "" && group_input === "");
+            var show_all_data = !(apply_rbh || apply_group || apply_taxid || apply_rank);
+
+            var selected_indices = [];
 
             // Clear filtered source data
             for (var key in filtered_data) {
@@ -1310,34 +1370,83 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
             }
 
             for (var i = 0; i < colors.length; i++) {
-                var rbh_match = (rbh_input !== "" && data['rbh'][i].toLowerCase().includes(rbh_input));
-                var group_match = (group_input !== "" && data['gene_group'][i].toLowerCase().includes(group_input));
+                var match = true;
 
-                var match = (use_and_logic) ? (rbh_match && group_match) : (rbh_match || group_match);
+                if (apply_rbh || apply_group) {
+                    var rbh_match = apply_rbh ? String(data['rbh'][i] || '').toLowerCase().includes(rbh_input) : false;
+                    var group_match = apply_group ? String(data['gene_group'][i] || '').toLowerCase().includes(group_input) : false;
 
-                if (match) {
-                    colors[i] = "red";  // Highlight color in plot
-                    sizes[i] = 8;       // Double the size
-                    selected_indices.push(i);
-                } else {
-                    colors[i] = data['original_color'][i]; // Keep original color
-                    sizes[i] = 4;
+                    if (apply_rbh && apply_group) {
+                        match = use_and_logic ? (rbh_match && group_match) : (rbh_match || group_match);
+                    } else if (apply_rbh) {
+                        match = rbh_match;
+                    } else if (apply_group) {
+                        match = group_match;
+                    }
                 }
 
-                // If no search, restore everything. Otherwise, only show matched rows in the table.
-                if (show_all_data || selected_indices.includes(i)) {
+                if (match && apply_taxid) {
+                    var taxid_match = false;
+                    var sample_taxid = String(data['taxid'][i] || '');
+                    var lineage_parts = null;
+                    if (lineage_field) {
+                        var lineage_value = String(lineage_field[i] || '');
+                        if (lineage_value !== '') {
+                            lineage_parts = lineage_value.split(';');
+                        }
+                    }
+
+                    for (var t = 0; t < taxid_terms.length; t++) {
+                        var term = taxid_terms[t];
+                        if (term === '') {
+                            continue;
+                        }
+                        if (sample_taxid === term) {
+                            taxid_match = true;
+                            break;
+                        }
+                        if (lineage_parts && lineage_parts.indexOf(term) !== -1) {
+                            taxid_match = true;
+                            break;
+                        }
+                    }
+                    match = taxid_match;
+                }
+
+                if (match && apply_rank) {
+                    if (data.hasOwnProperty(rank_field)) {
+                        var rank_value = String(data[rank_field][i] || '').toLowerCase();
+                        match = rank_value.includes(rank_input);
+                    } else {
+                        match = false;
+                    }
+                }
+
+                if (!show_all_data) {
+                    if (match) {
+                        colors[i] = original_colors[i];
+                        alphas[i] = 0.9;
+                        selected_indices.push(i);
+                    } else {
+                        colors[i] = '#d3d3d3';
+                        alphas[i] = 0.15;
+                    }
+                } else {
+                    colors[i] = original_colors[i];
+                    alphas[i] = 0.8;
+                }
+
+                sizes[i] = 4;
+
+                if (show_all_data || match) {
                     for (var key in filtered_data) {
                         filtered_data[key].push(data[key][i]);
                     }
                 }
             }
 
-            // Restore original colors if no search is active
             if (show_all_data) {
-                for (var i = 0; i < colors.length; i++) {
-                    colors[i] = data['original_color'][i];
-                    sizes[i] = 4;
-                }
+                selected_indices = [];
             }
 
             // Update sources
@@ -1368,7 +1477,7 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
             var num_rows = active_data[keys[0]].length;
 
             // Remove unwanted columns (size, color, Unnamed), but keep "original_color" and rename it to "color"
-            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color");
+            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color" && k !== "alpha");
 
             // Rename "original_color" to "color"
             var renamed_keys = filtered_keys.map(k => k === "original_color" ? "color" : k);
@@ -1394,18 +1503,147 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
         export_button.js_on_event("button_click", export_callback)
 
         # Layout
+        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text)
         search_row = bokeh.layouts.row(search_group, search_toggle, search_rbh, update_button, export_button, align="end")
-        layout = bokeh.layouts.column(plot, search_row, data_table)
+        layout = bokeh.layouts.column(plot, taxonomy_row, search_row, data_table)
 
     elif analysis_type == "MGT":
-        # Add hover tool for metadata display
-        hover = bokeh.models.HoverTool(tooltips=[
-            ("Sample", "@sample"),
-            ("taxid", "@taxid"),
-            ("Taxstring", "@taxname_list_str")
-        ])
+        # Add hover tool with wrapped taxonomy strings for readability
+        hover = bokeh.models.HoverTool(
+            tooltips="""
+            <div style=\"width: 380px;\">
+                <div><span style=\"font-weight: bold;\">Sample:</span> @sample</div>
+                <div><span style=\"font-weight: bold;\">Taxid:</span> @taxid</div>
+                <div style=\"white-space: normal;\"><span style=\"font-weight: bold;\">Taxstring:</span> @taxname_list_str</div>
+            </div>
+            """,
+            renderers=[scatter]
+        )
         plot.add_tools(hover)
-        layout = bokeh.layouts.column(plot)
+
+        search_taxid = bokeh.models.TextInput(
+            title="Highlight taxid(s):",
+            placeholder="e.g. 9606 or 9606, 7227"
+        )
+        rank_select = bokeh.models.Select(
+            title="Taxonomic rank:",
+            value=default_rank_value,
+            options=rank_select_options,
+            disabled=not has_rank_options
+        )
+        rank_text = bokeh.models.TextInput(
+            title="Highlight text in selected rank:",
+            placeholder="substring match",
+            disabled=not has_rank_options
+        )
+        update_button = bokeh.models.Button(label="Update Plot", button_type="success")
+
+        update_callback = bokeh.models.CustomJS(args=dict(
+            source=source,
+            filtered_source=filtered_source,
+            search_taxid=search_taxid,
+            rank_select=rank_select,
+            rank_text=rank_text
+        ), code="""
+            var data = source.data;
+            var filtered_data = filtered_source.data;
+            var colors = data['color'];
+            var sizes = data['size'];
+            var alphas = data['alpha'];
+            var original_colors = data['original_color'];
+            var lineage_field = data.hasOwnProperty('taxid_list_str') ? data['taxid_list_str'] : null;
+
+            var taxid_raw = search_taxid.value.trim();
+            var taxid_terms = taxid_raw === "" ? [] : taxid_raw.split(/[\s,;]+/).filter(t => t.length > 0);
+            var rank_field = rank_select.value;
+            var rank_input = rank_text.value.trim().toLowerCase();
+
+            var apply_taxid = taxid_terms.length > 0;
+            var apply_rank = rank_field !== "" && rank_input !== "";
+            var show_all_data = !(apply_taxid || apply_rank);
+
+            var selected_indices = [];
+
+            for (var key in filtered_data) {
+                filtered_data[key] = [];
+            }
+
+            for (var i = 0; i < colors.length; i++) {
+                var match = true;
+
+                if (apply_taxid) {
+                    var taxid_match = false;
+                    var sample_taxid = String(data['taxid'][i] || '');
+                    var lineage_parts = null;
+                    if (lineage_field) {
+                        var lineage_value = String(lineage_field[i] || '');
+                        if (lineage_value !== '') {
+                            lineage_parts = lineage_value.split(';');
+                        }
+                    }
+
+                    for (var t = 0; t < taxid_terms.length; t++) {
+                        var term = taxid_terms[t];
+                        if (term === '') {
+                            continue;
+                        }
+                        if (sample_taxid === term) {
+                            taxid_match = true;
+                            break;
+                        }
+                        if (lineage_parts && lineage_parts.indexOf(term) !== -1) {
+                            taxid_match = true;
+                            break;
+                        }
+                    }
+                    match = taxid_match;
+                }
+
+                if (match && apply_rank) {
+                    if (data.hasOwnProperty(rank_field)) {
+                        var rank_value = String(data[rank_field][i] || '').toLowerCase();
+                        match = rank_value.includes(rank_input);
+                    } else {
+                        match = false;
+                    }
+                }
+
+                if (!show_all_data) {
+                    if (match) {
+                        colors[i] = original_colors[i];
+                        alphas[i] = 0.9;
+                        selected_indices.push(i);
+                    } else {
+                        colors[i] = '#d3d3d3';
+                        alphas[i] = 0.15;
+                    }
+                } else {
+                    colors[i] = original_colors[i];
+                    alphas[i] = 0.8;
+                }
+
+                sizes[i] = 4;
+
+                if (show_all_data || match) {
+                    for (var key in filtered_data) {
+                        filtered_data[key].push(data[key][i]);
+                    }
+                }
+            }
+
+            if (show_all_data) {
+                selected_indices = [];
+            }
+
+            source.selected.indices = selected_indices;
+            source.change.emit();
+            filtered_source.change.emit();
+        """)
+
+        update_button.js_on_event("button_click", update_callback)
+
+        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, update_button)
+        layout = bokeh.layouts.column(plot, taxonomy_row)
 
     # Output to HTML
     bokeh.plotting.output_file(outhtml)
