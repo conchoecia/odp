@@ -75,7 +75,7 @@ def return_kingdom_full_sort_order():
             "species subgroup",
             "species",
             "subspecies",
-            "all"]
+            "allsamples"]
 
 # Build a fast lookup once
 _CANONICAL_RANKS = return_kingdom_full_sort_order()
@@ -289,6 +289,76 @@ def generate_df_dict(args):
 
     return df_dict
 
+def set_square_limits(ax, x, y, q=(0.002, 0.998), pad=0.03):
+    """
+    Set per-axis limits using optional quantile clipping, then expand to a
+    square view with a small padding. Keeps aspect='equal'.
+    """
+    import numpy as np
+    x = np.asarray(x, dtype=float); y = np.asarray(y, dtype=float)
+
+    if q is not None:
+        x0, x1 = np.quantile(x, q); y0, y1 = np.quantile(y, q)
+    else:
+        x0, x1 = x.min(), x.max(); y0, y1 = y.min(), y.max()
+
+    if x0 == x1: x0 -= 0.5; x1 += 0.5
+    if y0 == y1: y0 -= 0.5; y1 += 0.5
+
+    px = (x1 - x0) * pad
+    py = (y1 - y0) * pad
+    cx, cy = 0.5*(x0 + x1), 0.5*(y0 + y1)
+    side = max((x1 - x0) + 2*px, (y1 - y0) + 2*py)
+
+    ax.set_xlim(cx - side/2, cx + side/2)
+    ax.set_ylim(cy - side/2, cy + side/2)
+    ax.set_aspect("equal", adjustable="box")
+
+def auto_point_size(
+    n_points: int,
+    ax=None,
+    *,
+    # Area-based mode (when ax is given)
+    target_fill: float = 0.2,   # fraction of axes area to cover with markers (0.03–0.06 is typical)
+    min_size: float = 0.25,       # clamp (pt²)
+    max_size: float = 6.0,        # clamp (pt²)
+    # Count-only fallback (when ax is None)
+    n_ref: int = 20000,           # reference point count
+    s_ref: float = 1.0,           # size (pt²) to use at n_ref
+    power: float = 0.5            # s ~ (n_ref / n_points)^power
+) -> float:
+    """
+    Returns a scatter size 's' in pt². If 'ax' is provided, uses axes area so the
+    total marker area ~= target_fill * axes area; otherwise uses a count-only power law.
+    """
+    if n_points <= 0:
+        return min_size
+
+    # --- Area-based sizing (uses figure + axes geometry; no renderer needed) ---
+    if ax is not None and getattr(ax, "figure", None) is not None:
+        fig = ax.figure
+        # Axes bbox in figure fraction → convert to inches
+        bbox = ax.get_position()                   # [0..1] figure fraction
+        fig_w_in, fig_h_in = fig.get_size_inches() # inches
+        ax_w_in = bbox.width  * fig_w_in
+        ax_h_in = bbox.height * fig_h_in
+        ax_area_in2 = ax_w_in * ax_h_in
+        ax_area_pt2 = ax_area_in2 * (72.0 ** 2)    # 1 in = 72 pt
+
+        # Share 'target_fill' across all points
+        s = (target_fill * ax_area_pt2) / float(n_points)
+
+    else:
+        # --- Count-only fallback (simple power-law) ---
+        s = s_ref * (float(n_ref) / float(n_points)) ** power
+
+    # Clamp to sane bounds
+    if s < min_size:
+        s = min_size
+    elif s > max_size:
+        s = max_size
+    return float(s)
+
 def plot_paramsweep(df_dict, outpdf):
     """
     Makes the plot for the parameter sweep plot when we provide multiple dataframes.
@@ -358,10 +428,14 @@ def plot_paramsweep(df_dict, outpdf):
         if df.empty:
             ax.text(0.5, 0.5, "Empty file", fontsize=3, ha='center')
         else:
-            ax.scatter(df["UMAP1"], df["UMAP2"], s=0.5, lw=0, alpha=0.5, color=df["color"])
-            minval, maxval = df[["UMAP1", "UMAP2"]].min().min(), df[["UMAP1", "UMAP2"]].max().max()
-            ax.set_xlim([minval - abs(.05 * minval), 1.05 * maxval])
-            ax.set_ylim([minval - abs(.05 * minval), 1.05 * maxval])
+            s = auto_point_size(len(df), ax=ax)  # dynamic point size (pt²)
+            colors = df["color"] if "color" in df.columns else None
+            ax.scatter(df["UMAP1"], df["UMAP2"], s=s, lw=0, alpha=0.5, color=colors)
+
+            # Quantile-based, per-axis limits; square view so UMAP isn’t distorted
+            set_square_limits(ax, df["UMAP1"].values, df["UMAP2"].values,
+                              q=(0.002, 0.998),  # set to None to disable clipping
+                              pad=0.03)
 
         # If we're at the absolute left (first column), add a Y-axis label
         if x_idx == 0:
@@ -1256,50 +1330,6 @@ def load_phylo_df_by_rank_from_phylolist(files: list):
 
     return df_by_rank, sorted(all_params), row_labels
 
-def auto_point_size(
-    n_points: int,
-    ax=None,
-    *,
-    # Area-based mode (when ax is given)
-    target_fill: float = 0.2,   # fraction of axes area to cover with markers (0.03–0.06 is typical)
-    min_size: float = 0.25,       # clamp (pt²)
-    max_size: float = 6.0,        # clamp (pt²)
-    # Count-only fallback (when ax is None)
-    n_ref: int = 20000,           # reference point count
-    s_ref: float = 1.0,           # size (pt²) to use at n_ref
-    power: float = 0.5            # s ~ (n_ref / n_points)^power
-) -> float:
-    """
-    Returns a scatter size 's' in pt². If 'ax' is provided, uses axes area so the
-    total marker area ~= target_fill * axes area; otherwise uses a count-only power law.
-    """
-    if n_points <= 0:
-        return min_size
-
-    # --- Area-based sizing (uses figure + axes geometry; no renderer needed) ---
-    if ax is not None and getattr(ax, "figure", None) is not None:
-        fig = ax.figure
-        # Axes bbox in figure fraction → convert to inches
-        bbox = ax.get_position()                   # [0..1] figure fraction
-        fig_w_in, fig_h_in = fig.get_size_inches() # inches
-        ax_w_in = bbox.width  * fig_w_in
-        ax_h_in = bbox.height * fig_h_in
-        ax_area_in2 = ax_w_in * ax_h_in
-        ax_area_pt2 = ax_area_in2 * (72.0 ** 2)    # 1 in = 72 pt
-
-        # Share 'target_fill' across all points
-        s = (target_fill * ax_area_pt2) / float(n_points)
-
-    else:
-        # --- Count-only fallback (simple power-law) ---
-        s = s_ref * (float(n_ref) / float(n_points)) ** power
-
-    # Clamp to sane bounds
-    if s < min_size:
-        s = min_size
-    elif s > max_size:
-        s = max_size
-    return float(s)
 
 def plot_phylo_resampling_grid(
     df_by_rank, all_params, row_labels, outpdf,
@@ -1374,22 +1404,11 @@ def plot_phylo_resampling_grid(
             else:
                 ax.scatter(d["UMAP1"], d["UMAP2"], s=s, lw=0, alpha=0.5)
 
-            # square, per-axis limits (your latest version)
-            x = d["UMAP1"].to_numpy(dtype=float); y = d["UMAP2"].to_numpy(dtype=float)
-            q = (0.002, 0.998)
-            if q is not None:
-                x0, x1 = np.quantile(x, q); y0, y1 = np.quantile(y, q)
-            else:
-                x0, x1 = x.min(), x.max(); y0, y1 = y.min(), y.max()
-            if x0 == x1: x0 -= 0.5; x1 += 0.5
-            if y0 == y1: y0 -= 0.5; y1 += 0.5
-            pad = 0.03
-            px = (x1 - x0) * pad; py = (y1 - y0) * pad
-            cx, cy = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
-            side = max((x1 - x0) + 2 * px, (y1 - y0) + 2 * py)
-            ax.set_xlim(cx - side / 2, cx + side / 2)
-            ax.set_ylim(cy - side / 2, cy + side / 2)
-            ax.set_aspect("equal", adjustable="box")
+            # square, per-axis limits
+            # quantile-based, per-axis limits; square view to not distort the umap
+            set_square_limits(ax, d["UMAP1"].values, d["UMAP2"].values,
+                  q=(0.002, 0.998),  # set to None to disable clipping
+                  pad=0.03)
 
     # --- separator lines that span EXACTLY the panels area ---
     x_axes_left   = left_gutter

@@ -86,11 +86,12 @@ results_base_directory = "GTUMAP"
 if results_base_directory.endswith("/"):
     results_base_directory = results_base_directory[:-1]
 
-# use these parameters for the full space exploration
+# Use these parameters for the full space exploration
+# These are the parameters in the 2024 biorxiv supplementary figure S7
 odog_n    = [20, 35, 50, 75, 100, 150, 250]
 odog_m    = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
-odog_n    = [20, 35, 50, 75, 100, 150, 250]
-odog_m    = [0.5, 0.75, 0.9]
+#odog_n    = [20, 35, 50, 75, 100, 150, 250]
+#odog_m    = [0.5, 0.75, 0.9]
 #odog_n    = [150]
 #odog_m    = [0.75]
 odog_size = ["large"]
@@ -101,7 +102,7 @@ if "odog_n" in config:
 if "odog_m" in config:
     odog_m = config["odog_m"]
 
-subsample_dict = {x[0]: x for x in generate_subsample_priorities()}
+subsample_dict = {x[0]: x for x in generate_subsample_priorities(output_allsamples = True)}
 
 wildcard_constraints:
     rank="[A-Za-z]+"
@@ -112,7 +113,7 @@ rule all:
         # ┏┓┏┫┏┓┏┓ - One-Dot-One-Genome plots - SUBSAMPLING
         # ┗┛┗┻┗┛┗┫   Each dot represents a single genome, and the data vector is the distance pairs
         #        ┛
-        # odog old inefficient implementation
+        # odog old inefficient implementation that uses all locus pairs
         expand(results_base_directory + "/coo_matrices/subsample_{rank}.coo.npz",
                 rank = list(subsample_dict.keys())),
         expand(results_base_directory + "/subsample_umaps/{rank}/subsample_{rank}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
@@ -1131,10 +1132,13 @@ rule subsampling_df:
         from pathlib import Path
         df = pd.read_csv(input.sampletsv, sep="\t", index_col=0)
         list_of_ranks = subsample_dict[wildcards.rank]
-        selected_buckets, flat = subsample_phylogenetically(df,
-                                                            bucket_priority = list_of_ranks,
-                                                            max_per_bucket = 10,
-                                                            priority = True)
+        if wildcards.rank == "allsamples":
+            selected_buckets, flat = subsample_phylogenetically(df, select_all = True)
+        else:
+            selected_buckets, flat = subsample_phylogenetically(df,
+                                                                bucket_priority=list_of_ranks,
+                                                                max_per_bucket=10,
+                                                                priority=True)
         summary_txt     = make_subsampling_summary_table(selected_buckets)
         breadcrumbs_txt = make_subsampling_report_breadcrumbs(selected_buckets)
         tree_txt        = make_subsampling_report_tree(selected_buckets)

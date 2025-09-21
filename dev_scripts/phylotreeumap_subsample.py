@@ -42,8 +42,7 @@ def return_kingdom_full_sort_order():
             "species group",
             "species subgroup",
             "species",
-            "subspecies",
-            "all"]
+            "subspecies"]
 
 def rank_sort_full():
     """Return a dictionary mapping taxonomic rankings to their sort order index."""
@@ -66,8 +65,9 @@ def return_kingdom_limited_order():
             "subfamily",
             "genus"]
 
-def generate_subsample_priorities(smallest_level = "family",
-                                  largest_level  = "phylum",
+def generate_subsample_priorities(smallest_level    = "family",
+                                  largest_level     = "phylum",
+                                  output_allsamples = False,
                                   custom_sample_set = None):
     """
     Generate a list of lists of sampling priorities and their fallbacks.
@@ -100,6 +100,10 @@ def generate_subsample_priorities(smallest_level = "family",
     # sort sample order from lower to higher rank based on the reverse full order
     sample_order = sorted(sample_order, key=lambda x: full_order.index(x), reverse=True)
 
+    # If the output_allsamples flag is set, add "allsamples" to the front of the list
+    if output_allsamples:
+        sample_order = ["allsamples"] + sample_order
+
     # Make a list of lists of priorities and their fallbacks, peeling back the lowest
     #  rank with each iteration.
     output = []
@@ -114,10 +118,12 @@ def subsample_phylogenetically(
     max_per_bucket   = 10,
     sep             = ";",
     seed            = 42,
-    bucket_priority = ("infraorder", "suborder", "order",
-                       "superorder", "subclass", "class"),
+    bucket_priority = ("genus", "subfamily", "family", "superfamily", "infraorder", "suborder", "order",
+                       "superorder", "subclass", "class", "superclass", "subphylum", "phylum", "kingdom"),
     priority        = False,
     priority_taxids = {9606, 7227, 7739, 6579, 499914},  # H. sapiens, D. melanogaster, B. floridae, P. maximus, R. esculentum
+    select_all      = False,
+    select_all_rank = "order"
 ):
     """
     df columns:
@@ -132,6 +138,9 @@ def subsample_phylogenetically(
         bucket_priority: iterable of taxonomic ranks to use for bucketing (in order of preference, so lower ranks first)
         priority: if True, try to include at most one representative per species of the priority_taxids set
         priority_taxids: set of species-level taxids to prioritize if priority=True
+        select_all: If True, also returns an additional bucket with all samples, organized at the specified select_all_rank.
+                          This is useful for plotting all the samples in the same pipeline, using the same helpful output functions.
+        select_all_rank: The taxonomic rank to use for the "all samples" bucket if select_all=True.
 
     Returns:
       selected_buckets: {bucket_tid: {
@@ -150,7 +159,7 @@ def subsample_phylogenetically(
     # avoid NameError if a global default isn't defined elsewhere
     priority_set = set(priority_taxids) if priority_taxids is not None else set()
 
-    # Parse and collect IDs
+    # -------- Parse lineage paths --------
     recs, all_ids = [], set()
     for _, row in df.iterrows():
         path = [int(x) for x in str(row["taxid_list_str"]).split(sep) if x]
@@ -168,6 +177,38 @@ def subsample_phylogenetically(
                 return hit
         return None
 
+    def bucket_id_at_rank(path, rank):
+        return next((t for t in path if rank_map.get(t) == rank), None)
+
+    # -------- Bucket --------
+    buckets = defaultdict(list)
+    if select_all:
+        for r in recs:
+            buckets[bucket_id_at_rank(r["path"], select_all_rank)].append(r)
+    else:
+        for r in recs:
+            buckets[bucket_id(r["path"])].append(r)
+
+    selected_buckets = {}
+    flat_selected = []
+
+    if select_all:
+        # take EVERYTHING in each bucket, no caps/priority
+        for tid, items in buckets.items():
+            chosen = list(items)
+            flat_selected.extend(r["sample"] for r in chosen)
+            selected_buckets[tid] = {
+                "rank": rank_map.get(tid, select_all_rank if tid is not None else "unranked"),
+                "name": name_map.get(tid, select_all_rank.capitalize() if tid is not None else "Unranked"),
+                "chosen": chosen,
+                "original_size": len(items),
+                "final_size": len(chosen),
+                "priority_count": 0,
+                "cap_exceeded": False,
+            }
+        return selected_buckets, flat_selected
+
+    # -------- Original logic handling --------
     # distance via longest common prefix
     def path_dist(pa, pb):
         i, L = 0, min(len(pa), len(pb))
@@ -215,14 +256,6 @@ def subsample_phylogenetically(
             # higher is better
             return (2 if s.startswith("GCF_") else 1 if s.startswith("GCA_") else 0, s)
         return max(cands, key=tag)
-
-    # Bucket
-    buckets = defaultdict(list)
-    for r in recs:
-        buckets[bucket_id(r["path"])].append(r)
-
-    selected_buckets = {}
-    flat_selected = []
 
     for tid, items in buckets.items():
         # --- Priority: at most ONE representative per priority species in this bucket ---
