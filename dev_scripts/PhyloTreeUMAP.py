@@ -1197,8 +1197,67 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
     if not os.path.exists(outhtml_dir):
         os.makedirs(outhtml_dir)
 
+    def _format_taxonomy_tooltip(lineage: str, max_chunk_length: int = 80) -> str:
+        """Return a tooltip-friendly lineage string with wrap hints."""
+        if lineage is None:
+            return ""
+
+        try:
+            if pd.isna(lineage):
+                return ""
+        except (TypeError, ValueError):
+            pass
+
+        if isinstance(lineage, float) and np.isnan(lineage):
+            return ""
+
+        lineage_str = str(lineage).strip()
+        if not lineage_str:
+            return ""
+
+        taxa = [tax.strip() for tax in lineage_str.split(';')]
+        taxa = [tax for tax in taxa if tax]
+        if not taxa:
+            return ""
+
+        zero_width_break = ";\u200b"
+        chunks = []
+        current_chunk = []
+        current_length = 0
+
+        for tax in taxa:
+            tax_length = len(tax)
+            if not current_chunk:
+                current_chunk.append(tax)
+                current_length = tax_length
+                continue
+
+            addition_length = tax_length + 2  # account for '; '
+            if current_length + addition_length > max_chunk_length:
+                chunks.append("; ".join(current_chunk))
+                current_chunk = [tax]
+                current_length = tax_length
+            else:
+                current_chunk.append(tax)
+                current_length += addition_length
+
+        if current_chunk:
+            chunks.append("; ".join(current_chunk))
+
+        formatted_chunks = [chunk.replace(';', zero_width_break) for chunk in chunks]
+        formatted_lineage = formatted_chunks[0]
+        for chunk in formatted_chunks[1:]:
+            formatted_lineage += f"{zero_width_break} {chunk}"
+
+        return formatted_lineage
+
     # Read in the UMAP data
     plot_data = pd.read_csv(UMAPdf, sep="\t")
+
+    if "taxname_list_str" in plot_data.columns:
+        plot_data["taxstring_tooltip"] = plot_data["taxname_list_str"].apply(_format_taxonomy_tooltip)
+    else:
+        plot_data["taxstring_tooltip"] = ""
 
     # Ensure a 'size' column for dynamic updates
     plot_data["size"] = 4  # Default dot size
@@ -1477,7 +1536,7 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
             var num_rows = active_data[keys[0]].length;
 
             // Remove unwanted columns (size, color, Unnamed), but keep "original_color" and rename it to "color"
-            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color" && k !== "alpha");
+            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color" && k !== "alpha" && k !== "taxstring_tooltip");
 
             // Rename "original_color" to "color"
             var renamed_keys = filtered_keys.map(k => k === "original_color" ? "color" : k);
@@ -1514,7 +1573,7 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
             <div style=\"width: 380px;\">
                 <div><span style=\"font-weight: bold;\">Sample:</span> @sample</div>
                 <div><span style=\"font-weight: bold;\">Taxid:</span> @taxid</div>
-                <div style=\"white-space: normal;\"><span style=\"font-weight: bold;\">Taxstring:</span> @taxname_list_str</div>
+                <div style=\"white-space: normal;\"><span style=\"font-weight: bold;\">Taxstring:</span> @taxstring_tooltip</div>
             </div>
             """,
             renderers=[scatter]
