@@ -1179,15 +1179,65 @@ def get_text_color(hex_color):
     brightness = (r * 299 + g * 587 + b * 114) / 1000
     return "#000000" if brightness > 128 else "#FFFFFF"  # Dark colors get white text, bright colors get black text
 
-def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = None):
+def mgt_mlt_plot_HTML(
+    UMAPdf,
+    outhtml,
+    plot_title="MLT_UMAP",
+    analysis_type=None,
+    plot_width=800,
+    plot_height=600,
+    plot_sizing_mode=None,
+    match_aspect=True,
+):
     """
     This function takes the UMAPdf and generates an interactive Bokeh plot
     with search functionality for RBH Ortholog and Gene Group.
     It also displays a table below the figure, allowing toggling between OR (||) and AND (&&) searches
     and enabling dataset export.
+
+    Parameters
+    ----------
+    plot_width, plot_height : int, optional
+        Initial dimensions for the plot canvas. These are used when the plot sizing
+        mode is ``None``/``"fixed"`` and act as starting values for responsive modes.
+    plot_sizing_mode : str, optional
+        Any Bokeh sizing mode (e.g. ``"stretch_both"`` or ``"scale_width"``). When provided the
+        output HTML will resize with the containing page instead of staying fixed at the
+        default dimensions.
+    match_aspect : bool, optional
+        When ``True`` the x and y ranges maintain the same scale so that the data is never
+        stretched during interactive resizing or zooming.
     """
     if analysis_type not in ["MGT", "MLT"]:
         raise ValueError(f"Invalid analysis_type: {analysis_type}. Must be 'MGT' or 'MLT'.")
+
+    valid_sizing_modes = {
+        None,
+        "fixed",
+        "stretch_width",
+        "stretch_height",
+        "stretch_both",
+        "scale_width",
+        "scale_height",
+        "scale_both",
+    }
+
+    if plot_sizing_mode is not None:
+        plot_sizing_mode = str(plot_sizing_mode).strip().lower()
+        if plot_sizing_mode == "":
+            plot_sizing_mode = None
+
+    if plot_sizing_mode not in valid_sizing_modes:
+        raise ValueError(
+            f"Invalid plot_sizing_mode: {plot_sizing_mode}. Expected one of: "
+            f"{', '.join(sorted(filter(None, valid_sizing_modes)))} or None."
+        )
+
+    for value, name in ((plot_width, "plot_width"), (plot_height, "plot_height")):
+        if not isinstance(value, (int, np.integer)):
+            raise TypeError(f"{name} must be provided as a positive integer.")
+        if value <= 0:
+            raise ValueError(f"{name} must be greater than zero.")
 
     if not outhtml.endswith(".html"):
         raise ValueError(f"The output file {outhtml} does not end with '.html'. Exiting.")
@@ -1298,11 +1348,19 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
         filtered_source = bokeh.models.ColumnDataSource(plot_data)  # Initially holds full data
 
     # Initialize Bokeh figure
-    plot = bokeh.plotting.figure(
+    figure_kwargs = dict(
         title=plot_title,
         tools="pan,wheel_zoom,box_zoom,reset,save",
-        width=800, height=600
+        width=int(plot_width),
+        height=int(plot_height),
     )
+    if plot_sizing_mode and plot_sizing_mode != "fixed":
+        figure_kwargs["sizing_mode"] = plot_sizing_mode
+
+    plot = bokeh.plotting.figure(**figure_kwargs)
+    plot.match_aspect = bool(match_aspect)
+    if plot.match_aspect:
+        plot.aspect_scale = 1
 
     # Add scatter plot
     scatter = plot.scatter(x="UMAP1", y="UMAP2",
@@ -1379,7 +1437,7 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
         data_table = bokeh.models.DataTable(
             source=filtered_source,
             columns=columns,
-            width=800, height=300,
+            width=int(plot_width), height=300,
             editable=True,
             sizing_mode="stretch_width"
         )
@@ -1564,9 +1622,24 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
         export_button.js_on_event("button_click", export_callback)
 
         # Layout
-        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text)
-        search_row = bokeh.layouts.row(search_group, search_toggle, search_rbh, update_button, export_button, align="end")
-        layout = bokeh.layouts.column(plot, taxonomy_row, search_row, data_table)
+        layout_kwargs = {}
+        row_kwargs = {}
+        if plot_sizing_mode and plot_sizing_mode != "fixed":
+            layout_kwargs["sizing_mode"] = plot_sizing_mode
+            if plot_sizing_mode in {"stretch_width", "stretch_both", "scale_width", "scale_both"}:
+                row_kwargs["sizing_mode"] = "stretch_width"
+
+        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, **row_kwargs)
+        search_row = bokeh.layouts.row(
+            search_group,
+            search_toggle,
+            search_rbh,
+            update_button,
+            export_button,
+            align="end",
+            **row_kwargs,
+        )
+        layout = bokeh.layouts.column(plot, taxonomy_row, search_row, data_table, **layout_kwargs)
 
     elif analysis_type == "MGT":
         # Add hover tool with wrapped taxonomy strings for readability
@@ -1690,8 +1763,15 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
 
         update_button.js_on_event("button_click", update_callback)
 
-        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, update_button)
-        layout = bokeh.layouts.column(plot, taxonomy_row)
+        layout_kwargs = {}
+        row_kwargs = {}
+        if plot_sizing_mode and plot_sizing_mode != "fixed":
+            layout_kwargs["sizing_mode"] = plot_sizing_mode
+            if plot_sizing_mode in {"stretch_width", "stretch_both", "scale_width", "scale_both"}:
+                row_kwargs["sizing_mode"] = "stretch_width"
+
+        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, update_button, **row_kwargs)
+        layout = bokeh.layouts.column(plot, taxonomy_row, **layout_kwargs)
 
     # Output to HTML
     bokeh.plotting.output_file(outhtml)
