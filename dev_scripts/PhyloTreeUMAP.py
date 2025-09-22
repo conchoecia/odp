@@ -1293,7 +1293,9 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
 
     # Create a Bokeh ColumnDataSource (for scatter plot & full table)
     source = bokeh.models.ColumnDataSource(plot_data)
-    filtered_source = bokeh.models.ColumnDataSource(plot_data)  # Initially holds full data
+    filtered_source = None
+    if analysis_type == "MLT":
+        filtered_source = bokeh.models.ColumnDataSource(plot_data)  # Initially holds full data
 
     # Initialize Bokeh figure
     plot = bokeh.plotting.figure(
@@ -1599,13 +1601,11 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
 
         update_callback = bokeh.models.CustomJS(args=dict(
             source=source,
-            filtered_source=filtered_source,
             search_taxid=search_taxid,
             rank_select=rank_select,
             rank_text=rank_text
         ), code="""
             var data = source.data;
-            var filtered_data = filtered_source.data;
             var colors = data['color'];
             var sizes = data['size'];
             var alphas = data['alpha'];
@@ -1622,10 +1622,6 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
             var show_all_data = !(apply_taxid || apply_rank);
 
             var selected_indices = [];
-
-            for (var key in filtered_data) {
-                filtered_data[key] = [];
-            }
 
             for (var i = 0; i < colors.length; i++) {
                 var match = true;
@@ -1682,12 +1678,6 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
                 }
 
                 sizes[i] = 4;
-
-                if (show_all_data || match) {
-                    for (var key in filtered_data) {
-                        filtered_data[key].push(data[key][i]);
-                    }
-                }
             }
 
             if (show_all_data) {
@@ -1696,7 +1686,6 @@ def mgt_mlt_plot_HTML(UMAPdf, outhtml, plot_title="MLT_UMAP", analysis_type = No
 
             source.selected.indices = selected_indices;
             source.change.emit();
-            filtered_source.change.emit();
         """)
 
         update_button.js_on_event("button_click", update_callback)
