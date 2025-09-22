@@ -1311,12 +1311,14 @@ def mgt_mlt_plot_HTML(
 
     # Ensure a 'size' column for dynamic updates
     plot_data["size"] = 4  # Default dot size
+    plot_data["base_size"] = plot_data["size"]
 
     # Store the original colors separately so they are never modified in the table
     plot_data["original_color"] = plot_data["color"]
 
     # Track the current alpha for each point (used for highlighting)
     plot_data["alpha"] = 0.8
+    plot_data["base_alpha"] = plot_data["alpha"]
 
     # Add a 'text_color' column based on original_color
     plot_data["text_color"] = plot_data["original_color"].apply(get_text_color)
@@ -1353,19 +1355,67 @@ def mgt_mlt_plot_HTML(
         tools="pan,wheel_zoom,box_zoom,reset,save",
         width=int(plot_width),
         height=int(plot_height),
+        output_backend="svg",
     )
     if plot_sizing_mode and plot_sizing_mode != "fixed":
         figure_kwargs["sizing_mode"] = plot_sizing_mode
 
     plot = bokeh.plotting.figure(**figure_kwargs)
+    plot.output_backend = "svg"
     plot.match_aspect = bool(match_aspect)
     if plot.match_aspect:
         plot.aspect_scale = 1
 
     # Add scatter plot
-    scatter = plot.scatter(x="UMAP1", y="UMAP2",
-                           source=source, size="size",
-                           color="color", alpha="alpha")
+    scatter = plot.scatter(
+        x="UMAP1",
+        y="UMAP2",
+        source=source,
+        size="size",
+        color="color",
+        alpha="alpha",
+        line_color=None,
+    )
+
+    default_size = float(plot_data["size"].iloc[0]) if not plot_data.empty else 4.0
+    default_alpha = float(plot_data["alpha"].iloc[0]) if not plot_data.empty else 0.8
+
+    size_slider = bokeh.models.Slider(
+        title="Dot Size",
+        start=1,
+        end=30,
+        step=1,
+        value=default_size,
+    )
+    alpha_slider = bokeh.models.Slider(
+        title="Dot Alpha",
+        start=0.0,
+        end=1.0,
+        step=0.05,
+        value=default_alpha,
+    )
+    grid_toggle = bokeh.models.Button(label="Grid: On", button_type="secondary")
+    grid_callback = bokeh.models.CustomJS(
+        args=dict(plot=plot, button=grid_toggle),
+        code="""
+            var new_state = true;
+            if (plot.xgrid.length > 0) {
+                new_state = !plot.xgrid[0].visible;
+            } else if (plot.ygrid.length > 0) {
+                new_state = !plot.ygrid[0].visible;
+            }
+
+            for (var i = 0; i < plot.xgrid.length; i++) {
+                plot.xgrid[i].visible = new_state;
+            }
+            for (var j = 0; j < plot.ygrid.length; j++) {
+                plot.ygrid[j].visible = new_state;
+            }
+
+            button.label = new_state ? "Grid: On" : "Grid: Off";
+        """,
+    )
+    grid_toggle.js_on_event("button_click", grid_callback)
 
     if analysis_type == "MLT":
         # Add hover tool for metadata display with wrapped text for readability
@@ -1454,7 +1504,9 @@ def mgt_mlt_plot_HTML(
             search_mode=search_mode,
             search_taxid=search_taxid,
             rank_select=rank_select,
-            rank_text=rank_text
+            rank_text=rank_text,
+            size_slider=size_slider,
+            alpha_slider=alpha_slider,
         ), code="""
             var data = source.data;
             var filtered_data = filtered_source.data;
@@ -1468,8 +1520,19 @@ def mgt_mlt_plot_HTML(
             var colors = data['color'];
             var sizes = data['size'];
             var alphas = data['alpha'];
+            var base_sizes = data['base_size'];
+            var base_alphas = data['base_alpha'];
             var original_colors = data['original_color'];
             var lineage_field = data.hasOwnProperty('taxid_list_str') ? data['taxid_list_str'] : null;
+
+            var slider_size = Math.max(size_slider.value, 1);
+            var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
+            var highlight_size_offset = Math.max(1, (base_sizes.length > 0 ? base_sizes[0] * 0.5 : 2));
+            var highlight_alpha_offset = Math.max(0.05, (base_alphas.length > 0 ? base_alphas[0] * 0.125 : 0.1));
+            var highlight_size = slider_size + highlight_size_offset;
+            var dim_size = slider_size;
+            var highlight_alpha = Math.min(1, slider_alpha + highlight_alpha_offset);
+            var dim_alpha = Math.max(0, slider_alpha * 0.2);
 
             var use_and_logic = search_mode.active; // True for AND (&&), False for OR (||)
 
@@ -1544,18 +1607,19 @@ def mgt_mlt_plot_HTML(
                 if (!show_all_data) {
                     if (match) {
                         colors[i] = original_colors[i];
-                        alphas[i] = 0.9;
+                        alphas[i] = highlight_alpha;
+                        sizes[i] = highlight_size;
                         selected_indices.push(i);
                     } else {
                         colors[i] = '#d3d3d3';
-                        alphas[i] = 0.15;
+                        alphas[i] = dim_alpha;
+                        sizes[i] = dim_size;
                     }
                 } else {
                     colors[i] = original_colors[i];
-                    alphas[i] = 0.8;
+                    alphas[i] = slider_alpha;
+                    sizes[i] = slider_size;
                 }
-
-                sizes[i] = 4;
 
                 if (show_all_data || match) {
                     for (var key in filtered_data) {
@@ -1575,6 +1639,8 @@ def mgt_mlt_plot_HTML(
         """)
 
         update_button.js_on_event("button_click", update_callback)
+        size_slider.js_on_change("value", update_callback)
+        alpha_slider.js_on_change("value", update_callback)
 
         # Toggle search mode (OR <-> AND) and update the button label
         toggle_callback = bokeh.models.CustomJS(args=dict(
@@ -1596,7 +1662,7 @@ def mgt_mlt_plot_HTML(
             var num_rows = active_data[keys[0]].length;
 
             // Remove unwanted columns (size, color, Unnamed), but keep "original_color" and rename it to "color"
-            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color" && k !== "alpha" && k !== "taxstring_tooltip");
+            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color" && k !== "alpha" && k !== "base_size" && k !== "base_alpha" && k !== "taxstring_tooltip");
 
             // Rename "original_color" to "color"
             var renamed_keys = filtered_keys.map(k => k === "original_color" ? "color" : k);
@@ -1629,6 +1695,7 @@ def mgt_mlt_plot_HTML(
             if plot_sizing_mode in {"stretch_width", "stretch_both", "scale_width", "scale_both"}:
                 row_kwargs["sizing_mode"] = "stretch_width"
 
+        control_row = bokeh.layouts.row(size_slider, alpha_slider, grid_toggle, **row_kwargs)
         taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, **row_kwargs)
         search_row = bokeh.layouts.row(
             search_group,
@@ -1639,7 +1706,7 @@ def mgt_mlt_plot_HTML(
             align="end",
             **row_kwargs,
         )
-        layout = bokeh.layouts.column(plot, taxonomy_row, search_row, data_table, **layout_kwargs)
+        layout = bokeh.layouts.column(plot, control_row, taxonomy_row, search_row, data_table, **layout_kwargs)
 
     elif analysis_type == "MGT":
         # Add hover tool with wrapped taxonomy strings for readability
@@ -1676,12 +1743,16 @@ def mgt_mlt_plot_HTML(
             source=source,
             search_taxid=search_taxid,
             rank_select=rank_select,
-            rank_text=rank_text
+            rank_text=rank_text,
+            size_slider=size_slider,
+            alpha_slider=alpha_slider,
         ), code="""
             var data = source.data;
             var colors = data['color'];
             var sizes = data['size'];
             var alphas = data['alpha'];
+            var base_sizes = data['base_size'];
+            var base_alphas = data['base_alpha'];
             var original_colors = data['original_color'];
             var lineage_field = data.hasOwnProperty('taxid_list_str') ? data['taxid_list_str'] : null;
 
@@ -1689,6 +1760,15 @@ def mgt_mlt_plot_HTML(
             var taxid_terms = taxid_raw === "" ? [] : taxid_raw.split(/[\s,;]+/).filter(t => t.length > 0);
             var rank_field = rank_select.value;
             var rank_input = rank_text.value.trim().toLowerCase();
+
+            var slider_size = Math.max(size_slider.value, 1);
+            var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
+            var highlight_size_offset = Math.max(1, (base_sizes.length > 0 ? base_sizes[0] * 0.5 : 2));
+            var highlight_alpha_offset = Math.max(0.05, (base_alphas.length > 0 ? base_alphas[0] * 0.125 : 0.1));
+            var highlight_size = slider_size + highlight_size_offset;
+            var dim_size = slider_size;
+            var highlight_alpha = Math.min(1, slider_alpha + highlight_alpha_offset);
+            var dim_alpha = Math.max(0, slider_alpha * 0.2);
 
             var apply_taxid = taxid_terms.length > 0;
             var apply_rank = rank_field !== "" && rank_input !== "";
@@ -1739,18 +1819,19 @@ def mgt_mlt_plot_HTML(
                 if (!show_all_data) {
                     if (match) {
                         colors[i] = original_colors[i];
-                        alphas[i] = 0.9;
+                        alphas[i] = highlight_alpha;
+                        sizes[i] = highlight_size;
                         selected_indices.push(i);
                     } else {
                         colors[i] = '#d3d3d3';
-                        alphas[i] = 0.15;
+                        alphas[i] = dim_alpha;
+                        sizes[i] = dim_size;
                     }
                 } else {
                     colors[i] = original_colors[i];
-                    alphas[i] = 0.8;
+                    alphas[i] = slider_alpha;
+                    sizes[i] = slider_size;
                 }
-
-                sizes[i] = 4;
             }
 
             if (show_all_data) {
@@ -1762,6 +1843,8 @@ def mgt_mlt_plot_HTML(
         """)
 
         update_button.js_on_event("button_click", update_callback)
+        size_slider.js_on_change("value", update_callback)
+        alpha_slider.js_on_change("value", update_callback)
 
         layout_kwargs = {}
         row_kwargs = {}
@@ -1770,8 +1853,9 @@ def mgt_mlt_plot_HTML(
             if plot_sizing_mode in {"stretch_width", "stretch_both", "scale_width", "scale_both"}:
                 row_kwargs["sizing_mode"] = "stretch_width"
 
+        control_row = bokeh.layouts.row(size_slider, alpha_slider, grid_toggle, **row_kwargs)
         taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, update_button, **row_kwargs)
-        layout = bokeh.layouts.column(plot, taxonomy_row, **layout_kwargs)
+        layout = bokeh.layouts.column(plot, control_row, taxonomy_row, **layout_kwargs)
 
     # Output to HTML
     bokeh.plotting.output_file(outhtml)
