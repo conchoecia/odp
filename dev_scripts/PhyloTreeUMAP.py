@@ -1247,6 +1247,27 @@ def mgt_mlt_plot_HTML(
     if not os.path.exists(outhtml_dir):
         os.makedirs(outhtml_dir)
 
+    def _prune_mgt_columns(df: pd.DataFrame) -> pd.DataFrame:
+        """Return a copy of ``df`` with only the columns required for MGT HTML output."""
+
+        core_required = {"sample", "taxid", "UMAP1", "UMAP2", "color"}
+        optional_columns = {"taxname", "taxid_list_str", "taxname_list_str"}
+
+        required_columns = core_required | {col for col in df.columns if col.startswith("level_")}
+        keep_columns = [
+            col
+            for col in df.columns
+            if col in required_columns or col in optional_columns
+        ]
+
+        # If any of the essential fields are missing we leave the dataframe untouched so
+        # that the caller can surface the error downstream.
+        missing_required = core_required - set(keep_columns)
+        if missing_required:
+            return df
+
+        return df.loc[:, keep_columns].copy()
+
     def _format_taxonomy_tooltip(lineage: str, max_chunk_length: int = 80) -> str:
         """Return a tooltip-friendly lineage string with wrap hints."""
         if lineage is None:
@@ -1303,6 +1324,9 @@ def mgt_mlt_plot_HTML(
 
     # Read in the UMAP data
     plot_data = pd.read_csv(UMAPdf, sep="\t")
+
+    if analysis_type == "MGT":
+        plot_data = _prune_mgt_columns(plot_data)
 
     if "taxname_list_str" in plot_data.columns:
         plot_data["taxstring_tooltip"] = plot_data["taxname_list_str"].apply(_format_taxonomy_tooltip)
