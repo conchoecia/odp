@@ -1394,7 +1394,7 @@ def mgt_mlt_plot_HTML(
         step=0.05,
         value=default_alpha,
     )
-    grid_toggle = bokeh.models.Button(label="Grid: On", button_type="secondary")
+    grid_toggle = bokeh.models.Button(label="Grid: On", button_type="default")
     grid_callback = bokeh.models.CustomJS(
         args=dict(plot=plot, button=grid_toggle),
         code="""

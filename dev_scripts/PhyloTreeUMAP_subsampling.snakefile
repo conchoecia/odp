@@ -1483,7 +1483,7 @@ rule odog_umap_oldinefficient_plot_html:
                          f"<h3>{msg}</h3></body></html>")
         else:
             # Normal plotting path
-            mgt_mlt_plot_HTML(input.df, output.html, plot_title=plot_title, analysis_type="MGT")
+            mgt_mlt_plot_HTML(input.df, output.html, plot_title=plot_title, analysis_type="MGT", plot_sizing_mode = "scale_both")
 
 rule odog_umap_oldinefficient_plot_pdf:
     input:
