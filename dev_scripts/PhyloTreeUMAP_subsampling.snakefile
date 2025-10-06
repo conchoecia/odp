@@ -1,5 +1,7 @@
 """
-The point of this script is to subsample the availble rbh files based on taxonomy
+The point of this script is to subsample the availble rbh files based on taxonomy.
+
+TODO: - We should also include the sentinel value as a wildcard to enable users to try other sentinel values.
 """
 
 from PhyloTreeUMAP import (algcomboix_file_to_dict,
@@ -90,22 +92,51 @@ if results_base_directory.endswith("/"):
 # These are the parameters in the 2024 biorxiv supplementary figure S7
 odog_n    = [20, 35, 50, 75, 100, 150, 250]
 odog_m    = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
-#odog_n    = [20, 35, 50, 75, 100, 150, 250]
-#odog_m    = [0.5, 0.75, 0.9]
-#odog_n    = [150]
-#odog_m    = [0.75]
-odog_size = ["large"]
-if "odog_size" in config:
-    odog_size = [config["odog_size"]]
+odog_n    = [50, 150]
+odog_m    = [0.75, 1.0]
+
+# MGT_sentinel_size is now a list of integers representing sentinel values for missing data
+# Common values: 0 (small), 999999999999 (large), or any other integer
+
+if "MGT_sentinel_size" not in config:
+    config["MGT_sentinel_size"] = [999_999_999_999]
+# check that config["MGT_sentinel_size"] is a list of integers
+if not isinstance(config["MGT_sentinel_size"], list):
+    # raise an error
+    raise ValueError("MGT_sentinel_size must be a list of integers")
+# check that everything in the list is an integer
+for x in config["MGT_sentinel_size"]:
+    if not isinstance(x, int):
+        raise ValueError("MGT_sentinel_size must be a list of integers")
+
+if "MGT_sentinel_size" in config:
+    MGT_sentinel_size = config["MGT_sentinel_size"]
 if "odog_n" in config:
     odog_n = config["odog_n"]
 if "odog_m" in config:
     odog_m = config["odog_m"]
 
-subsample_dict = {x[0]: x for x in generate_subsample_priorities(output_allsamples = True)}
+# get the subsampling dictionary to figure out what ranks to do this for
+if "subsample_options" not in config:
+    config["subsample_options"] = {}
+
+if "smallest_level" not in config["subsample_options"]:
+    config["subsample_options"]["smallest_level"] = "genus"
+if "largest_level" not in config["subsample_options"]:
+    config["subsample_options"]["largest_level"] = "phylum"
+if "max_samples_per_rank" not in config["subsample_options"]:
+    config["subsample_options"]["max_samples_per_rank"] = 10
+
+# set the subsampling options
+subsample_dict = {x[0]: x for x in generate_subsample_priorities(
+      smallest_level = config["subsample_options"]["smallest_level"],
+      largest_level  = config["subsample_options"]["largest_level"]
+    )}
 
 wildcard_constraints:
-    rank="[A-Za-z]+"
+    rank="[A-Za-z]+",
+    sizeNaN= r"[+-]?\d+",   # allows -42, +7, 0, 123
+    n="[0-9]+",
 
 rule all:
     input:
@@ -120,24 +151,24 @@ rule all:
                 n = odog_n,
                 m = odog_m,
                 rank = list(subsample_dict.keys()),
-                sizeNaN = odog_size),
+                sizeNaN = MGT_sentinel_size),
         expand(results_base_directory + "/subsample_umaps/{rank}/subsample_{rank}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.bokeh.html",
                 n = odog_n,
                 m = odog_m,
                 rank = list(subsample_dict.keys()),
-                sizeNaN = odog_size),
+                sizeNaN = MGT_sentinel_size),
         expand(results_base_directory + "/subsample_umaps/{rank}/subsample_{rank}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.pdf",
                 n = odog_n,
                 m = odog_m,
                 rank = list(subsample_dict.keys()),
-                sizeNaN = odog_size),
+                sizeNaN = MGT_sentinel_size),
         expand(results_base_directory + "/subsample_umaps/subsample_{rank}.missing_{sizeNaN}.paramsweep.pdf",
                 rank = list(subsample_dict.keys()),
-                sizeNaN = odog_size),
+                sizeNaN = MGT_sentinel_size),
         expand(results_base_directory + "/subsample_umaps/allranks.neighbors_{n}.mind_{m}.missing_{sizeNaN}.phyloresample.pdf",
                 n = odog_n,
                 m = odog_m,
-                sizeNaN = odog_size),
+                sizeNaN = MGT_sentinel_size),
         # newer implementation
         #results_base_directory + "/allsamples/allsamples.neighbors_{n}.mind_{m}.missing_{sizeNaN}.df",
         #results_base_directory + "/reduced/pcs.tsv", # this is from feature selection
@@ -167,7 +198,7 @@ rule all:
         #        m = odog_m,
         #        metric = "euclidean"),
         #expand(results_base_directory + "/allsamples/allsamples.missing_{sizeNaN}.paramsweep.pdf",
-        #        sizeNaN = odog_size)
+        #        sizeNaN = MGT_sentinel_size)
         #    ┓     ┏┓┓ ┏┓┳┓┏┓┏┓
         # ┏┓┏┫┏┓┏┓ ┃ ┃ ┣┫┃┃┣ ┗┓ - One-Dot-One-Genome plots FOR SPECIFIC CLADES
         # ┗┛┗┻┗┛┗┫ ┗┛┗┛┛┗┻┛┗┛┗┛   Each dot represents a single genome, and the data vector is the distance pairs
@@ -1373,8 +1404,6 @@ rule odogPlotUMAP_old_inefficient:
         bigUMAPSlots = 1,
     benchmark:
         results_base_directory + "/benchmarks/odogPlotUMAP_old_inefficient/subsample_{rank}.neighbors_{n}.mind_{m}.missing_{sizeNaN}.tsv"
-    params:
-        sentinel_missing = 999_999_999_999
     run:
         import os, shutil, tempfile, time
         from pathlib import Path
@@ -1417,16 +1446,18 @@ rule odogPlotUMAP_old_inefficient:
 
             # -------- run DF-only UMAP on local copies ----------
             print(f"[ODOG-UMAP] Starting the UMAP calculation.", flush=True)
+            # Convert sizeNaN wildcard to integer sentinel value
+            sentinel_value = int(wildcards.sizeNaN)
             plot_umap_from_files_just_df(
                 sampledffile     = str(sample_local),
                 ALGcomboixfile   = str(combo_local),
                 coofile          = str(coo_local),
                 sample           = "allsamples",
-                smalllargeNaN    = wildcards.sizeNaN,   # "small" or "large"
+                smalllargeNaN    = sentinel_value,  # Now an integer sentinel value
                 n_neighbors      = int(wildcards.n),
                 min_dist         = float(wildcards.m),
                 dfoutfilepath    = output.df,
-                missing_value_as = params.sentinel_missing,
+                missing_value_as = sentinel_value,  # Use the same sentinel value
                 threads          = threads,
                 print_prefix     = "[ODOG-UMAP] ",
             )

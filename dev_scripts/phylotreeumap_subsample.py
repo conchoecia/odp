@@ -67,50 +67,141 @@ def return_kingdom_limited_order():
 
 def generate_subsample_priorities(smallest_level    = "family",
                                   largest_level     = "phylum",
-                                  output_allsamples = False,
                                   custom_sample_set = None):
     """
     Generate a list of lists of sampling priorities and their fallbacks.
     The list starts with the smallest level and ends with the largest level.
 
-    Inputs:
-      - smallest_level: The lowest taxonomic rank to include (default: "genus").
-      - largest_level: The highest taxonomic rank to include (default: "class").
-      - custom_sample_set: An optional set of samples to prioritize (default: None).
-                           Could be a sortable iterable like ["family", "order", "class"].
-                           This will limit the outputs and their fallbacks to these ranks,
-                           adding the higher rankins than the largest level to avoid
-                           incorrectly getting them ranked as None.
+    This function iterates through taxonomic ranks from the smallest (most specific) to
+    the largest (most general), creating a priority list for each level that includes
+    all fallback levels up to the largest.
+
+    Args:
+      - smallest_level: The lowest (most specific) taxonomic rank to start from.
+                       Can be "allsamples" to include all samples as the starting point,
+                       or any rank from the limited order list (default: "family").
+                       Must be None if custom_sample_set is provided.
+      - largest_level: The highest (most general) taxonomic rank to stop at.
+                      Can also be "allsamples" (default: "phylum").
+                      If both smallest_level and largest_level are "allsamples",
+                      returns [["allsamples"]].
+                      Must be None if custom_sample_set is provided.
+      - custom_sample_set: An optional set of ranks to use instead of the default limited order.
+                          Could be a sortable iterable like ["family", "order", "class"].
+                          When provided, smallest_level and largest_level must both be None.
+                          The function will iterate through all ranks in the custom set.
+
+    Available taxonomic ranks (from return_kingdom_limited_order()):
+        ["kingdom", "phylum", "subphylum", "superclass", "class", "subclass",
+         "superorder", "order", "suborder", "infraorder", "superfamily",
+         "family", "subfamily", "genus"]
+
+    You can also use "allsamples" as smallest_level and/or largest_level.
+
+    Returns:
+      A list of lists, where each inner list is a priority sequence starting at
+      a particular rank and including all fallback ranks.
+
+    Examples:
+      generate_subsample_priorities(smallest_level="genus", largest_level="order")
+      might return:
+      [['genus', 'subfamily', 'family', 'superfamily', 'infraorder', 'suborder', 'order'],
+       ['subfamily', 'family', 'superfamily', 'infraorder', 'suborder', 'order'],
+       ['family', 'superfamily', 'infraorder', 'suborder', 'order'],
+       ...
+       ['order']]
+
+      generate_subsample_priorities(smallest_level="allsamples", largest_level="allsamples")
+      returns:
+      [['allsamples']]
+
+      generate_subsample_priorities(smallest_level=None, largest_level=None,
+                                   custom_sample_set=["family", "order", "class"])
+      returns:
+      [['family', 'order', 'class'],
+       ['order', 'class'],
+       ['class']]
     """
-    # check that smallest_level is less than largest_level
-    full_order = return_kingdom_full_sort_order()
-    if full_order.index(smallest_level) <= full_order.index(largest_level):
-        print(f"Error: smallest_level '{smallest_level}' must be lower than largest_level '{largest_level}'")
-        sys.exit(1)
-    sample_order = []
+    full_order =  return_kingdom_full_sort_order() + ["allsamples"]
+
+    # Enforce that custom_sample_set and smallest_level/largest_level are mutually exclusive
+    if custom_sample_set is not None:
+        if smallest_level is not None or largest_level is not None:
+            print(f"Error: When using custom_sample_set, both smallest_level and largest_level must be None.")
+            print(f"  You provided: smallest_level={smallest_level}, largest_level={largest_level}")
+            sys.exit(1)
+    else:
+        # Validate smallest_level and largest_level are valid ranks or "allsamples"
+        if smallest_level != "allsamples" and smallest_level not in full_order:
+            print(f"Error: smallest_level '{smallest_level}' is not a valid rank. Must be 'allsamples' or one of: {full_order}")
+            sys.exit(1)
+        if largest_level != "allsamples" and largest_level not in full_order:
+            print(f"Error: largest_level '{largest_level}' is not a valid rank. Must be 'allsamples' or one of: {full_order}")
+            sys.exit(1)
+
+    # Special case: both are "allsamples"
+    if custom_sample_set is None and (smallest_level == largest_level):
+        return [[smallest_level]]
+
+    # Determine the sample order
     if custom_sample_set is None:
         sample_order = return_kingdom_limited_order()
     else:
         sample_order = list(custom_sample_set)
-        # Add any higher ranks than the largest_level to avoid None rankings
-        largest_index = full_order.index(largest_level)
-        for rank in full_order[largest_index+1:]:
-            if rank not in sample_order:
-                sample_order.append(rank)
-    # sort sample order from lower to higher rank based on the reverse full order
+
+    # Sort sample order from lower to higher rank (genus -> ... -> kingdom)
+    # "allsamples" is at index 0 in full_order, so it sorts to the front with reverse=True
     sample_order = sorted(sample_order, key=lambda x: full_order.index(x), reverse=True)
 
-    # If the output_allsamples flag is set, add "allsamples" to the front of the list
-    if output_allsamples:
-        sample_order = ["allsamples"] + sample_order
+    # Determine start and end indices
+    if custom_sample_set is not None:
+        # Use the entire custom sample set
+        start_index = 0
+        end_index = len(sample_order) - 1
+    else:
+        # Validate and find indices based on smallest_level and largest_level
+        if smallest_level == "allsamples":
+            # Add "allsamples" to the front
+            sample_order = ["allsamples"] + sample_order
+            start_index = 0
+        else:
+            # Validate that smallest_level is in sample_order
+            if smallest_level not in sample_order:
+                print(f"Error: smallest_level '{smallest_level}' not found in sample order: {sample_order}")
+                sys.exit(1)
+            start_index = sample_order.index(smallest_level)
+
+        if largest_level == "allsamples":
+            # If largest_level is "allsamples", it must be at position 0. We already handled the case where smallest_level==largest_level=="allsamples".
+            # (only valid if smallest_level is also "allsamples", which we already handled)
+            print(f"Error: largest_level cannot be 'allsamples' unless smallest_level is also 'allsamples'")
+            sys.exit(1)
+        else:
+            # Validate that largest_level is in sample_order
+            if largest_level not in sample_order:
+                print(f"Error: largest_level '{largest_level}' not found in sample order: {sample_order}")
+                sys.exit(1)
+            end_index = sample_order.index(largest_level)
+
+        # Validate that smallest_level is more specific than largest_level
+        if smallest_level != "allsamples" and largest_level != "allsamples":
+            if full_order.index(smallest_level) <= full_order.index(largest_level):
+                print(f"Error: smallest_level '{smallest_level}' must be lower (more specific) than largest_level '{largest_level}'")
+                print(f"  Hint: More specific ranks have higher indices in the hierarchy (genus > family > order > class > phylum > kingdom)")
+                sys.exit(1)
+
+        # Validate that start_index <= end_index
+        if start_index > end_index:
+            print(f"Error: Cannot iterate from '{smallest_level}' (index {start_index}) to '{largest_level}' (index {end_index})")
+            print(f"  Effective sample order: {sample_order}")
+            sys.exit(1)
 
     # Make a list of lists of priorities and their fallbacks, peeling back the lowest
-    #  rank with each iteration.
+    # rank with each iteration, starting from smallest_level and stopping at largest_level
     output = []
-    for i in range(len(sample_order)):
+    for i in range(start_index, end_index + 1):
         output.append(sample_order[i:])
-        if sample_order[i] == largest_level:
-            break
+
     return output
 
 def subsample_phylogenetically(

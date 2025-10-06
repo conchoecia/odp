@@ -354,25 +354,26 @@ def plot_precomputed_umap(sampledffile, distance_matrix_file,
     distance_matrix_file : str
         Path to a square distance matrix where both axes correspond to the
         order of samples in ``sampledffile``.
-    smalllargeNaN : str
-        Either ``"small"`` or ``"large"`` indicating how missing values
-        should be filled. ``"large"`` replaces missing values with
-        ``missing_value_as``; ``"small"`` replaces them with 0.
+    smalllargeNaN : int or float
+        Sentinel value for missing data. If 0, missing values are replaced with 0.
+        Otherwise, missing values are replaced with ``missing_value_as``.
     n_neighbors, min_dist : int, float
         UMAP parameters.
     dfoutfilepath, htmloutfilepath : str
         Output files for the embedding dataframe and bokeh plot.
     missing_value_as : float, optional
-        Value used to fill missing entries when ``smalllargeNaN`` is
-        ``"large"``. Defaults to ``9999999999``.
+        Value used to fill missing entries when ``smalllargeNaN`` is not 0.
+        Defaults to ``9999999999``. If ``smalllargeNaN`` is provided as a 
+        non-zero value, that value will be used directly.
     """
 
     for fp in [sampledffile, distance_matrix_file]:
         if not os.path.exists(fp):
             raise IOError(f"The file {fp} does not exist. Exiting.")
 
-    if smalllargeNaN not in {"small", "large"}:
-        raise ValueError("smalllargeNaN must be 'small' or 'large'")
+    # Convert to numeric if needed
+    if isinstance(smalllargeNaN, str):
+        smalllargeNaN = int(smalllargeNaN)
 
     cdf = pd.read_csv(sampledffile, sep="\t", index_col=0)
     dist_df = pd.read_csv(distance_matrix_file, sep="\t", index_col=0)
@@ -383,8 +384,10 @@ def plot_precomputed_umap(sampledffile, distance_matrix_file,
         raise ValueError(
             "Distance matrix size does not match number of samples.")
 
-    if smalllargeNaN == "large":
-        dist_df = dist_df.fillna(missing_value_as)
+    # Use smalllargeNaN as the sentinel value directly if it's non-zero
+    if smalllargeNaN != 0:
+        fill_value = smalllargeNaN if smalllargeNaN != missing_value_as else missing_value_as
+        dist_df = dist_df.fillna(fill_value)
     else:
         dist_df = dist_df.fillna(0)
 
@@ -1336,6 +1339,7 @@ def mgt_mlt_plot_HTML(
     # Ensure a 'size' column for dynamic updates
     plot_data["size"] = 4  # Default dot size
     plot_data["base_size"] = plot_data["size"]
+    plot_data["original_size"] = plot_data["size"]  # Store original size, never modified
 
     # Store the original colors separately so they are never modified in the table
     plot_data["original_color"] = plot_data["color"]
@@ -1358,10 +1362,11 @@ def mgt_mlt_plot_HTML(
 
     level_columns = sorted(level_columns, key=_rank_key)
     rank_options = []
-    if "taxname" in plot_data.columns:
-        rank_options.append(("taxname", "Taxname"))
+    # Put Full lineage first as default
     if "taxname_list_str" in plot_data.columns:
         rank_options.append(("taxname_list_str", "Full lineage"))
+    if "taxname" in plot_data.columns:
+        rank_options.append(("taxname", "Taxname"))
     rank_options.extend([(col, col.replace("_", " ").title()) for col in level_columns])
     has_rank_options = len(rank_options) > 0
     rank_select_options = rank_options if has_rank_options else [("", "No taxonomic ranks available")]
@@ -1369,14 +1374,19 @@ def mgt_mlt_plot_HTML(
 
     # Create a Bokeh ColumnDataSource (for scatter plot & full table)
     source = bokeh.models.ColumnDataSource(plot_data)
+    
+    # Create an empty filtered source that will be populated by JavaScript
+    # This avoids duplicating the full dataset in the HTML file
     filtered_source = None
-    if analysis_type == "MLT":
-        filtered_source = bokeh.models.ColumnDataSource(plot_data)  # Initially holds full data
+    if analysis_type in ["MLT", "MGT"]:
+        # Initialize with empty data structure matching the source columns
+        empty_data = {col: [] for col in plot_data.columns}
+        filtered_source = bokeh.models.ColumnDataSource(empty_data)
 
     # Initialize Bokeh figure
     figure_kwargs = dict(
         title=plot_title,
-        tools="pan,wheel_zoom,box_zoom,reset,save",
+        tools="pan,wheel_zoom,box_zoom,lasso_select,reset,save",
         width=int(plot_width),
         height=int(plot_height),
         output_backend="svg",
@@ -1422,20 +1432,12 @@ def mgt_mlt_plot_HTML(
     grid_callback = bokeh.models.CustomJS(
         args=dict(plot=plot, button=grid_toggle),
         code="""
-            var new_state = true;
-            if (plot.xgrid.length > 0) {
-                new_state = !plot.xgrid[0].visible;
-            } else if (plot.ygrid.length > 0) {
-                new_state = !plot.ygrid[0].visible;
-            }
-
-            for (var i = 0; i < plot.xgrid.length; i++) {
-                plot.xgrid[i].visible = new_state;
-            }
-            for (var j = 0; j < plot.ygrid.length; j++) {
-                plot.ygrid[j].visible = new_state;
-            }
-
+            // Toggle grid visibility
+            var new_state = !plot.xgrid[0].visible;
+            
+            plot.xgrid[0].visible = new_state;
+            plot.ygrid[0].visible = new_state;
+            
             button.label = new_state ? "Grid: On" : "Grid: Off";
         """,
     )
@@ -1508,16 +1510,115 @@ def mgt_mlt_plot_HTML(
         ]
 
         # Create DataTable with properly adjusted column sizes
+        # Enable row selection: click anywhere on row to select, Shift+click for range, Ctrl/Cmd+click for multiple
         data_table = bokeh.models.DataTable(
             source=filtered_source,
             columns=columns,
             width=int(plot_width), height=300,
-            editable=True,
+            editable=False,  # Disable editing to avoid conflicts
+            selectable=True,  # Enable row selection by clicking on the row
             sizing_mode="stretch_width"
         )
 
         # Button to export the current table dataset
         export_button = bokeh.models.Button(label="Export Data Below", button_type="success")
+        
+        # Add a callback to highlight table-selected rows in red on the plot
+        table_selection_callback = bokeh.models.CustomJS(args=dict(
+            source=source,
+            filtered_source=filtered_source,
+        ), code="""
+            console.log('Table selection callback triggered');
+            var selected_table_rows = filtered_source.selected.indices;
+            console.log('Selected table rows:', selected_table_rows);
+            
+            // Get the data from both sources
+            var source_data = source.data;
+            var filtered_data = filtered_source.data;
+            var colors = source_data['color'];
+            var sizes = source_data['size'];
+            var original_colors = source_data['original_color'];
+            var original_sizes = source_data['original_size'];
+
+            console.log('Filtered data length:', filtered_data['UMAP1'].length);
+            console.log('Source data length:', source_data['UMAP1'].length);
+
+            // Build a set of all indices that are currently in the table (visible)
+            var table_indices = new Set();
+            for (var i = 0; i < filtered_data['UMAP1'].length; i++) {
+                var umap1_val = filtered_data['UMAP1'][i];
+                var umap2_val = filtered_data['UMAP2'][i];
+
+                // Find this point in the main source
+                for (var j = 0; j < source_data['UMAP1'].length; j++) {
+                    if (Math.abs(source_data['UMAP1'][j] - umap1_val) < 0.0001 &&
+                        Math.abs(source_data['UMAP2'][j] - umap2_val) < 0.0001) {
+                        table_indices.add(j);
+                        break;
+                    }
+                }
+            }
+
+            console.log('Table indices:', Array.from(table_indices));
+
+            // If nothing selected in table, restore original colors and sizes for table points only
+            if (selected_table_rows.length === 0) {
+                console.log('No rows selected, restoring original colors and sizes for table points only');
+                for (var k = 0; k < colors.length; k++) {
+                    if (table_indices.has(k)) {
+                        colors[k] = original_colors[k];
+                        sizes[k] = original_sizes[k];  // Restore to original size
+                    }
+                }
+                source.change.emit();
+                return;
+            }
+            
+            // Create a set of indices in the main source that should be red
+            var red_indices = new Set();
+            
+            // For each selected row in the table, find its corresponding index in source
+            for (var i = 0; i < selected_table_rows.length; i++) {
+                var table_row_idx = selected_table_rows[i];
+                
+                // Get unique identifiers from the filtered row
+                var umap1_val = filtered_data['UMAP1'][table_row_idx];
+                var umap2_val = filtered_data['UMAP2'][table_row_idx];
+                
+                console.log('Looking for point at table row', table_row_idx, ':', umap1_val, umap2_val);
+                
+                // Find this point in the main source
+                for (var j = 0; j < source_data['UMAP1'].length; j++) {
+                    if (Math.abs(source_data['UMAP1'][j] - umap1_val) < 0.0001 && 
+                        Math.abs(source_data['UMAP2'][j] - umap2_val) < 0.0001) {
+                        console.log('Found match at source index:', j);
+                        red_indices.add(j);
+                        break;
+                    }
+                }
+            }
+            
+            console.log('Red indices:', Array.from(red_indices));
+            
+            // Update colors and sizes - set selected rows to red and twice as big
+            for (var k = 0; k < colors.length; k++) {
+                if (red_indices.has(k)) {
+                    colors[k] = '#FF0000';  // Red for selected
+                    sizes[k] = original_sizes[k] * 2;  // Make it twice the original size
+                } else if (table_indices.has(k)) {
+                    // Restore original color and size if this point is in the table
+                    colors[k] = original_colors[k];
+                    sizes[k] = original_sizes[k];  // Restore to original size
+                }
+                // If not in table_indices, leave the color/size as-is (stay grey if currently grey)
+            }
+            
+            console.log('Emitting source change');
+            source.change.emit();
+        """)
+        
+        # Trigger when table selection changes
+        filtered_source.selected.js_on_change('indices', table_selection_callback)
 
         # JavaScript Callback for Update Button (Replaces need to press Enter)
         update_callback = bokeh.models.CustomJS(args=dict(
@@ -1565,8 +1666,31 @@ def mgt_mlt_plot_HTML(
             var apply_taxid = taxid_terms.length > 0;
             var apply_rank = rank_field !== "" && rank_input !== "";
 
-            // If no search term is provided, show all data in the table and reset colors
-            var show_all_data = !(apply_rbh || apply_group || apply_taxid || apply_rank);
+            // Check if this is a complete reset (no search terms and want to clear everything)
+            var has_search_terms = apply_rbh || apply_group || apply_taxid || apply_rank;
+            var is_complete_reset = !has_search_terms;
+            
+            // If this is a complete reset, clear lasso selection immediately
+            if (is_complete_reset) {
+                source.selected.indices = [];
+            }
+            
+            // Determine if we should use lasso selection or search terms
+            var lasso_indices = source.selected.indices;
+            
+            // If user has entered search terms, they override lasso selection
+            var use_lasso = false;
+            if (lasso_indices.length > 0 && !has_search_terms) {
+                // Use lasso only if no search terms are present
+                use_lasso = true;
+            } else if (lasso_indices.length > 0 && has_search_terms) {
+                // Clear lasso selection when search terms are entered
+                source.selected.indices = [];
+                lasso_indices = [];
+            }
+            
+            // If no search terms and no lasso, show all data
+            var show_all_data = !use_lasso && !has_search_terms;
 
             var selected_indices = [];
 
@@ -1578,53 +1702,59 @@ def mgt_mlt_plot_HTML(
             for (var i = 0; i < colors.length; i++) {
                 var match = true;
 
-                if (apply_rbh || apply_group) {
-                    var rbh_match = apply_rbh ? String(data['rbh'][i] || '').toLowerCase().includes(rbh_input) : false;
-                    var group_match = apply_group ? String(data['gene_group'][i] || '').toLowerCase().includes(group_input) : false;
+                // Lasso selection overrides other search methods
+                if (use_lasso) {
+                if (use_lasso) {
+                    match = lasso_indices.indexOf(i) !== -1;
+                } else {
+                    if (apply_rbh || apply_group) {
+                        var rbh_match = apply_rbh ? String(data['rbh'][i] || '').toLowerCase().includes(rbh_input) : false;
+                        var group_match = apply_group ? String(data['gene_group'][i] || '').toLowerCase().includes(group_input) : false;
 
-                    if (apply_rbh && apply_group) {
-                        match = use_and_logic ? (rbh_match && group_match) : (rbh_match || group_match);
-                    } else if (apply_rbh) {
-                        match = rbh_match;
-                    } else if (apply_group) {
-                        match = group_match;
-                    }
-                }
-
-                if (match && apply_taxid) {
-                    var taxid_match = false;
-                    var sample_taxid = String(data['taxid'][i] || '');
-                    var lineage_parts = null;
-                    if (lineage_field) {
-                        var lineage_value = String(lineage_field[i] || '');
-                        if (lineage_value !== '') {
-                            lineage_parts = lineage_value.split(';');
+                        if (apply_rbh && apply_group) {
+                            match = use_and_logic ? (rbh_match && group_match) : (rbh_match || group_match);
+                        } else if (apply_rbh) {
+                            match = rbh_match;
+                        } else if (apply_group) {
+                            match = group_match;
                         }
                     }
 
-                    for (var t = 0; t < taxid_terms.length; t++) {
-                        var term = taxid_terms[t];
-                        if (term === '') {
-                            continue;
+                    if (match && apply_taxid) {
+                        var taxid_match = false;
+                        var sample_taxid = String(data['taxid'][i] || '');
+                        var lineage_parts = null;
+                        if (lineage_field) {
+                            var lineage_value = String(lineage_field[i] || '');
+                            if (lineage_value !== '') {
+                                lineage_parts = lineage_value.split(';');
+                            }
                         }
-                        if (sample_taxid === term) {
-                            taxid_match = true;
-                            break;
-                        }
-                        if (lineage_parts && lineage_parts.indexOf(term) !== -1) {
-                            taxid_match = true;
-                            break;
-                        }
-                    }
-                    match = taxid_match;
-                }
 
-                if (match && apply_rank) {
-                    if (data.hasOwnProperty(rank_field)) {
-                        var rank_value = String(data[rank_field][i] || '').toLowerCase();
-                        match = rank_value.includes(rank_input);
-                    } else {
-                        match = false;
+                        for (var t = 0; t < taxid_terms.length; t++) {
+                            var term = taxid_terms[t];
+                            if (term === '') {
+                                continue;
+                            }
+                            if (sample_taxid === term) {
+                                taxid_match = true;
+                                break;
+                            }
+                            if (lineage_parts && lineage_parts.indexOf(term) !== -1) {
+                                taxid_match = true;
+                                break;
+                            }
+                        }
+                        match = taxid_match;
+                    }
+
+                    if (match && apply_rank) {
+                        if (data.hasOwnProperty(rank_field)) {
+                            var rank_value = String(data[rank_field][i] || '').toLowerCase();
+                            match = rank_value.includes(rank_input);
+                        } else {
+                            match = false;
+                        }
                     }
                 }
 
@@ -1654,6 +1784,8 @@ def mgt_mlt_plot_HTML(
 
             if (show_all_data) {
                 selected_indices = [];
+                // Also clear table selection when resetting
+                filtered_source.selected.indices = [];
             }
 
             // Update sources
@@ -1665,6 +1797,62 @@ def mgt_mlt_plot_HTML(
         update_button.js_on_event("button_click", update_callback)
         size_slider.js_on_change("value", update_callback)
         alpha_slider.js_on_change("value", update_callback)
+        
+        # Separate callback for lasso selection that doesn't modify source.selected.indices
+        # This avoids infinite loop while still providing immediate visual feedback
+        lasso_callback = bokeh.models.CustomJS(args=dict(
+            source=source,
+            filtered_source=filtered_source,
+            size_slider=size_slider,
+            alpha_slider=alpha_slider,
+        ), code="""
+            var data = source.data;
+            var filtered_data = filtered_source.data;
+            var lasso_indices = source.selected.indices;
+            
+            // Only process if there's an actual lasso selection
+            if (lasso_indices.length === 0) return;
+            
+            var colors = data['color'];
+            var sizes = data['size'];
+            var alphas = data['alpha'];
+            var original_colors = data['original_color'];
+            
+            var slider_size = Math.max(size_slider.value, 1);
+            var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
+            var highlight_size = slider_size + 2;
+            var dim_size = slider_size;
+            var highlight_alpha = Math.min(1, slider_alpha + 0.1);
+            var dim_alpha = Math.max(0, slider_alpha * 0.2);
+            
+            // Clear filtered data
+            for (var key in filtered_data) {
+                filtered_data[key] = [];
+            }
+            
+            // Update visualization based on lasso selection
+            for (var i = 0; i < colors.length; i++) {
+                if (lasso_indices.indexOf(i) !== -1) {
+                    colors[i] = original_colors[i];
+                    alphas[i] = highlight_alpha;
+                    sizes[i] = highlight_size;
+                    // Add to filtered data
+                    for (var key in filtered_data) {
+                        filtered_data[key].push(data[key][i]);
+                    }
+                } else {
+                    colors[i] = '#d3d3d3';
+                    alphas[i] = dim_alpha;
+                    sizes[i] = dim_size;
+                }
+            }
+            
+            // Update sources (but DON'T modify source.selected.indices)
+            source.change.emit();
+            filtered_source.change.emit();
+        """)
+        
+        source.selected.js_on_change("indices", lasso_callback)
 
         # Toggle search mode (OR <-> AND) and update the button label
         toggle_callback = bokeh.models.CustomJS(args=dict(
@@ -1679,14 +1867,28 @@ def mgt_mlt_plot_HTML(
         search_toggle.js_on_event("button_click", toggle_callback)
         search_toggle.js_on_event("button_click", update_callback)
 
-        # Export Button Callback (Exports highlighted data or full dataset)
+        # Export Button Callback (Exports highlighted data or full dataset with filename prompt)
         export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source), code="""
             var active_data = filtered_source.data['rbh'].length > 0 ? filtered_source.data : source.data;
             var keys = Object.keys(active_data);
             var num_rows = active_data[keys[0]].length;
 
+            // Prompt user for filename
+            var default_filename = (filtered_source.data['rbh'].length > 0) ? "highlighted_data.tsv" : "full_data.tsv";
+            var user_filename = prompt("Enter filename for export:", default_filename);
+            
+            // If user cancels, exit
+            if (user_filename === null || user_filename.trim() === "") {
+                return;
+            }
+            
+            // Ensure .tsv extension
+            if (!user_filename.endsWith(".tsv")) {
+                user_filename += ".tsv";
+            }
+
             // Remove unwanted columns (size, color, Unnamed), but keep "original_color" and rename it to "color"
-            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color" && k !== "alpha" && k !== "base_size" && k !== "base_alpha" && k !== "taxstring_tooltip");
+            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color" && k !== "alpha" && k !== "base_size" && k !== "base_alpha" && k !== "taxstring_tooltip" && k !== "text_color");
 
             // Rename "original_color" to "color"
             var renamed_keys = filtered_keys.map(k => k === "original_color" ? "color" : k);
@@ -1703,7 +1905,7 @@ def mgt_mlt_plot_HTML(
             var blob = new Blob([csv_content], { type: 'text/plain' });
             var a = document.createElement("a");
             a.href = URL.createObjectURL(blob);
-            a.download = (filtered_source.data['rbh'].length > 0) ? "highlighted_data.tsv" : "full_data.tsv";
+            a.download = user_filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1746,6 +1948,8 @@ def mgt_mlt_plot_HTML(
         )
         plot.add_tools(hover)
 
+        # Note: filtered_source was already created earlier as an empty ColumnDataSource
+
         search_taxid = bokeh.models.TextInput(
             title="Highlight taxid(s):",
             placeholder="e.g. 9606 or 9606, 7227"
@@ -1762,9 +1966,148 @@ def mgt_mlt_plot_HTML(
             disabled=not has_rank_options
         )
         update_button = bokeh.models.Button(label="Update Plot", button_type="success")
+        
+        # Button to export the current table dataset
+        export_button = bokeh.models.Button(label="Export Data Below", button_type="success")
+
+        # Create table columns for MGT
+        mgt_columns = [
+            bokeh.models.TableColumn(field="sample", title="Sample", width=150),
+            bokeh.models.TableColumn(field="taxid", title="Taxid", width=80),
+            bokeh.models.TableColumn(field="UMAP1", title="UMAP1", width=1),
+            bokeh.models.TableColumn(field="UMAP2", title="UMAP2", width=1),
+            bokeh.models.TableColumn(
+                field="original_color", title="Color",
+                formatter=bokeh.models.HTMLTemplateFormatter(template="""
+                    <span style="background-color:<%= original_color %>;
+                                color:<%= text_color %>;
+                                display:inline-block;
+                                width:auto;
+                                min-width:60px;
+                                text-align:center;
+                                padding:2px 5px;">
+                        <%= original_color %>
+                    </span>
+                """),
+                width=75
+            )
+        ]
+        
+        # Add taxname column if it exists
+        if "taxname" in plot_data.columns:
+            mgt_columns.insert(2, bokeh.models.TableColumn(field="taxname", title="Taxname", width=200))
+
+        # Create DataTable
+        # Enable row selection: click anywhere on row to select, Shift+click for range, Ctrl/Cmd+click for multiple
+        data_table = bokeh.models.DataTable(
+            source=filtered_source,
+            columns=mgt_columns,
+            width=int(plot_width), height=300,
+            editable=False,  # Disable editing to avoid conflicts
+            selectable=True,  # Enable row selection by clicking on the row
+            sizing_mode="stretch_width"
+        )
+        
+        # Add a callback to highlight table-selected rows in red on the plot
+        table_selection_callback = bokeh.models.CustomJS(args=dict(
+            source=source,
+            filtered_source=filtered_source,
+        ), code="""
+            console.log('Table selection callback triggered (MGT)');
+            var selected_table_rows = filtered_source.selected.indices;
+            console.log('Selected table rows:', selected_table_rows);
+            
+            // Get the data from both sources
+            var source_data = source.data;
+            var filtered_data = filtered_source.data;
+            var colors = source_data['color'];
+            var sizes = source_data['size'];
+            var original_colors = source_data['original_color'];
+            var original_sizes = source_data['original_size'];
+            
+            console.log('Filtered data length:', filtered_data['UMAP1'].length);
+            console.log('Source data length:', source_data['UMAP1'].length);
+            
+            // Build a set of all indices that are currently in the table (visible)
+            var table_indices = new Set();
+            for (var i = 0; i < filtered_data['UMAP1'].length; i++) {
+                var umap1_val = filtered_data['UMAP1'][i];
+                var umap2_val = filtered_data['UMAP2'][i];
+                
+                // Find this point in the main source
+                for (var j = 0; j < source_data['UMAP1'].length; j++) {
+                    if (Math.abs(source_data['UMAP1'][j] - umap1_val) < 0.0001 && 
+                        Math.abs(source_data['UMAP2'][j] - umap2_val) < 0.0001) {
+                        table_indices.add(j);
+                        break;
+                    }
+                }
+            }
+            
+            console.log('Table indices:', Array.from(table_indices));
+            
+            // If nothing selected in table, restore original colors and sizes for table points only
+            if (selected_table_rows.length === 0) {
+                console.log('No rows selected, restoring original colors and sizes for table points only');
+                for (var k = 0; k < colors.length; k++) {
+                    if (table_indices.has(k)) {
+                        colors[k] = original_colors[k];
+                        sizes[k] = original_sizes[k];  // Restore to original size
+                    }
+                }
+                source.change.emit();
+                return;
+            }
+            
+            // Create a set of indices in the main source that should be red
+            var red_indices = new Set();
+            
+            // For each selected row in the table, find its corresponding index in source
+            for (var i = 0; i < selected_table_rows.length; i++) {
+                var table_row_idx = selected_table_rows[i];
+                
+                // Get unique identifiers from the filtered row
+                var umap1_val = filtered_data['UMAP1'][table_row_idx];
+                var umap2_val = filtered_data['UMAP2'][table_row_idx];
+                
+                console.log('Looking for point at table row', table_row_idx, ':', umap1_val, umap2_val);
+                
+                // Find this point in the main source
+                for (var j = 0; j < source_data['UMAP1'].length; j++) {
+                    if (Math.abs(source_data['UMAP1'][j] - umap1_val) < 0.0001 && 
+                        Math.abs(source_data['UMAP2'][j] - umap2_val) < 0.0001) {
+                        console.log('Found match at source index:', j);
+                        red_indices.add(j);
+                        break;
+                    }
+                }
+            }
+            
+            console.log('Red indices:', Array.from(red_indices));
+            
+            // Update colors and sizes - set selected rows to red and twice as big
+            for (var k = 0; k < colors.length; k++) {
+                if (red_indices.has(k)) {
+                    colors[k] = '#FF0000';  // Red for selected
+                    sizes[k] = original_sizes[k] * 2;  // Make it twice the original size
+                } else if (table_indices.has(k)) {
+                    // Restore original color and size if this point is in the table
+                    colors[k] = original_colors[k];
+                    sizes[k] = original_sizes[k];  // Restore to original size
+                }
+                // If not in table_indices, leave the color/size as-is (stay grey if currently grey)
+            }
+            
+            console.log('Emitting source change');
+            source.change.emit();
+        """)
+        
+        # Trigger when table selection changes
+        filtered_source.selected.js_on_change('indices', table_selection_callback)
 
         update_callback = bokeh.models.CustomJS(args=dict(
             source=source,
+            filtered_source=filtered_source,
             search_taxid=search_taxid,
             rank_select=rank_select,
             rank_text=rank_text,
@@ -1772,6 +2115,7 @@ def mgt_mlt_plot_HTML(
             alpha_slider=alpha_slider,
         ), code="""
             var data = source.data;
+            var filtered_data = filtered_source.data;
             var colors = data['color'];
             var sizes = data['size'];
             var alphas = data['alpha'];
@@ -1796,47 +2140,103 @@ def mgt_mlt_plot_HTML(
 
             var apply_taxid = taxid_terms.length > 0;
             var apply_rank = rank_field !== "" && rank_input !== "";
-            var show_all_data = !(apply_taxid || apply_rank);
+
+            // Determine if we should use lasso selection or search terms
+            var lasso_indices = source.selected.indices;
+            var has_search_terms = apply_taxid || apply_rank;
+            
+            // Check if this is a complete reset (no search terms)
+            var is_complete_reset = !has_search_terms;
+            if (is_complete_reset) {
+                // Aggressively clear all selections and reset everything
+                source.selected.indices = [];
+                lasso_indices = [];
+                filtered_source.selected.indices = [];
+                
+                // Reset all colors, sizes, and alphas to original
+                for (var i = 0; i < colors.length; i++) {
+                    colors[i] = original_colors[i];
+                    sizes[i] = slider_size;
+                    alphas[i] = slider_alpha;
+                }
+                
+                // Populate filtered_source with all data
+                for (var key in filtered_data) {
+                    filtered_data[key] = [];
+                }
+                for (var i = 0; i < colors.length; i++) {
+                    for (var key in filtered_data) {
+                        filtered_data[key].push(data[key][i]);
+                    }
+                }
+                
+                source.change.emit();
+                filtered_source.change.emit();
+                return;
+            }
+            
+            // If user has entered search terms, they override lasso selection
+            var use_lasso = false;
+            if (lasso_indices.length > 0 && !has_search_terms) {
+                // Use lasso only if no search terms are present
+                use_lasso = true;
+            } else if (lasso_indices.length > 0 && has_search_terms) {
+                // Clear lasso selection when search terms are entered
+                source.selected.indices = [];
+                lasso_indices = [];
+            }
+            
+            var show_all_data = !use_lasso && !has_search_terms;
 
             var selected_indices = [];
+
+            // Clear filtered source data
+            for (var key in filtered_data) {
+                filtered_data[key] = [];
+            }
 
             for (var i = 0; i < colors.length; i++) {
                 var match = true;
 
-                if (apply_taxid) {
-                    var taxid_match = false;
-                    var sample_taxid = String(data['taxid'][i] || '');
-                    var lineage_parts = null;
-                    if (lineage_field) {
-                        var lineage_value = String(lineage_field[i] || '');
-                        if (lineage_value !== '') {
-                            lineage_parts = lineage_value.split(';');
+                // Lasso selection overrides other search methods
+                if (use_lasso) {
+                    match = lasso_indices.indexOf(i) !== -1;
+                } else {
+                    if (apply_taxid) {
+                        var taxid_match = false;
+                        var sample_taxid = String(data['taxid'][i] || '');
+                        var lineage_parts = null;
+                        if (lineage_field) {
+                            var lineage_value = String(lineage_field[i] || '');
+                            if (lineage_value !== '') {
+                                lineage_parts = lineage_value.split(';');
+                            }
                         }
+
+                        for (var t = 0; t < taxid_terms.length; t++) {
+                            var term = taxid_terms[t];
+                            if (term === '') {
+                                continue;
+                            }
+                            if (sample_taxid === term) {
+                                taxid_match = true;
+                                break;
+                            }
+                            if (lineage_parts && lineage_parts.indexOf(term) !== -1) {
+                                taxid_match = true;
+                                break;
+                            }
+                        }
+                        match = taxid_match;
                     }
 
-                    for (var t = 0; t < taxid_terms.length; t++) {
-                        var term = taxid_terms[t];
-                        if (term === '') {
-                            continue;
+                    if (match && apply_rank) {
+                        if (data.hasOwnProperty(rank_field)) {
+                            var rank_value = String(data[rank_field][i] || '').toLowerCase();
+                            match = rank_value.includes(rank_input);
+                        } else {
+                            match = false;
                         }
-                        if (sample_taxid === term) {
-                            taxid_match = true;
-                            break;
-                        }
-                        if (lineage_parts && lineage_parts.indexOf(term) !== -1) {
-                            taxid_match = true;
-                            break;
-                        }
-                    }
-                    match = taxid_match;
-                }
-
-                if (match && apply_rank) {
-                    if (data.hasOwnProperty(rank_field)) {
-                        var rank_value = String(data[rank_field][i] || '').toLowerCase();
-                        match = rank_value.includes(rank_input);
-                    } else {
-                        match = false;
                     }
                 }
 
@@ -1856,19 +2256,130 @@ def mgt_mlt_plot_HTML(
                     alphas[i] = slider_alpha;
                     sizes[i] = slider_size;
                 }
+
+                if (show_all_data || match) {
+                    for (var key in filtered_data) {
+                        filtered_data[key].push(data[key][i]);
+                    }
+                }
             }
 
             if (show_all_data) {
                 selected_indices = [];
+                // Also clear table selection when resetting
+                filtered_source.selected.indices = [];
             }
 
             source.selected.indices = selected_indices;
             source.change.emit();
+            filtered_source.change.emit();
         """)
 
         update_button.js_on_event("button_click", update_callback)
         size_slider.js_on_change("value", update_callback)
         alpha_slider.js_on_change("value", update_callback)
+        
+        # Separate callback for lasso selection that doesn't modify source.selected.indices
+        # This avoids infinite loop while still providing immediate visual feedback
+        lasso_callback = bokeh.models.CustomJS(args=dict(
+            source=source,
+            filtered_source=filtered_source,
+            size_slider=size_slider,
+            alpha_slider=alpha_slider,
+        ), code="""
+            var data = source.data;
+            var filtered_data = filtered_source.data;
+            var lasso_indices = source.selected.indices;
+            
+            // Only process if there's an actual lasso selection
+            if (lasso_indices.length === 0) return;
+            
+            var colors = data['color'];
+            var sizes = data['size'];
+            var alphas = data['alpha'];
+            var original_colors = data['original_color'];
+            
+            var slider_size = Math.max(size_slider.value, 1);
+            var slider_alpha = Math.min(Math.max(alpha_slider.value, 0), 1);
+            var highlight_size = slider_size + 2;
+            var dim_size = slider_size;
+            var highlight_alpha = Math.min(1, slider_alpha + 0.1);
+            var dim_alpha = Math.max(0, slider_alpha * 0.2);
+            
+            // Clear filtered data
+            for (var key in filtered_data) {
+                filtered_data[key] = [];
+            }
+            
+            // Update visualization based on lasso selection
+            for (var i = 0; i < colors.length; i++) {
+                if (lasso_indices.indexOf(i) !== -1) {
+                    colors[i] = original_colors[i];
+                    alphas[i] = highlight_alpha;
+                    sizes[i] = highlight_size;
+                    // Add to filtered data
+                    for (var key in filtered_data) {
+                        filtered_data[key].push(data[key][i]);
+                    }
+                } else {
+                    colors[i] = '#d3d3d3';
+                    alphas[i] = dim_alpha;
+                    sizes[i] = dim_size;
+                }
+            }
+            
+            // Update sources (but DON'T modify source.selected.indices)
+            source.change.emit();
+            filtered_source.change.emit();
+        """)
+        
+        source.selected.js_on_change("indices", lasso_callback)
+
+        # Export Button Callback with filename prompt
+        export_callback = bokeh.models.CustomJS(args=dict(source=source, filtered_source=filtered_source), code="""
+            var active_data = filtered_source.data['sample'].length > 0 ? filtered_source.data : source.data;
+            var keys = Object.keys(active_data);
+            var num_rows = active_data[keys[0]].length;
+
+            // Prompt user for filename
+            var default_filename = (filtered_source.data['sample'].length > 0 && filtered_source.data['sample'].length < source.data['sample'].length) ? "highlighted_data.tsv" : "full_data.tsv";
+            var user_filename = prompt("Enter filename for export:", default_filename);
+            
+            // If user cancels, exit
+            if (user_filename === null || user_filename.trim() === "") {
+                return;
+            }
+            
+            // Ensure .tsv extension
+            if (!user_filename.endsWith(".tsv")) {
+                user_filename += ".tsv";
+            }
+
+            // Remove unwanted columns
+            var filtered_keys = keys.filter(k => !k.includes("Unnamed") && k !== "size" && k !== "color" && k !== "alpha" && k !== "base_size" && k !== "base_alpha" && k !== "taxstring_tooltip" && k !== "text_color");
+
+            // Rename "original_color" to "color"
+            var renamed_keys = filtered_keys.map(k => k === "original_color" ? "color" : k);
+
+            var csv_content = renamed_keys.join("\\t") + "\\n";
+            for (var i = 0; i < num_rows; i++) {
+                var row = [];
+                for (var j = 0; j < filtered_keys.length; j++) {
+                    row.push(active_data[filtered_keys[j]][i]);
+                }
+                csv_content += row.join("\\t") + "\\n";
+            }
+
+            var blob = new Blob([csv_content], { type: 'text/plain' });
+            var a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = user_filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        """)
+        
+        export_button.js_on_event("button_click", export_callback)
 
         layout_kwargs = {}
         row_kwargs = {}
@@ -1878,12 +2389,85 @@ def mgt_mlt_plot_HTML(
                 row_kwargs["sizing_mode"] = "stretch_width"
 
         control_row = bokeh.layouts.row(size_slider, alpha_slider, grid_toggle, **row_kwargs)
-        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, update_button, **row_kwargs)
-        layout = bokeh.layouts.column(plot, control_row, taxonomy_row, **layout_kwargs)
+        taxonomy_row = bokeh.layouts.row(search_taxid, rank_select, rank_text, update_button, export_button, **row_kwargs)
+        layout = bokeh.layouts.column(plot, control_row, taxonomy_row, data_table, **layout_kwargs)
+
+    # Store the IDs for later reference in auto-init script
+    source_id = source.id if filtered_source is not None else None
+    filtered_source_id = filtered_source.id if filtered_source is not None else None
 
     # Output to HTML
     bokeh.plotting.output_file(outhtml)
     bokeh.io.save(layout)
+    
+    # Auto-populate the table on page load by injecting JavaScript into the HTML
+    # This ensures the table is populated immediately without duplicating data in the HTML
+    if filtered_source is not None and source_id and filtered_source_id:
+        with open(outhtml, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        # Inject auto-initialization script before closing body tag
+        init_script = f"""
+    <script type="text/javascript">
+    // Auto-populate table on page load (without embedding duplicate data)
+    (function() {{
+        console.log('Auto-init script loaded');
+        var retryCount = 0;
+        var maxRetries = 100; // Max 5 seconds of retries (100 * 50ms)
+        
+        function initTable() {{
+            retryCount++;
+            console.log('initTable attempt', retryCount, '- checking for Bokeh objects');
+            
+            if (typeof Bokeh !== 'undefined' && Bokeh.index && Bokeh.index["{source_id}"] && Bokeh.index["{filtered_source_id}"]) {{
+                try {{
+                    console.log('Bokeh objects found, initializing table');
+                    var source = Bokeh.index["{source_id}"];
+                    var filtered_source = Bokeh.index["{filtered_source_id}"];
+                    
+                    console.log('Source data length:', Object.keys(source.data).length);
+                    console.log('Source UMAP1 length:', source.data['UMAP1'].length);
+                    
+                    // Copy all data from source to filtered_source
+                    for (var key in source.data) {{
+                        filtered_source.data[key] = source.data[key].slice();
+                    }}
+                    filtered_source.change.emit();
+                    console.log("Table initialized successfully with", filtered_source.data['UMAP1'].length, "rows");
+                }} catch (e) {{
+                    console.error("Error initializing table:", e);
+                }}
+            }} else {{
+                console.log('Bokeh objects not ready yet');
+                if (retryCount < maxRetries) {{
+                    // Bokeh objects not ready yet, try again
+                    setTimeout(initTable, 50);
+                }} else {{
+                    console.warn("Failed to initialize table after", maxRetries, "retries. Click 'Update Plot' to populate the table.");
+                }}
+            }}
+        }}
+        
+        // Wait for page to fully load
+        console.log('Document readyState:', document.readyState);
+        if (document.readyState === 'loading') {{
+            console.log('Waiting for DOMContentLoaded');
+            document.addEventListener('DOMContentLoaded', function() {{
+                console.log('DOMContentLoaded fired, starting init in 200ms');
+                setTimeout(initTable, 200);
+            }});
+        }} else {{
+            console.log('Document already loaded, starting init in 200ms');
+            setTimeout(initTable, 200);
+        }}
+    }})();
+    </script>
+</body>"""
+        
+        html_content = html_content.replace('</body>', init_script)
+        
+        with open(outhtml, 'w', encoding='utf-8') as f:
+            f.write(html_content)
 
     return plot
 
@@ -2710,11 +3294,10 @@ def mgt_mlt_umap(sampledffile, LocusFile, coofile,
                             this is the rbh db file, which is a .tsv file that contains the rbh db file,
       - coofile:        The file that contains the locus distance matrix.
                          This is a .npz file.
-      - smalllargeNaN:  This is a string that is either "small" or "large".
-                         This determines how the missing values are filled in.
-                         If "small", missing is set as 0, if "large", it is set
-                         as 999999999999. These missing values are averaged out in the
-                         phylogenetic weighting.
+      - smalllargeNaN:  This is an integer or float representing the sentinel value for missing data.
+                         If 0, missing values are set as 0. If non-zero, missing values are replaced
+                         with the sentinel value (typically a large number like 999999999999).
+                         These missing values are averaged out in the phylogenetic weighting.
       - n_neighbors:    This is the number of neighbors to use for the UMAP. This is an integer.
       - min_dist:       This is the minimum distance to use for the UMAP. This is a float.
       - UMAPdfout:      This is the file that contains the UMAP dataframe.
@@ -2753,10 +3336,16 @@ def mgt_mlt_umap(sampledffile, LocusFile, coofile,
         raise ValueError(f"The number of samples, {len(cdf)}, is less than the number of neighbors, {n_neighbors}. Exiting.")
     # If we pass these checks, we should be fine
 
-    # check that the smalllargeNaN is either small or large
-    if smalllargeNaN not in ["small", "large"]:
-        raise ValueError(f"The smalllargeNaN {smalllargeNaN} is not 'small' or 'large'. Exiting.")
-    if smalllargeNaN == "large":
+    # Convert to numeric if needed (for backwards compatibility with string inputs)
+    if isinstance(smalllargeNaN, str):
+        smalllargeNaN = int(smalllargeNaN)
+    
+    # Check that smalllargeNaN is numeric
+    if not isinstance(smalllargeNaN, (int, float)):
+        raise ValueError(f"The smalllargeNaN {smalllargeNaN} must be a number (int or float). Exiting.")
+    
+    if smalllargeNaN != 0:
+        # Use the sentinel value directly (typically a large number)
         # If the matrix is large, we have to convert the real zeros to -1 before we change to csf
         # we have to flip the values of the lil matrix
         print("setting zeros to -1")
@@ -2769,8 +3358,8 @@ def mgt_mlt_umap(sampledffile, LocusFile, coofile,
         # if the missing_values is "large", then we have to convert the 0 to the missing_value_as
         # Here we switch the representation, namely we don't have to access the data with .data now that this
         #  is a dense matrix.
-        print(f"setting zeros to {missing_value_as}")
-        matrix[matrix == 0] = missing_value_as
+        print(f"setting zeros to {smalllargeNaN}")
+        matrix[matrix == 0] = smalllargeNaN
         # now we convert the -1s to 0
         print("converting -1s to 0")
         matrix[matrix == -1] = 0
@@ -2781,7 +3370,8 @@ def mgt_mlt_umap(sampledffile, LocusFile, coofile,
         ## invert the values
         #matrix = 1/matrix
         #
-    elif smalllargeNaN == "small":
+    else:
+        # smalllargeNaN == 0, meaning we use 0 for missing values
         # just change the name
         matrix = lil
         del lil
@@ -2830,8 +3420,13 @@ def odog_pairwise_distance_matrix(sampledffile, LocusFile, coofile,
                                   smalllargeNaN, outfilepath,
                                   missing_value_as = 9999999999):
     """Calculate a pairwise Euclidean distance matrix between ODOG samples."""
-    if smalllargeNaN not in ["small", "large"]:
-        raise ValueError(f"The smalllargeNaN {smalllargeNaN} is not 'small' or 'large'. Exiting.")
+    # Convert to numeric if needed (for backwards compatibility with string inputs)
+    if isinstance(smalllargeNaN, str):
+        smalllargeNaN = int(smalllargeNaN)
+    
+    # Check that smalllargeNaN is numeric
+    if not isinstance(smalllargeNaN, (int, float)):
+        raise ValueError(f"The smalllargeNaN {smalllargeNaN} must be a number (int or float). Exiting.")
 
     for filepath in [sampledffile, LocusFile, coofile]:
         if not os.path.exists(filepath):
@@ -2849,14 +3444,15 @@ def odog_pairwise_distance_matrix(sampledffile, LocusFile, coofile,
         raise ValueError(
             f"The largest column index of the lil matrix, {lil.shape[1]}, is greater than the length of ALGcomboix, {len(ALGcomboix)}. Exiting.")
 
-    if smalllargeNaN == "large":
+    if smalllargeNaN != 0:
+        # Use the sentinel value directly (typically a large number)
         print("setting zeros to -1")
         lil.data[lil.data == 0] = -1
         print("Converting to a dense matrix. RAM will increase now.")
         matrix = lil.toarray()
         del lil
-        print(f"setting zeros to {missing_value_as}")
-        matrix[matrix == 0] = missing_value_as
+        print(f"setting zeros to {smalllargeNaN}")
+        matrix[matrix == 0] = smalllargeNaN
         print("converting -1s to 0")
         matrix[matrix == -1] = 0
         matrix = matrix + 1
@@ -3695,15 +4291,22 @@ def plot_umap_from_files_just_df(
             f"is greater than the number of columns of the lil matrix, {lil.shape[1]}. Exiting."
         )
 
-    if smalllargeNaN not in ("small", "large"):
-        raise ValueError(f"The smalllargeNaN {smalllargeNaN} is not 'small' or 'large'. Exiting.")
+    # Convert to numeric if needed (for backwards compatibility with string inputs)
+    if isinstance(smalllargeNaN, str):
+        smalllargeNaN = int(smalllargeNaN)
+    
+    # Check that smalllargeNaN is numeric
+    if not isinstance(smalllargeNaN, (int, float)):
+        raise ValueError(f"The smalllargeNaN {smalllargeNaN} must be a number (int or float). Exiting.")
+    
     if not (0 <= min_dist <= 1):
         raise IOError(f"The min_dist {min_dist} is not between 0 and 1. Exiting.")
 
-    # matrix construction (kept "dumb" on purpose)
-    _p(f"Constructing the matrix with '{smalllargeNaN}' missing values")
+    # matrix construction: use smalllargeNaN as the sentinel value
+    _p(f"Constructing the matrix with sentinel value={smalllargeNaN}")
     time_start = time.time()
-    if smalllargeNaN == "large":
+    if smalllargeNaN != 0:
+        # Use the sentinel value directly (typically a large number)
         # BUGFIX: flip zeros in COO before densifying; LIL doesn't support vectorized .data ops
         _p(f"Converting from the lil to the coo format to set zeros to -1")
         time_coo_start = time.time()
@@ -3730,10 +4333,10 @@ def plot_umap_from_files_just_df(
         del lil, coo
         _p(f"  - Deleted lil and coo in {time.time()-time_coo_start:.3f}s")
 
-        _p(f"Setting zeros to {missing_value_as}. The RAM will increase now.")
+        _p(f"Setting zeros to {smalllargeNaN}. The RAM will increase now.")
         time_coo_start = time.time()
-        matrix[matrix == 0] = missing_value_as
-        _p(f"  - Set zeros to {missing_value_as} in {time.time()-time_coo_start:.3f}s")
+        matrix[matrix == 0] = smalllargeNaN
+        _p(f"  - Set zeros to {smalllargeNaN} in {time.time()-time_coo_start:.3f}s")
         _p(f"Converting -1s to 0")
         time_coo_start = time.time()
         matrix[matrix == -1] = 0
