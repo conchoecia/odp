@@ -92,6 +92,9 @@ if results_base_directory.endswith("/"):
 # These are the parameters in the 2024 biorxiv supplementary figure S7
 odog_n    = [20, 35, 50, 75, 100, 150, 250]
 odog_m    = [0.0, 0.1, 0.2, 0.5, 0.75, 0.9, 1.0]
+
+odog_n    = [20, 50, 100, 150, 250]
+odog_m    = [0.0, 0.5, 0.75, 0.9, 1.0]
 #odog_n    = [150]
 #odog_m    = [0.75]
 odog_size = ["large"]

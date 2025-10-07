@@ -164,6 +164,8 @@ def parse_args():
                         help=("space-separated .df files. Rank is inferred from each filename. "
                           "Enables a vertical phylo-resampling grid (rows=ranks, "
                           "cols=(n_neighbors,min_dist) inferred from filenames)."))
+    parser.add_argument("--num-cols", type=int, default=None,
+                        help="Number of columns for --plot_features grid layout. If not specified, uses sqrt of total panels (square grid).")
 
     args = parser.parse_args()
 
@@ -602,14 +604,20 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
     all_columns_to_plot = list(dict.fromkeys(all_columns_to_plot))  # drop dups, keep order
 
     total_num_cols_to_plot = len(all_columns_to_plot) + int(len(metadata_columns) / 2)
-    plots_per_row = int(np.ceil(np.sqrt(total_num_cols_to_plot)))
-    num_rows = plots_per_row
-    num_cols = plots_per_row
+    
+    # Use user-specified number of columns, or calculate square grid
+    if args.num_cols is not None:
+        num_cols = args.num_cols
+    else:
+        num_cols = int(np.ceil(np.sqrt(total_num_cols_to_plot)))
+    
+    num_rows = int(np.ceil(total_num_cols_to_plot / num_cols))
 
     # ---------- figure & axes grid ----------
     margin = 0.25
     panel_width = 1.5
-    fig_width = (margin * 4) + (panel_width * num_cols) + (margin * (num_cols - 1)) + (margin * 4)
+    colorbar_space = 1.5  # Extra space on the right for colorbars
+    fig_width = (margin * 4) + (panel_width * num_cols) + (margin * (num_cols - 1)) + (margin * 4) + colorbar_space
     fig_height = (margin * 4) + (panel_width * num_rows) + (margin * (num_rows - 1)) + (margin * 4)
     fig = plt.figure(figsize=(fig_width, fig_height))
 
@@ -641,13 +649,18 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
     # pull user params (already in function signature)
     # legend_scale, genome_min_bp, genome_max_bp, genome_min_color, genome_max_color
 
+    # Track colorbars to draw on the right side
+    colorbar_info = []
+    seen_colorbar_types = set()  # Track which types we've already added
+
     # ---------- plot the main columns ----------
     i = 0
     j = 0
     for thiscol in all_columns_to_plot:
         ax = axes[i][j]
-        ax.xaxis.set_label_position("top")
-        ax.set_xlabel("Clade color" if thiscol == "color" else f"{thiscol}", fontsize=5)
+        # Put label at the very top edge of the plot area
+        ax.text(0.5, 1.0, "Clade color" if thiscol == "color" else f"{thiscol}", 
+                transform=ax.transAxes, fontsize=10, ha='center', va='top')
 
         # Special handling for genome size panels (add colorbars, clamp colors)
         if thiscol in ("genome_size", "genome_size_log2", "genome_size_log10"):
@@ -700,24 +713,28 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
 
             ax.scatter(df["UMAP1"], df["UMAP2"], s=0.5, lw=0, alpha=0.5, color=mapped_rgba)
 
-            sm = ScalarMappable(norm=norm, cmap=cmap)
-            sm.set_array([])
-            cbar_fraction = max(0.005, 0.046 * float(legend_scale))
-            cbar = fig.colorbar(sm, ax=ax, fraction=cbar_fraction, pad=0.02)
-            cbar.ax.tick_params(labelsize=max(1, int(4 * float(legend_scale))))
+            # Set square limits to stop lines cleanly at edges with minimal padding
+            set_square_limits(ax, df["UMAP1"].values, df["UMAP2"].values,
+                              q=(0.002, 0.998), pad=0.001)
 
-            ticks = np.linspace(use_vmin, use_vmax, 5)
-            cbar.set_ticks(ticks)
+            # Store colorbar info for later drawing on the right side
             if thiscol == "genome_size":
-                labels = [human_readable_bp(t) for t in ticks]
-                cbar.set_label("Genome size", fontsize=max(2, int(5 * float(legend_scale))))
+                label = "Genome size"
+                labels = [human_readable_bp(t) for t in np.linspace(use_vmin, use_vmax, 5)]
             elif thiscol == "genome_size_log2":
-                labels = [human_readable_bp((2.0 ** t) - 1.0) for t in ticks]
-                cbar.set_label("Genome size (log2)", fontsize=max(2, int(5 * float(legend_scale))))
+                label = "Genome size (log2)"
+                labels = [human_readable_bp((2.0 ** t) - 1.0) for t in np.linspace(use_vmin, use_vmax, 5)]
             else:
-                labels = [human_readable_bp((10.0 ** t) - 1.0) for t in ticks]
-                cbar.set_label("Genome size (log10)", fontsize=max(2, int(5 * float(legend_scale))))
-            cbar.set_ticklabels(labels)
+                label = "Genome size (log10)"
+                labels = [human_readable_bp((10.0 ** t) - 1.0) for t in np.linspace(use_vmin, use_vmax, 5)]
+            
+            colorbar_info.append({
+                'norm': norm,
+                'cmap': cmap,
+                'label': label,
+                'ticklabels': labels,
+                'ticks': np.linspace(use_vmin, use_vmax, 5)
+            })
 
         else:
             # Non-genome-size panels
@@ -725,22 +742,56 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
             if thiscol == "color":
                 colors = list(df[thiscol])
                 ax.scatter(df["UMAP1"], df["UMAP2"], s=0.5, lw=0, alpha=0.5, color=colors)
+                # Set square limits to stop lines cleanly at edges with minimal padding
+                set_square_limits(ax, df["UMAP1"].values, df["UMAP2"].values,
+                                  q=(0.002, 0.998), pad=0.001)
             else:
-                # boolean-like in object dtype -> map two fixed colors
+                # boolean-like in object dtype or actual boolean dtype -> map two fixed colors
                 uniques = df[thiscol].unique()
-                if ((True in uniques) or (False in uniques)) and (coltype == "object"):
+                if ((True in uniques) or (False in uniques)) and (coltype == "object" or coltype == "bool"):
                     colordict = {True: "#074FF7", False: "#FD6117"}
                     colors = [colordict.get(x, "#999999") for x in df[thiscol]]
                     ax.scatter(df["UMAP1"], df["UMAP2"], s=0.5, lw=0, alpha=0.5, color=colors)
+                    # Set square limits to stop lines cleanly at edges with minimal padding
+                    set_square_limits(ax, df["UMAP1"].values, df["UMAP2"].values,
+                                      q=(0.002, 0.998), pad=0.001)
+                    
+                    # Store binary colorbar info (only once)
+                    if 'binary' not in seen_colorbar_types:
+                        colorbar_info.append({
+                            'type': 'binary',
+                            'label': 'from_rbh',
+                            'colors': colordict
+                        })
+                        seen_colorbar_types.add('binary')
                 else:
                     # numeric gradient using your interpolation helper
                     arr = pd.to_numeric(df[thiscol], errors="coerce")
                     maxval = np.nanmax(arr.to_numpy(dtype=float))
                     if np.isfinite(maxval) and maxval > 1:
                         colors = [interpolate_color(x, 0, maxval, "#DCDEE3", "#FF2608") for x in arr.fillna(0)]
+                        vmin, vmax = 0, maxval
                     else:
                         colors = [interpolate_color(x, 0, 1, "#DCDEE3", "#FF2608") for x in arr.fillna(0)]
+                        vmin, vmax = 0, 1
                     ax.scatter(df["UMAP1"], df["UMAP2"], s=0.5, lw=0, alpha=0.5, color=colors)
+                    # Set square limits to stop lines cleanly at edges with minimal padding
+                    set_square_limits(ax, df["UMAP1"].values, df["UMAP2"].values,
+                                      q=(0.002, 0.998), pad=0.001)
+                    
+                    # Store numeric gradient colorbar info (only once, for [0,1] range)
+                    if 'gradient_0_1' not in seen_colorbar_types:
+                        gradient_cmap = LinearSegmentedColormap.from_list("gradient", ["#DCDEE3", "#FF2608"])
+                        norm = Normalize(vmin=0, vmax=1)
+                        colorbar_info.append({
+                            'type': 'gradient',
+                            'norm': norm,
+                            'cmap': gradient_cmap,
+                            'label': 'Fraction [0-1]',
+                            'ticks': np.linspace(0, 1, 5),
+                            'ticklabels': [f"{t:.2f}" for t in np.linspace(0, 1, 5)]
+                        })
+                        seen_colorbar_types.add('gradient_0_1')
 
         # advance grid position
         j += 1
@@ -757,14 +808,19 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
         if i >= num_rows:
             break
         ax = axes[i][j]
-        ax.xaxis.set_label_position("top")
-        ax.set_xlabel(f"{thiscol}", fontsize=5)
+        # Put label at the very top edge of the plot area
+        ax.text(0.5, 1.0, f"{thiscol}", 
+                transform=ax.transAxes, fontsize=10, ha='center', va='top')
 
         color_col = f"{thiscol}_color"
         if color_col not in df.columns:
             raise ValueError(f"Missing expected color column {color_col} for metadata.")
         colors = df[color_col]
         ax.scatter(df["UMAP1"], df["UMAP2"], s=0.5, lw=0, alpha=0.5, color=colors)
+        
+        # Set square limits to stop lines cleanly at edges with minimal padding
+        set_square_limits(ax, df["UMAP1"].values, df["UMAP2"].values,
+                          q=(0.002, 0.998), pad=0.001)
 
         # add legend for categorical metadata
         if pd.api.types.is_object_dtype(df[thiscol]) or pd.api.types.is_categorical_dtype(df[thiscol]):
@@ -794,265 +850,87 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
                 col.set_aspect("equal", adjustable="box")
 
     # ---------- figure grid lines ----------
-    xs = []
+    # Vertical lines (between columns) - centered between panels like in plot_paramsweep
     for jj in range(1, num_cols):
-        left_current = (4 * margin) + (jj * panel_width) + ((jj - 1) * margin)
-        xs.append(left_current / fig_width)
-    for x in xs:
-        line = plt.Line2D([x, x], [0, 1], transform=fig.transFigure, color="#BBBBBB", lw=0.5)
+        x_pos = ((4 * margin) + (jj * panel_width) + (jj * margin) - (margin / 2)) / fig_width
+        y1 = ((fig_height - (4 * margin)) / fig_height)
+        y2 = ((4 * margin) / fig_height)
+        line = plt.Line2D([x_pos, x_pos], [y1, y2], transform=fig.transFigure, color="#BBBBBB", lw=1.0)
         fig.add_artist(line)
 
-    ys = []
+    # Horizontal lines (between rows) - centered between panels like in plot_paramsweep
+    # Note: x2 should stop at the plot area, not extend into colorbar space
+    plot_area_right_for_lines = ((4 * margin) + (num_cols * panel_width) + ((num_cols - 1) * margin)) / fig_width
     for ii in range(1, num_rows):
-        bottom_current = (4 * margin) + (ii * panel_width) + ((ii - 1) * margin)
-        y = 1 - (bottom_current / fig_height)
-        ys.append(y)
-    for y in ys:
-        line = plt.Line2D([0, 1], [y, y], transform=fig.transFigure, color="#BBBBBB", lw=0.5)
+        y_pos = ((fig_height - ((4 * margin) + (ii * panel_width) + (ii * margin) - (margin / 2))) / fig_height)
+        x1 = ((4 * margin) / fig_width)
+        x2 = plot_area_right_for_lines
+        line = plt.Line2D([x1, x2], [y_pos, y_pos], transform=fig.transFigure, color="#BBBBBB", lw=1.0)
         fig.add_artist(line)
+
+    # ---------- draw colorbars on the right side of the figure ----------
+    if colorbar_info:
+        # Calculate where the plot area ends
+        plot_area_right = ((4 * margin) + (num_cols * panel_width) + ((num_cols - 1) * margin)) / fig_width
+        
+        # Position colorbars in the right margin, after the plot area
+        cbar_width = 0.02  # width of each colorbar in figure coordinates
+        cbar_left = plot_area_right + (2 * margin / fig_width)  # Start after plot area + some margin
+        cbar_spacing = 0.03  # vertical spacing between colorbars
+        
+        # Calculate heights (binary colorbars are shorter)
+        heights = []
+        for cbar_data in colorbar_info:
+            if cbar_data.get('type') == 'binary':
+                heights.append(0.06)  # Short for binary
+            else:
+                heights.append(0.15)  # Standard height for continuous
+        
+        # Calculate total height needed and starting position
+        total_cbar_height = sum(heights) + (len(colorbar_info) - 1) * cbar_spacing
+        cbar_top = 0.5 + total_cbar_height / 2  # center vertically
+        
+        current_y = cbar_top
+        for idx, cbar_data in enumerate(colorbar_info):
+            cbar_height = heights[idx]
+            cbar_bottom = current_y - cbar_height
+            
+            # Create a new axes for the colorbar
+            cax = fig.add_axes([cbar_left, cbar_bottom, cbar_width, cbar_height])
+            
+            # Create the colorbar based on type
+            if cbar_data.get('type') == 'binary':
+                # Binary colorbar (True/False)
+                from matplotlib.patches import Rectangle
+                cax.add_patch(Rectangle((0, 0), 1, 0.5, facecolor=cbar_data['colors'][False], edgecolor='black', linewidth=0.5))
+                cax.add_patch(Rectangle((0, 0.5), 1, 0.5, facecolor=cbar_data['colors'][True], edgecolor='black', linewidth=0.5))
+                cax.set_xlim(0, 1)
+                cax.set_ylim(0, 1)
+                cax.set_yticks([0.25, 0.75])
+                cax.set_yticklabels(['False', 'True'])
+                cax.set_xticks([])
+                cax.tick_params(labelsize=max(5, int(6 * float(legend_scale))))
+                cax.set_ylabel(cbar_data['label'], fontsize=max(6, int(7 * float(legend_scale))))
+                for spine in ['top', 'right', 'bottom', 'left']:
+                    cax.spines[spine].set_visible(True)
+                    cax.spines[spine].set_linewidth(0.5)
+            else:
+                # Continuous colorbar (genome size or gradient)
+                sm = ScalarMappable(norm=cbar_data['norm'], cmap=cbar_data['cmap'])
+                sm.set_array([])
+                cbar = plt.colorbar(sm, cax=cax)
+                cbar.set_ticks(cbar_data['ticks'])
+                cbar.set_ticklabels(cbar_data['ticklabels'])
+                cbar.ax.tick_params(labelsize=max(5, int(6 * float(legend_scale))))
+                cbar.set_label(cbar_data['label'], fontsize=max(6, int(7 * float(legend_scale))))
+            
+            # Move to next position
+            current_y = cbar_bottom - cbar_spacing
 
     # ---------- save ----------
     print(f"saving the file to {outpdf}")
     plt.savefig(outpdf)
     plt.close(fig)
-
-
-#def plot_features(args, outpdf, metadata_df=None):
-#    """
-#    This makes a plot of the features of a single dataframe.
-#    All of the plots will be plotted along the axes of the UMAP1 and UMAP2.
-#    """
-#    # get the dataframe to load in
-#    df = pd.read_csv(args.filelist, sep="\t", index_col=0)
-#    # remove the rows that have a value of NaN in the "smallest_protein" column
-#    if "smallest_protein" in df.columns:
-#        df = df[~df["smallest_protein"].isna()]
-#
-#    # Merge metadata if provided (on 'rbh' = index of df)
-#    if metadata_df is not None:
-#        metadata_df = metadata_df.set_index("rbh")
-#        metadata_df.index = metadata_df.index.astype(str).str.strip()
-#        df.set_index("rbh", inplace=True, drop=False)  # ensure 'rbh' is the index
-#        df.index = df.index.astype(str).str.strip()
-#
-#        matched = metadata_df.index.intersection(df.index)
-#        print(f"Metadata merge: matched {len(matched)} of {len(df)} UMAP RBH entries")
-#
-#        df = df.join(metadata_df, how="left")  # join by index
-#
-#    print(df.columns)
-#    print(df)
-#    # the columns we want to annotate are defined in the AnnotateSampleDf pipeline
-#    #  - things from the genome fasta file
-#    #    - num_scaffolds
-#    #    - GC_content
-#    #    - genome_size
-#    #    - median_scaffold_length
-#    #    - mean_scaffold_length
-#    #    - scaffold_N50
-#    #    - longest_scaffold
-#    #    - smallest_scaffold
-#    #    - fraction_Ns
-#    #    - number_of_gaps
-#    #  - things from the protein file:
-#    #    - num_proteins
-#    #    - mean_protein_length
-#    #    - median_protein_length
-#    #    - longest_protein
-#    #    - smallest_protein
-#    #    - from_rbh
-#    #  - things from the rbh file:
-#    #    - frac_ologs:           The fraction of genes of ANY ALG that are present at all in the rbh file. len(rbhdf) / total_genes_ALGs
-#    #    - frac_ologs_sig:       The fraction of genes of ANY ALG that are significantly on any chromosome, as defined by whole_FET
-#    #    - frac_ologs_single:    The fraction of genes of ANY ALG that are significantly on the largest chromosome, as defined by whole_FET
-#    #    - frac_ologs_{ALGNAME}: The fraction of genes of INDIVIDUAL ALGs that are significantly on any chromosome
-#
-#    regular_columns_to_plot = ["num_scaffolds", "GC_content", "genome_size", "genome_size_log2", "genome_size_log10",
-#                               "median_scaffold_length", "mean_scaffold_length", "scaffold_N50", "longest_scaffold",
-#                               "smallest_scaffold", "fraction_Ns", "number_of_gaps", "num_proteins", "mean_protein_length",
-#                               "median_protein_length", "longest_protein", "smallest_protein", "from_rbh",
-#                               "frac_ologs", "frac_ologs_sig", "frac_ologs_single"]
-#    # if there is no log2 genome size plot, make one
-#    if "genome_size_log2" not in df.columns:
-#        df["genome_size_log2"]  = np.log2(df["genome_size"] + 1)
-#    if "genome_size_log10" not in df.columns:
-#        df["genome_size_log10"] = np.log10(df["genome_size"] + 1)
-#    # If we're plotting metadata, we might not actually have these columns in the dataframe.
-#    regular_columns_to_plot = [col for col in regular_columns_to_plot if col in df.columns]
-#    olog_columns_to_plot = [x for x in df.columns if x.startswith("frac_ologs_") and x not in ("frac_ologs_sig", "frac_ologs_single")]
-#
-#    known_umap_cols = {"UMAP1", "UMAP2", "color"}
-#    metadata_columns = [col for col in df.columns
-#                        if col not in known_umap_cols and (
-#                            col.endswith("_color") or
-#                            (not col.endswith("_color") and f"{col}_color" in df.columns)
-#                        )
-#                       ]
-#    all_columns_to_plot = ["color"] + regular_columns_to_plot + olog_columns_to_plot
-#    all_columns_to_plot = list(dict.fromkeys(all_columns_to_plot))  # remove duplicates while preserving order
-#    total_num_cols_to_plot = len(all_columns_to_plot) + int(len(metadata_columns)/2) # divide by 2 because we include both the column and its colors
-#    # figure out what number we should pick to make the shape closest to a square, when plotting N x N plots
-#    plots_per_row = int(np.ceil(np.sqrt(total_num_cols_to_plot)))
-#
-#    num_rows = plots_per_row
-#    num_cols = plots_per_row
-#    # make a grid of squares to plot each of these on
-#    # reduce the space between all the plots
-#    # make the figure size such that all the plots are square
-#
-#    # make the axes
-#    margin = 0.25
-#    panel_width = 1.5
-#    fig_width = (margin * 4) + (panel_width * num_cols) + (margin * (num_cols - 1)) + (margin * 4)
-#    fig_height = (margin * 4) + (panel_width * num_rows) + (margin * (num_rows - 1)) + (margin * 4)
-#    fig = plt.figure(figsize=(fig_width, fig_height))
-#
-#    axes = [[None for _ in range(num_cols)] for _ in range(num_rows)]
-#    for i in range(num_rows):
-#        for j in range(num_cols):
-#            left = (4 * margin) + (j * panel_width) + (j * margin)
-#            bottom = fig_height - ((4 * margin) + ((i + 1) * panel_width) + (i * margin))
-#            ax = fig.add_axes([
-#                left / fig_width,
-#                bottom / fig_height,
-#                panel_width / fig_width,
-#                panel_width / fig_height
-#            ])
-#            ax.set_xticks([])
-#            ax.set_yticks([])
-#            for spine in ['top', 'right', 'bottom', 'left']:
-#                ax.spines[spine].set_visible(False)
-#            axes[i][j] = ax
-#
-#    # set the title as samplename and the whether it is small or large
-#    fig.suptitle(f"Paramplot for {args.filelist}", fontsize = 4)
-#    # set absolute left label as the number of neighbors
-#    #fig.text(0.06, 0.5, 'Number of Neighbors', va='center', rotation='vertical')
-#    #fig.text(0.5, 0.92, 'Min Distance', ha='center')
-#    i = 0
-#    j = 0
-#    for thiscol in all_columns_to_plot:
-#        # for the left-most plot in each row, set the ylabel as the number of neighbors
-#        #axes[i][j].set_ylabel(f"{row}", rotation=0, ha='right')
-#        #for the top-most plot in each column, set the xlabel as the min_dist
-#        # put the xlabel on the top
-#        axes[i][j].xaxis.set_label_position('top')
-#        if thiscol == "color":
-#            axes[i][j].set_xlabel(f"Clade color", fontsize = 5)
-#        else:
-#            axes[i][j].set_xlabel(f"{thiscol}", fontsize = 5)
-#        # figure out the type of the column
-#        coltype = df[thiscol].dtype
-#        #if the type of the column is an object, then plot True as #074FF7 and False as #FD6117
-#        # If True/False not in that column , then randomly select a color
-#        colors = []
-#        print('coltype of {} is {}'.format(thiscol, coltype))
-#        if thiscol == "color":
-#            colors = list(df[thiscol])
-#        else:
-#            if ((True in df[thiscol].unique()) or (False in df[thiscol].unique())) and (coltype == "object"):
-#                # print the counts of True and False
-#                print(df[thiscol].value_counts())
-#                colordict = {True: "#074FF7", False: "#FD6117"}
-#                colors = [colordict[x] for x in df[thiscol]]
-#            else:
-#                # make an object to interpolate color between #DCDEE3 and #FF2608
-#                # if the max value is above 1, then we will interpolate between 0 and the max of the column
-#                if df[thiscol].max() > 1:
-#                    colors = [interpolate_color(x, 0, df[thiscol].max(), "#DCDEE3", "#FF2608") for x in df[thiscol]]
-#                else:
-#                    # otherwise go between 0 and 1
-#                    colors = [interpolate_color(x, 0, 1, "#DCDEE3", "#FF2608") for x in df[thiscol]]
-#
-#        # get the df file for this row and column from the dffile
-#        axes[i][j].scatter(df["UMAP1"], df["UMAP2"],
-#                         s=0.5, lw = 0, alpha=0.5,
-#                         color=colors)
-#        # iterate i and j
-#        j += 1
-#        if j == num_cols:
-#            j = 0
-#            i += 1
-#
-#    # Now we plot the metadata columns. This is less complicated
-#    #  since we already calculated the colors for everything
-#    for thiscol in metadata_columns:
-#        if thiscol.endswith("_color"):
-#            # if the column is not a color column, then we will plot the column and its color
-#            continue
-#        # get the color column
-#        color_col = f"{thiscol}_color"
-#        if color_col not in df.columns:
-#            # We should have generated this in the other function, so raise an error here
-#            raise ValueError(f"The column {color_col} is not present in the dataframe. This should have been generated in the parse_metadata_dfs() function.")
-#        axes[i][j].xaxis.set_label_position('top')
-#        axes[i][j].set_xlabel(f"{thiscol}", fontsize = 5)
-#        colors = df[color_col]
-#        axes[i][j].scatter(df["UMAP1"], df["UMAP2"],
-#                            s=0.5, lw = 0, alpha=0.5,
-#                            color=colors)
-#        # If the column is categorical, make a legend
-#        if pd.api.types.is_object_dtype(df[thiscol]) or pd.api.types.is_categorical_dtype(df[thiscol]):
-#            unique_vals = df[[thiscol, color_col]].dropna().drop_duplicates()
-#
-#            handles = [
-#                plt.Line2D(
-#                    [0], [0],
-#                    marker='o',
-#                    color='none',
-#                    label=str(row[thiscol]),
-#                    markerfacecolor=row[color_col],
-#                    markersize=2,
-#                    markeredgewidth=0,
-#                    markeredgecolor='none'
-#                )
-#                for _, row in unique_vals.iterrows()
-#            ]
-#
-#            axes[i][j].legend(
-#                handles=handles,
-#                loc='center left',
-#                bbox_to_anchor=(1.0, 0.5),
-#                fontsize=2,
-#                frameon=False
-#            )
-#
-#        # iterate i and j
-#        j += 1
-#        if j == num_cols:
-#            j = 0
-#            i += 1
-#
-#    # make sure that the aspect ratio for all of these is the same
-#    # Iterate over each axis and set aspect ratio to 'equal'
-#    for row in axes:
-#        for col in row:
-#            col.set_aspect('equal', adjustable='box')
-#
-#    # Now make vertical and horizontal lines to separate the plots. Make them medium gray.
-#    xs = []
-#    for j in range(1, num_cols):
-#        left_current = (4 * margin) + (j * panel_width) + ((j - 1) * margin)
-#        xs.append(left_current / fig_width)
-#    for x in xs:
-#        line = plt.Line2D([x, x], [0, 1], transform=fig.transFigure, color="#BBBBBB", lw=0.5)
-#        fig.add_artist(line)
-#
-#    ys = []
-#    for i in range(1, num_rows):
-#        bottom_current = (4 * margin) + (i * panel_width) + ((i - 1) * margin)
-#        y = 1 - (bottom_current / fig_height)
-#        ys.append(y)
-#    for y in ys:
-#        line = plt.Line2D([0, 1], [y, y], transform=fig.transFigure, color="#BBBBBB", lw=0.5)
-#        fig.add_artist(line)
-#
-#    # save the figure as f"{samplename}_{name}.pdf"
-#    # name is just the size, small or large
-#    print("saving the file to {}".format(outpdf))
-#    plt.savefig(outpdf)
-#    # close the figure
-#    plt.close(fig)
 
 def generate_umap_grid_bokeh(df_dict, output_html):
     """

@@ -4,19 +4,28 @@
 This program contains the functions used by AnnotateSampleDf.snakefile
 """
 
-# This block imports fasta-parser as fasta
 from ast import literal_eval
+import matplotlib.pyplot as plt
 import os
+import pandas as pd
 import sys
+
+# Add paths for custom modules
 thispath = os.path.dirname(os.path.realpath(__file__))
+# Add the parent directory to access 'source' module
+sys.path.insert(1, os.path.join(thispath, ".."))
+# Add dependencies path for fasta-parser
 dependencies_path = os.path.join(thispath, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
-import fasta
 
-import matplotlib.pyplot as plt
+# for getting rbh_tools
+source_path = os.path.join(thispath, "../source")
+sys.path.insert(1, source_path)
+from rbh_tools import parse_rbh
+
+
+import fasta
 import odp_plotting_functions as odp_plot
-import pandas as pd
-from source.rbh_tools import parse_rbh
 
 def gen_rbh_stats(samplerbhfilepath, algrbhfilepath, ALGname, outfilepath):
     """

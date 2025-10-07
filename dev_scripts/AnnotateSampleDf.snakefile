@@ -24,15 +24,21 @@ Usage instructions:
   - See https://github.com/conchoecia/odp#getting-started
 """
 
-# This block imports fasta-parser as fasta
 import os
+import pandas as pd
 import sys
+
+# get the path of this script
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+
+# Add paths for custom modules
+# Add the parent directory to access 'source' module  
+sys.path.insert(1, os.path.join(snakefile_path, ".."))
+# Add dependencies path for fasta-parser
 dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
+
 import fasta
-# other imports
-import pandas as pd
 import AnnotateSampleDf as asd
 
 configfile: "config.yaml"
@@ -106,10 +112,10 @@ rule all:
         #ofix + "/measurements/allsamples.protstats.collated.df",
         #ofix + "/measurements/allsamples.rbhstats.collated.df",
         #ofix + "/measurements/allsamples.genomestats.collated.df",
-        #expand(ofix + "/{dfname}.supplemented.df",
-        #    dfname=dfname_to_filepath.keys()),
-        #expand(ofix + "/{dfname}.supplemented.pdf",
-        #    dfname=dfname_to_filepath.keys()),
+        expand(ofix + "/{dfname}.supplemented.df",
+            dfname=dfname_to_filepath.keys()),
+        expand(ofix + "/{dfname}.supplemented.features.pdf",
+            dfname=dfname_to_filepath.keys()),
         ## this is the ALG dispersion plot
         #ofix + "/measurements/rbh_dispersion_plot.pdf",
         ## these are all the subclade plots
@@ -137,29 +143,185 @@ rule data_availability:
         asd.gen_data_availability_statement(input.df, output.html)
 
 
-def stats_get_mem_mb(wildcards, attempt):
+def genstats_get_mem_mb(wildcards, attempt):
     """
-    The amount of RAM needed for the script depends on the size of the input genome.
+    The amount of RAM needed depends on the size of the genome file.
     """
-    attemptdict = {1: 250,
-                   2: 1000,
-                   3: 5000,
-                   4: 20000,
-                   5: 40000,
-                  }
-    return attemptdict[attempt]
+    import os
+    
+    # Get the genome file path
+    genome_file = config["species"].get(wildcards.sample, {}).get("genome")
+    
+    # Base memory allocation per attempt (in MB)
+    base_mem = {
+        1: 500,    # Start with 500MB
+        2: 1000,   # 1GB
+        3: 2500,   # 2.5GB
+        4: 5000,   # 5GB
+        5: 10000,  # 10GB
+        6: 20000,  # 20GB
+    }
+    
+    mem_mb = base_mem.get(attempt, 20000)
+    
+    # If we can check the file size, scale accordingly
+    if genome_file and os.path.exists(genome_file):
+        file_size_mb = os.path.getsize(genome_file) / (1024 * 1024)
+        # Rule of thumb: allocate ~20x the file size in RAM for fasta parsing
+        estimated_mem = int(file_size_mb * 20)
+        # Use the larger of our estimate or base memory
+        mem_mb = max(mem_mb, estimated_mem)
+    
+    return mem_mb
 
-def stats_get_runtime(wildcards, attempt):
+def genstats_get_runtime(wildcards, attempt):
     """
-    The amount of RAM needed for the script depends on the size of the input genome.
+    The amount of runtime needed depends on the genome file size.
     """
-    attemptdict = {1: 2,
-                   2: 5,
-                   3: 10,
-                   4: 20,
-                   5: 40,
-                  }
-    return attemptdict[attempt]
+    import os
+    
+    genome_file = config["species"].get(wildcards.sample, {}).get("genome")
+    
+    base_runtime = {
+        1: 5,
+        2: 10,
+        3: 20,
+        4: 40,
+        5: 80,
+        6: 160,
+    }
+    
+    runtime = base_runtime.get(attempt, 160)
+    
+    if genome_file and os.path.exists(genome_file):
+        file_size_mb = os.path.getsize(genome_file) / (1024 * 1024)
+        # Rule of thumb: 1 minute per 50MB of genome
+        estimated_runtime = int(file_size_mb / 50)
+        runtime = max(5, max(runtime, estimated_runtime))
+    
+    return runtime
+
+def annotation_stats_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed depends on the size of the protein file.
+    """
+    import os
+    
+    # Get the protein file path
+    protein_file = config["species"].get(wildcards.sample, {}).get("proteins")
+    
+    # Base memory allocation per attempt (in MB)
+    base_mem = {
+        1: 1000,   # Start with 1GB
+        2: 2500,   # 2.5GB
+        3: 5000,   # 5GB
+        4: 10000,  # 10GB
+        5: 20000,  # 20GB
+        6: 40000,  # 40GB
+    }
+    
+    mem_mb = base_mem.get(attempt, 40000)
+    
+    # If we can check the file size, scale accordingly
+    if protein_file and os.path.exists(protein_file):
+        file_size_mb = os.path.getsize(protein_file) / (1024 * 1024)
+        # Rule of thumb: allocate ~30x the file size in RAM
+        estimated_mem = int(file_size_mb * 30)
+        # Use the larger of our estimate or base memory
+        mem_mb = max(mem_mb, estimated_mem)
+    
+    return mem_mb
+
+def annotation_stats_get_runtime(wildcards, attempt):
+    """
+    The amount of runtime needed depends on the protein file size.
+    """
+    import os
+    
+    protein_file = config["species"].get(wildcards.sample, {}).get("proteins")
+    
+    base_runtime = {
+        1: 5,
+        2: 10,
+        3: 20,
+        4: 40,
+        5: 80,
+        6: 160,
+    }
+    
+    runtime = base_runtime.get(attempt, 160)
+    
+    if protein_file and os.path.exists(protein_file):
+        file_size_mb = os.path.getsize(protein_file) / (1024 * 1024)
+        # Rule of thumb: 1 minute per 20MB of protein file
+        estimated_runtime = int(file_size_mb / 20)
+        runtime = max(5, max(runtime, estimated_runtime))
+    
+    return runtime
+
+def rbhstats_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed depends on the size of the RBH file.
+    RBH files can be quite large, so we allocate more RAM by default.
+    We also check the file size to scale appropriately.
+    """
+    import os
+    
+    # Get the RBH file path
+    rbh_file = config["species_to_rbh"].get(wildcards.sample)
+    
+    # Base memory allocation per attempt (in MB)
+    base_mem = {
+        1: 2000,   # Start with 2GB instead of 250MB
+        2: 5000,   # 5GB
+        3: 10000,  # 10GB
+        4: 20000,  # 20GB
+        5: 40000,  # 40GB
+        6: 80000,  # 80GB
+    }
+    
+    mem_mb = base_mem.get(attempt, 80000)
+    
+    # If we can check the file size, scale accordingly
+    if rbh_file and os.path.exists(rbh_file):
+        file_size_mb = os.path.getsize(rbh_file) / (1024 * 1024)
+        # Rule of thumb: allocate ~50x the file size in RAM
+        estimated_mem = int(file_size_mb * 50)
+        # Use the larger of our estimate or base memory
+        mem_mb = max(mem_mb, estimated_mem)
+    
+    return mem_mb
+
+def rbhstats_get_runtime(wildcards, attempt):
+    """
+    The amount of runtime needed depends on the file size and attempt number.
+    """
+    import os
+    
+    # Get the RBH file path
+    rbh_file = config["species_to_rbh"].get(wildcards.sample)
+    
+    # Base runtime allocation per attempt (in minutes)
+    base_runtime = {
+        1: 10,   # Start with 10 minutes instead of 2
+        2: 20,
+        3: 40,
+        4: 80,
+        5: 160,
+        6: 320,
+    }
+    
+    runtime = base_runtime.get(attempt, 320)
+    
+    # If we can check the file size, scale accordingly
+    if rbh_file and os.path.exists(rbh_file):
+        file_size_mb = os.path.getsize(rbh_file) / (1024 * 1024)
+        # Rule of thumb: 1 minute per 10MB of file
+        estimated_runtime = int(file_size_mb / 10)
+        # Use the larger of our estimate or base runtime, with a minimum of 5 minutes
+        runtime = max(5, max(runtime, estimated_runtime))
+    
+    return runtime
 
 rule genstats:
     """
@@ -179,13 +341,50 @@ rule genstats:
         genome = lambda wildcards: config["species"][wildcards.sample]["genome"]
     output:
         results = ofix + "/measurements/genome_stats/{sample}.genome_stats.txt"
+    log:
+        ofix + "/logs/genome_stats/{sample}.genome_stats.log"
+    benchmark:
+        ofix + "/benchmarks/genome_stats/{sample}.genome_stats.tsv"
     threads: 1
-    retries: 5
+    retries: 6
     resources:
-        mem_mb = stats_get_mem_mb,
-        runtime   = stats_get_runtime
+        mem_mb = genstats_get_mem_mb,
+        runtime = genstats_get_runtime
     run:
-        asd.gen_genome_stats(input.genome, output.results)
+        import os
+        import sys
+        from datetime import datetime
+        
+        os.makedirs(os.path.dirname(log[0]), exist_ok=True)
+        
+        genome_size_mb = os.path.getsize(input.genome) / (1024 * 1024)
+        
+        with open(log[0], 'w') as logfile:
+            logfile.write(f"Starting genstats for sample: {wildcards.sample}\n")
+            logfile.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            logfile.write(f"Genome file: {input.genome}\n")
+            logfile.write(f"Genome file size: {genome_size_mb:.2f} MB\n")
+            logfile.write(f"Allocated memory: {resources.mem_mb} MB\n")
+            logfile.write(f"Allocated runtime: {resources.runtime} minutes\n")
+            logfile.write("-" * 80 + "\n")
+            
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            sys.stdout = logfile
+            sys.stderr = logfile
+            
+            try:
+                asd.gen_genome_stats(input.genome, output.results)
+                logfile.write("\n" + "-" * 80 + "\n")
+                logfile.write(f"Completed successfully at {datetime.now().isoformat()}\n")
+            except Exception as e:
+                logfile.write("\n" + "-" * 80 + "\n")
+                logfile.write(f"ERROR: {str(e)}\n")
+                logfile.write(f"Failed at {datetime.now().isoformat()}\n")
+                raise
+            finally:
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
 
 rule annotation_stats:
     """
@@ -203,13 +402,53 @@ rule annotation_stats:
         alg_rbh  = config["ALG_rbh"]
     output:
         results = ofix + "/measurements/protein_stats/{sample}.protein_stats.txt"
+    log:
+        ofix + "/logs/protein_stats/{sample}.protein_stats.log"
+    benchmark:
+        ofix + "/benchmarks/protein_stats/{sample}.protein_stats.tsv"
     threads: 1
-    retries: 5
+    retries: 6
     resources:
-        mem_mb = stats_get_mem_mb,
-        runtime   = stats_get_runtime
+        mem_mb = annotation_stats_get_mem_mb,
+        runtime = annotation_stats_get_runtime
     run:
-        asd.gen_annotation_stats(input.proteins, input.alg_rbh, output.results)
+        import os
+        import sys
+        from datetime import datetime
+        
+        os.makedirs(os.path.dirname(log[0]), exist_ok=True)
+        
+        protein_size_mb = os.path.getsize(input.proteins) / (1024 * 1024)
+        alg_size_mb = os.path.getsize(input.alg_rbh) / (1024 * 1024)
+        
+        with open(log[0], 'w') as logfile:
+            logfile.write(f"Starting annotation_stats for sample: {wildcards.sample}\n")
+            logfile.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            logfile.write(f"Protein file: {input.proteins}\n")
+            logfile.write(f"Protein file size: {protein_size_mb:.2f} MB\n")
+            logfile.write(f"ALG RBH file: {input.alg_rbh}\n")
+            logfile.write(f"ALG RBH file size: {alg_size_mb:.2f} MB\n")
+            logfile.write(f"Allocated memory: {resources.mem_mb} MB\n")
+            logfile.write(f"Allocated runtime: {resources.runtime} minutes\n")
+            logfile.write("-" * 80 + "\n")
+            
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            sys.stdout = logfile
+            sys.stderr = logfile
+            
+            try:
+                asd.gen_annotation_stats(input.proteins, input.alg_rbh, output.results)
+                logfile.write("\n" + "-" * 80 + "\n")
+                logfile.write(f"Completed successfully at {datetime.now().isoformat()}\n")
+            except Exception as e:
+                logfile.write("\n" + "-" * 80 + "\n")
+                logfile.write(f"ERROR: {str(e)}\n")
+                logfile.write(f"Failed at {datetime.now().isoformat()}\n")
+                raise
+            finally:
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
 
 rule rbhstats:
     """
@@ -226,13 +465,57 @@ rule rbhstats:
         alg_rbh  = config["ALG_rbh"]
     output:
         results = ofix + "/measurements/rbh_stats/{sample}.rbh_stats.txt"
+    log:
+        ofix + "/logs/rbh_stats/{sample}.rbh_stats.log"
+    benchmark:
+        ofix + "/benchmarks/rbh_stats/{sample}.rbh_stats.tsv"
     threads: 1
-    retries: 5
+    retries: 6
     resources:
-        mem_mb  = stats_get_mem_mb,
-        runtime = stats_get_runtime
+        mem_mb  = rbhstats_get_mem_mb,
+        runtime = rbhstats_get_runtime
     run:
-        asd.gen_rbh_stats(input.rbh, input.alg_rbh, config["ALG_name"], output.results)
+        import os
+        import sys
+        from datetime import datetime
+        
+        # Create log directory if it doesn't exist
+        os.makedirs(os.path.dirname(log[0]), exist_ok=True)
+        
+        # Log file size and resource allocation
+        rbh_size_mb = os.path.getsize(input.rbh) / (1024 * 1024)
+        alg_size_mb = os.path.getsize(input.alg_rbh) / (1024 * 1024)
+        
+        with open(log[0], 'w') as logfile:
+            logfile.write(f"Starting rbhstats for sample: {wildcards.sample}\n")
+            logfile.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            logfile.write(f"RBH file: {input.rbh}\n")
+            logfile.write(f"RBH file size: {rbh_size_mb:.2f} MB\n")
+            logfile.write(f"ALG RBH file: {input.alg_rbh}\n")
+            logfile.write(f"ALG RBH file size: {alg_size_mb:.2f} MB\n")
+            logfile.write(f"Allocated memory: {resources.mem_mb} MB\n")
+            logfile.write(f"Allocated runtime: {resources.runtime} minutes\n")
+            logfile.write(f"Threads: {threads}\n")
+            logfile.write("-" * 80 + "\n")
+            
+            # Redirect stdout and stderr to log file
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            sys.stdout = logfile
+            sys.stderr = logfile
+            
+            try:
+                asd.gen_rbh_stats(input.rbh, input.alg_rbh, config["ALG_name"], output.results)
+                logfile.write("\n" + "-" * 80 + "\n")
+                logfile.write(f"Completed successfully at {datetime.now().isoformat()}\n")
+            except Exception as e:
+                logfile.write("\n" + "-" * 80 + "\n")
+                logfile.write(f"ERROR: {str(e)}\n")
+                logfile.write(f"Failed at {datetime.now().isoformat()}\n")
+                raise
+            finally:
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
 
 def composite_get_mem_mb(wildcards, attempt):
     """
@@ -349,8 +632,8 @@ rule make_composite_dataframe:
         df = ofix + "/{dfname}.supplemented.df"
     threads: 1
     resources:
-        mem_mb  = 250,
-        runtime = 2
+        mem_mb  = 8000,
+        runtime = 10
     run:
         # import the three dataframes to join by sample column
         compositedf = pd.read_csv(input.df, sep="\t", index_col=0)
@@ -371,14 +654,16 @@ rule pdf:
         df = ofix + "/{dfname}.supplemented.df",
         plotdfs = os.path.join(snakefile_path, "PhyloTreeUMAP_plotdfs.py")
     output:
-        pdf = ofix + "/{dfname}.supplemented.pdf"
+        pdf = ofix + "/{dfname}.supplemented.features.pdf"
     threads: 1
     resources:
-        mem_mb  = 1000,
-        runtime = 3
+        mem_mb  = 4000,
+        runtime = 10
+    params:
+        prefix = lambda wildcards, output: output.pdf.replace('.features.pdf', '')
     shell:
         """
-        python {input.plotdfs} --plot_features -f {input.df} -o {output.pdf}
+        python {input.plotdfs} --plot_features -f {input.df} -p {params.prefix} --threecolor --genome-min-bp 100000000 --genome-max-bp 5000000000
         """
 
 rule dispersion_plot:
@@ -420,3 +705,286 @@ rule subclade_plots:
                                          params.taxids_to_include,
                                          params.taxids_to_exclude,
                                          output.pdf)
+
+rule collate_rbhstats_logs:
+    """
+    Collates the rbhstats log files into a single TSV for analysis.
+    Extracts: sample, RBH file size, ALG RBH file size, allocated memory, allocated runtime
+    """
+    input:
+        logs = expand(ofix + "/logs/rbh_stats/{sample}.rbh_stats.log", sample=config["species"].keys()),
+        benchmarks = expand(ofix + "/benchmarks/rbh_stats/{sample}.rbh_stats.tsv", sample=config["species"].keys())
+    output:
+        tsv = ofix + "/logs/rbhstats_resource_usage.tsv"
+    threads: 1
+    resources:
+        mem_mb = 2000,
+        runtime = 30
+    run:
+        import re
+        import os
+        import pandas as pd
+        
+        results = []
+        
+        for log_file in input.logs:
+            sample = os.path.basename(log_file).replace('.rbh_stats.log', '')
+            
+            # Parse log file
+            log_data = {
+                'sample': sample,
+                'rbh_size_mb': None,
+                'alg_rbh_size_mb': None,
+                'allocated_mem_mb': None,
+                'allocated_runtime_min': None,
+                'actual_runtime_sec': None,
+                'actual_mem_mb': None,
+                'success': False
+            }
+            
+            try:
+                with open(log_file, 'r') as f:
+                    content = f.read()
+                    
+                    # Extract file sizes
+                    rbh_match = re.search(r'RBH file size: ([\d.]+) MB', content)
+                    if rbh_match:
+                        log_data['rbh_size_mb'] = float(rbh_match.group(1))
+                    
+                    alg_match = re.search(r'ALG RBH file size: ([\d.]+) MB', content)
+                    if alg_match:
+                        log_data['alg_rbh_size_mb'] = float(alg_match.group(1))
+                    
+                    # Extract allocated resources
+                    mem_match = re.search(r'Allocated memory: (\d+) MB', content)
+                    if mem_match:
+                        log_data['allocated_mem_mb'] = int(mem_match.group(1))
+                    
+                    runtime_match = re.search(r'Allocated runtime: (\d+) minutes', content)
+                    if runtime_match:
+                        log_data['allocated_runtime_min'] = int(runtime_match.group(1))
+                    
+                    # Check success
+                    if 'Completed successfully' in content:
+                        log_data['success'] = True
+            except Exception as e:
+                print(f"Warning: Could not parse log file {log_file}: {e}")
+            
+            # Parse benchmark file for actual usage
+            benchmark_file = log_file.replace('/logs/rbh_stats/', '/benchmarks/rbh_stats/').replace('.log', '.tsv')
+            try:
+                if os.path.exists(benchmark_file):
+                    df_bench = pd.read_csv(benchmark_file, sep='\t')
+                    if not df_bench.empty:
+                        log_data['actual_runtime_sec'] = df_bench['s'].iloc[0]
+                        log_data['actual_mem_mb'] = df_bench['max_rss'].iloc[0] / 1024  # Convert KB to MB
+            except Exception as e:
+                print(f"Warning: Could not parse benchmark file {benchmark_file}: {e}")
+            
+            results.append(log_data)
+        
+        # Create DataFrame and save
+        df = pd.DataFrame(results)
+        df = df.sort_values('sample')
+        df.to_csv(output.tsv, sep='\t', index=False)
+        
+        # Print summary statistics
+        print(f"\nRBHStats Resource Usage Summary:")
+        print(f"Total samples: {len(df)}")
+        print(f"Successful: {df['success'].sum()}")
+        print(f"Failed: {(~df['success']).sum()}")
+        if df['actual_mem_mb'].notna().any():
+            print(f"\nMemory Usage (MB):")
+            print(f"  Mean: {df['actual_mem_mb'].mean():.2f}")
+            print(f"  Median: {df['actual_mem_mb'].median():.2f}")
+            print(f"  Max: {df['actual_mem_mb'].max():.2f}")
+        if df['actual_runtime_sec'].notna().any():
+            print(f"\nRuntime (seconds):")
+            print(f"  Mean: {df['actual_runtime_sec'].mean():.2f}")
+            print(f"  Median: {df['actual_runtime_sec'].median():.2f}")
+            print(f"  Max: {df['actual_runtime_sec'].max():.2f}")
+
+rule collate_genstats_logs:
+    """
+    Collates the genstats log files into a single TSV for analysis.
+    Extracts: sample, genome file size, allocated memory, allocated runtime
+    """
+    input:
+        logs = expand(ofix + "/logs/genome_stats/{sample}.genome_stats.log", sample=config["species"].keys()),
+        benchmarks = expand(ofix + "/benchmarks/genome_stats/{sample}.genome_stats.tsv", sample=config["species"].keys())
+    output:
+        tsv = ofix + "/logs/genstats_resource_usage.tsv"
+    threads: 1
+    resources:
+        mem_mb = 2000,
+        runtime = 30
+    run:
+        import re
+        import os
+        import pandas as pd
+        
+        results = []
+        
+        for log_file in input.logs:
+            sample = os.path.basename(log_file).replace('.genome_stats.log', '')
+            
+            log_data = {
+                'sample': sample,
+                'genome_size_mb': None,
+                'allocated_mem_mb': None,
+                'allocated_runtime_min': None,
+                'actual_runtime_sec': None,
+                'actual_mem_mb': None,
+                'success': False
+            }
+            
+            try:
+                with open(log_file, 'r') as f:
+                    content = f.read()
+                    
+                    # Extract file size
+                    size_match = re.search(r'Genome file size: ([\d.]+) MB', content)
+                    if size_match:
+                        log_data['genome_size_mb'] = float(size_match.group(1))
+                    
+                    # Extract allocated resources
+                    mem_match = re.search(r'Allocated memory: (\d+) MB', content)
+                    if mem_match:
+                        log_data['allocated_mem_mb'] = int(mem_match.group(1))
+                    
+                    runtime_match = re.search(r'Allocated runtime: (\d+) minutes', content)
+                    if runtime_match:
+                        log_data['allocated_runtime_min'] = int(runtime_match.group(1))
+                    
+                    # Check success
+                    if 'Completed successfully' in content:
+                        log_data['success'] = True
+            except Exception as e:
+                print(f"Warning: Could not parse log file {log_file}: {e}")
+            
+            # Parse benchmark file
+            benchmark_file = log_file.replace('/logs/genome_stats/', '/benchmarks/genome_stats/').replace('.log', '.tsv')
+            try:
+                if os.path.exists(benchmark_file):
+                    df_bench = pd.read_csv(benchmark_file, sep='\t')
+                    if not df_bench.empty:
+                        log_data['actual_runtime_sec'] = df_bench['s'].iloc[0]
+                        log_data['actual_mem_mb'] = df_bench['max_rss'].iloc[0] / 1024
+            except Exception as e:
+                print(f"Warning: Could not parse benchmark file {benchmark_file}: {e}")
+            
+            results.append(log_data)
+        
+        df = pd.DataFrame(results)
+        df = df.sort_values('sample')
+        df.to_csv(output.tsv, sep='\t', index=False)
+        
+        print(f"\nGenStats Resource Usage Summary:")
+        print(f"Total samples: {len(df)}")
+        print(f"Successful: {df['success'].sum()}")
+        print(f"Failed: {(~df['success']).sum()}")
+        if df['actual_mem_mb'].notna().any():
+            print(f"\nMemory Usage (MB):")
+            print(f"  Mean: {df['actual_mem_mb'].mean():.2f}")
+            print(f"  Median: {df['actual_mem_mb'].median():.2f}")
+            print(f"  Max: {df['actual_mem_mb'].max():.2f}")
+        if df['actual_runtime_sec'].notna().any():
+            print(f"\nRuntime (seconds):")
+            print(f"  Mean: {df['actual_runtime_sec'].mean():.2f}")
+            print(f"  Median: {df['actual_runtime_sec'].median():.2f}")
+            print(f"  Max: {df['actual_runtime_sec'].max():.2f}")
+
+rule collate_annotation_stats_logs:
+    """
+    Collates the annotation_stats log files into a single TSV for analysis.
+    Extracts: sample, protein file size, ALG RBH file size, allocated memory, allocated runtime
+    """
+    input:
+        logs = expand(ofix + "/logs/protein_stats/{sample}.protein_stats.log", sample=config["species"].keys()),
+        benchmarks = expand(ofix + "/benchmarks/protein_stats/{sample}.protein_stats.tsv", sample=config["species"].keys())
+    output:
+        tsv = ofix + "/logs/annotation_stats_resource_usage.tsv"
+    threads: 1
+    resources:
+        mem_mb = 2000,
+        runtime = 30
+    run:
+        import re
+        import os
+        import pandas as pd
+        
+        results = []
+        
+        for log_file in input.logs:
+            sample = os.path.basename(log_file).replace('.protein_stats.log', '')
+            
+            log_data = {
+                'sample': sample,
+                'protein_size_mb': None,
+                'alg_rbh_size_mb': None,
+                'allocated_mem_mb': None,
+                'allocated_runtime_min': None,
+                'actual_runtime_sec': None,
+                'actual_mem_mb': None,
+                'success': False
+            }
+            
+            try:
+                with open(log_file, 'r') as f:
+                    content = f.read()
+                    
+                    # Extract file sizes
+                    protein_match = re.search(r'Protein file size: ([\d.]+) MB', content)
+                    if protein_match:
+                        log_data['protein_size_mb'] = float(protein_match.group(1))
+                    
+                    alg_match = re.search(r'ALG RBH file size: ([\d.]+) MB', content)
+                    if alg_match:
+                        log_data['alg_rbh_size_mb'] = float(alg_match.group(1))
+                    
+                    # Extract allocated resources
+                    mem_match = re.search(r'Allocated memory: (\d+) MB', content)
+                    if mem_match:
+                        log_data['allocated_mem_mb'] = int(mem_match.group(1))
+                    
+                    runtime_match = re.search(r'Allocated runtime: (\d+) minutes', content)
+                    if runtime_match:
+                        log_data['allocated_runtime_min'] = int(runtime_match.group(1))
+                    
+                    # Check success
+                    if 'Completed successfully' in content:
+                        log_data['success'] = True
+            except Exception as e:
+                print(f"Warning: Could not parse log file {log_file}: {e}")
+            
+            # Parse benchmark file
+            benchmark_file = log_file.replace('/logs/protein_stats/', '/benchmarks/protein_stats/').replace('.log', '.tsv')
+            try:
+                if os.path.exists(benchmark_file):
+                    df_bench = pd.read_csv(benchmark_file, sep='\t')
+                    if not df_bench.empty:
+                        log_data['actual_runtime_sec'] = df_bench['s'].iloc[0]
+                        log_data['actual_mem_mb'] = df_bench['max_rss'].iloc[0] / 1024
+            except Exception as e:
+                print(f"Warning: Could not parse benchmark file {benchmark_file}: {e}")
+            
+            results.append(log_data)
+        
+        df = pd.DataFrame(results)
+        df = df.sort_values('sample')
+        df.to_csv(output.tsv, sep='\t', index=False)
+        
+        print(f"\nAnnotation Stats Resource Usage Summary:")
+        print(f"Total samples: {len(df)}")
+        print(f"Successful: {df['success'].sum()}")
+        print(f"Failed: {(~df['success']).sum()}")
+        if df['actual_mem_mb'].notna().any():
+            print(f"\nMemory Usage (MB):")
+            print(f"  Mean: {df['actual_mem_mb'].mean():.2f}")
+            print(f"  Median: {df['actual_mem_mb'].median():.2f}")
+            print(f"  Max: {df['actual_mem_mb'].max():.2f}")
+        if df['actual_runtime_sec'].notna().any():
+            print(f"\nRuntime (seconds):")
+            print(f"  Mean: {df['actual_runtime_sec'].mean():.2f}")
+            print(f"  Median: {df['actual_runtime_sec'].median():.2f}")
+            print(f"  Max: {df['actual_runtime_sec'].max():.2f}")
