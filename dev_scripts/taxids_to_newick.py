@@ -82,6 +82,8 @@ def parse_args():
     
     parser.add_argument('-o', '--output_file', type=str, default='ncbi_tree.nwk', 
                         help='Output Newick file (default: ncbi_tree.nwk)')
+    parser.add_argument('--timetree_list', type=str,
+                        help='Output file for TimeTree.org compatible species list (one "Genus species" per line)')
     parser.add_argument('--custom_phylogeny', action='store_true',
                         help='Use custom phylogeny with Ctenophora as sister to all other animals (Myriazoa=-67)')
     return parser.parse_args()
@@ -138,6 +140,54 @@ def read_taxids_from_config(config_file):
     
     print(f"Extracted {len(taxids)} unique taxids from config file")
     return taxids
+
+
+def export_timetree_list(taxids, ncbi, output_file):
+    """
+    Export a list of species names in TimeTree.org compatible format.
+    
+    TimeTree.org expects one species name per line in "Genus species" format.
+    
+    Parameters:
+    -----------
+    taxids : list
+        List of taxids to export
+    ncbi : NCBITaxa
+        NCBI taxonomy database object
+    output_file : str
+        Path to output file
+    """
+    print(f"\nExporting TimeTree-compatible species list to: {output_file}")
+    
+    # Get scientific names for all taxids
+    name_dict = ncbi.get_taxid_translator(taxids)
+    
+    # Filter to only keep proper binomial names (genus + species)
+    # TimeTree expects species-level names in "Genus species" format
+    species_names = []
+    skipped = 0
+    
+    for taxid in taxids:
+        name = name_dict.get(taxid, "")
+        # Check if it looks like a binomial (has exactly 2 words)
+        parts = name.split()
+        if len(parts) >= 2:
+            # Take first two parts for binomial
+            binomial = f"{parts[0]} {parts[1]}"
+            species_names.append(binomial)
+        else:
+            skipped += 1
+            print(f"  Warning: Skipping non-binomial name: {name} (taxid: {taxid})")
+    
+    # Write to file
+    with open(output_file, 'w') as f:
+        for name in sorted(species_names):
+            f.write(f"{name}\n")
+    
+    print(f"  Exported {len(species_names)} species names")
+    if skipped > 0:
+        print(f"  Skipped {skipped} non-species-level taxa")
+    print(f"  File ready for upload to TimeTree.org")
 
 
 def build_custom_topology_tree(taxids, ncbi):
@@ -384,6 +434,10 @@ def main():
     # ete4 changed the write() API - no longer uses format/outfile keywords
     tree.write(outfile=args.output_file)
     print(f"Newick tree written to: {args.output_file}")
+    
+    # Export TimeTree-compatible species list if requested
+    if args.timetree_list:
+        export_timetree_list(taxids, ncbi, args.timetree_list)
     
     if args.custom_phylogeny:
         print("\nNote: Custom phylogeny flag enabled.")
