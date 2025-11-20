@@ -190,6 +190,93 @@ def export_timetree_list(taxids, ncbi, output_file):
     print(f"  File ready for upload to TimeTree.org")
 
 
+def build_subtree_with_labels(taxids, ncbi, root_taxid, root_name):
+    """
+    Recursively builds a subtree with proper internal node labels.
+    
+    Parameters:
+    -----------
+    taxids : list
+        List of taxids to include
+    ncbi : NCBITaxa
+        NCBI taxonomy object
+    root_taxid : int
+        The taxid of the root of this subtree
+    root_name : str
+        The name to use for the root node
+        
+    Returns:
+    --------
+    PhyloTree : Subtree with labeled internal nodes
+    """
+    if len(taxids) == 0:
+        return None
+    
+    if len(taxids) == 1:
+        # Leaf node
+        node = PhyloTree()
+        node.name = str(taxids[0])
+        return node
+    
+    # Get the full NCBI tree topology for these taxa
+    tree = ncbi.get_topology(taxids)
+    
+    # Label the root node with the specified root_taxid and root_name
+    tree.name = f"{root_name}[{root_taxid}]"
+    
+    # Now traverse and label all internal nodes based on their descendants
+    # Skip the root since we already labeled it
+    internal_count = 1  # count the root
+    for node in tree.traverse():
+        if not node.is_leaf and node != tree:  # Skip root, we already labeled it
+            # Get all leaf taxids under this node using traverse
+            leaf_taxids = [int(leaf.name) for leaf in node.traverse() if leaf.is_leaf]
+            
+            if len(leaf_taxids) >= 2:
+                # Find common ancestor by getting full lineages (lists, not sets)
+                # We need to preserve order to find the most specific common ancestor
+                lineages = [ncbi.get_lineage(tid) for tid in leaf_taxids]
+                
+                # Find common ancestors by intersecting lineages
+                common_set = set(lineages[0])
+                for lineage in lineages[1:]:
+                    common_set = common_set & set(lineage)
+                
+                if common_set:
+                    # Now find the most specific (deepest) common ancestor
+                    # by looking for the last common taxid in the first lineage
+                    # (lineages go from root to leaf, so last common = most specific)
+                    most_specific = None
+                    for taxid in reversed(lineages[0]):
+                        if taxid in common_set:
+                            # Make sure it's not more ancestral than our root
+                            if root_taxid > 0:
+                                root_lineage_set = set(ncbi.get_lineage(root_taxid))
+                                # Only use this if it's within our clade (root_taxid is in its lineage or it equals root_taxid)
+                                if taxid == root_taxid or root_taxid in ncbi.get_lineage(taxid):
+                                    most_specific = taxid
+                                    break
+                            else:
+                                most_specific = taxid
+                                break
+                    
+                    if most_specific:
+                        try:
+                            taxon_name = ncbi.get_taxid_translator([most_specific]).get(most_specific, f"taxid_{most_specific}")
+                            node.name = f"{taxon_name.replace(' ', '_')}[{most_specific}]"
+                            internal_count += 1
+                        except Exception as e:
+                            node.name = f"node[{most_specific}]"
+                            internal_count += 1
+            elif len(leaf_taxids) == 1:
+                # Single leaf under this node - shouldn't happen but handle it
+                node.name = f"internal[{leaf_taxids[0]}]"
+                internal_count += 1
+    
+    print(f"    Labeled {internal_count} internal nodes in {root_name} subtree")
+    return tree
+
+
 def build_custom_topology_tree(taxids, ncbi):
     """
     Builds a tree with custom topology by creating subtrees and stitching them together.
@@ -215,7 +302,7 @@ def build_custom_topology_tree(taxids, ncbi):
         
     Returns:
     --------
-    ete4.Tree : Tree with custom topology
+    ete4.Tree : Tree with custom topology and labeled nodes
     """
     METAZOA_TAXID    = 33208
     CTENOPHORA_TAXID = 10197
@@ -263,57 +350,26 @@ def build_custom_topology_tree(taxids, ncbi):
     print(f"  Bilateria: {len(bilateria_taxa)} taxa")
     print(f"  Other: {len(other_taxa)} taxa")
     
-    # Build subtrees for each major clade using NCBI topology
+    # Build subtrees for each major clade with labeled internal nodes
     subtrees = {}
     
     if ctenophora_taxa:
-        if len(ctenophora_taxa) == 1:
-            node = PhyloTree()
-            node.name = str(ctenophora_taxa[0])
-            subtrees['ctenophora'] = node
-        else:
-            subtrees['ctenophora'] = ncbi.get_topology(ctenophora_taxa)
+        subtrees['ctenophora'] = build_subtree_with_labels(ctenophora_taxa, ncbi, CTENOPHORA_TAXID, "Ctenophora")
     
     if porifera_taxa:
-        if len(porifera_taxa) == 1:
-            node = PhyloTree()
-            node.name = str(porifera_taxa[0])
-            subtrees['porifera'] = node
-        else:
-            subtrees['porifera'] = ncbi.get_topology(porifera_taxa)
+        subtrees['porifera'] = build_subtree_with_labels(porifera_taxa, ncbi, PORIFERA_TAXID, "Porifera")
     
     if cnidaria_taxa:
-        if len(cnidaria_taxa) == 1:
-            node = PhyloTree()
-            node.name = str(cnidaria_taxa[0])
-            subtrees['cnidaria'] = node
-        else:
-            subtrees['cnidaria'] = ncbi.get_topology(cnidaria_taxa)
+        subtrees['cnidaria'] = build_subtree_with_labels(cnidaria_taxa, ncbi, CNIDARIA_TAXID, "Cnidaria")
     
     if placozoa_taxa:
-        if len(placozoa_taxa) == 1:
-            node = PhyloTree()
-            node.name = str(placozoa_taxa[0])
-            subtrees['placozoa'] = node
-        else:
-            subtrees['placozoa'] = ncbi.get_topology(placozoa_taxa)
+        subtrees['placozoa'] = build_subtree_with_labels(placozoa_taxa, ncbi, PLACOZOA_TAXID, "Placozoa")
     
     if bilateria_taxa:
-        if len(bilateria_taxa) == 1:
-            node = PhyloTree()
-            node.name = str(bilateria_taxa[0])
-            subtrees['bilateria'] = node
-        else:
-            subtrees['bilateria'] = ncbi.get_topology(bilateria_taxa)
+        subtrees['bilateria'] = build_subtree_with_labels(bilateria_taxa, ncbi, BILATERIA_TAXID, "Bilateria")
     
-    # Handle other taxa (non-metazoan or other metazoan groups)
     if other_taxa:
-        if len(other_taxa) == 1:
-            node = PhyloTree()
-            node.name = str(other_taxa[0])
-            subtrees['other'] = node
-        else:
-            subtrees['other'] = ncbi.get_topology(other_taxa)
+        subtrees['other'] = build_subtree_with_labels(other_taxa, ncbi, -1, "Other")
     
     # Now stitch them together according to custom topology
     # Structure: (Ctenophora,(Porifera,((Cnidaria,Placozoa),Bilateria)Parahoxozoa)Myriazoa)Metazoa
@@ -334,7 +390,7 @@ def build_custom_topology_tree(taxids, ncbi):
     parahoxozoa_node = None
     if cnid_plac_node and 'bilateria' in subtrees:
         parahoxozoa_node = PhyloTree()
-        parahoxozoa_node.name = str(PARAHOXOZOA_TAXID)
+        parahoxozoa_node.name = f"Parahoxozoa[{PARAHOXOZOA_TAXID}]"
         parahoxozoa_node.add_child(cnid_plac_node)
         parahoxozoa_node.add_child(subtrees['bilateria'])
     elif cnid_plac_node:
@@ -346,7 +402,7 @@ def build_custom_topology_tree(taxids, ncbi):
     myriazoa_node = None
     if 'porifera' in subtrees and parahoxozoa_node:
         myriazoa_node = PhyloTree()
-        myriazoa_node.name = str(MYRIAZOA_TAXID)
+        myriazoa_node.name = f"Myriazoa[{MYRIAZOA_TAXID}]"
         myriazoa_node.add_child(subtrees['porifera'])
         myriazoa_node.add_child(parahoxozoa_node)
     elif 'porifera' in subtrees:
@@ -357,7 +413,7 @@ def build_custom_topology_tree(taxids, ncbi):
     # Create Metazoa root (Ctenophora sister to Myriazoa)
     if 'ctenophora' in subtrees and myriazoa_node:
         metazoa_node = PhyloTree()
-        metazoa_node.name = str(METAZOA_TAXID)
+        metazoa_node.name = f"Metazoa[{METAZOA_TAXID}]"
         metazoa_node.add_child(subtrees['ctenophora'])
         metazoa_node.add_child(myriazoa_node)
     elif 'ctenophora' in subtrees:
@@ -379,6 +435,32 @@ def build_custom_topology_tree(taxids, ncbi):
 
 def main():
     args = parse_args()
+    
+    # Set up logging to both console and file
+    import sys
+    log_file = args.output_file.replace('.nwk', '.log').replace('.newick', '.log')
+    if not log_file.endswith('.log'):
+        log_file = args.output_file + '.log'
+    
+    class Tee:
+        """Write to both stdout and a file"""
+        def __init__(self, *files):
+            self.files = files
+        def write(self, obj):
+            for f in self.files:
+                f.write(obj)
+                f.flush()
+        def flush(self):
+            for f in self.files:
+                f.flush()
+    
+    log_handle = open(log_file, 'w')
+    original_stdout = sys.stdout
+    sys.stdout = Tee(sys.stdout, log_handle)
+    
+    print(f"Logging output to: {log_file}")
+    print(f"Output tree file: {args.output_file}")
+    print()
 
     # Read taxids from either taxid_file or config_file
     if args.taxid_file:
@@ -422,18 +504,131 @@ def main():
         print("Building tree with NCBI taxonomy...")
         tree = ncbi.get_topology(taxids)
 
-    # Optional: replace tip labels to make FigTree-friendly
+    # Label leaf nodes with species names (internal nodes already labeled during tree construction)
+    print("\nLabeling leaf nodes with species names...")
     name_dict = ncbi.get_taxid_translator(taxids)
-    for leaf in tree:
-        if leaf.is_leaf:
-            tid = int(leaf.name)
-            # Just the species name, with spaces replaced by underscores
-            leaf.name = name_dict.get(tid, f"taxid_{tid}").replace(" ", "_")
+    
+    leaf_count = 0
+    for node in tree.traverse():
+        if node.is_leaf:
+            tid = int(node.name)
+            node.name = name_dict.get(tid, f"taxid_{tid}").replace(" ", "_")
+            leaf_count += 1
+    
+    print(f"  Labeled {leaf_count} leaf nodes")
+    print(f"  Total nodes in tree: {len(list(tree.traverse()))}")
+    print(f"  - {len([n for n in tree.traverse() if n.is_leaf])} leaf nodes (species)")
+    print(f"  - {len([n for n in tree.traverse() if not n.is_leaf])} internal nodes")
+    
+    # Count internal nodes by number of children
+    print("\nInternal node children counts:")
+    children_counts = {}
+    for node in tree.traverse():
+        if not node.is_leaf:
+            num_children = len(node.children)
+            children_counts[num_children] = children_counts.get(num_children, 0) + 1
+    
+    for num_children in sorted(children_counts.keys()):
+        count = children_counts[num_children]
+        print(f"  Internal nodes with {num_children} children: {count}")
+    
+    # Collapse internal nodes with only one child
+    if 1 in children_counts:
+        print(f"\nCollapsing {children_counts[1]} internal nodes with single children...")
+        nodes_to_check = [tree]
+        collapsed_count = 0
+        
+        while nodes_to_check:
+            node = nodes_to_check.pop(0)
+            
+            # Check each child
+            for child in list(node.children):  # Use list() to avoid modifying during iteration
+                if not child.is_leaf and len(child.children) == 1:
+                    # This child has only one child - collapse it
+                    grandchild = child.children[0]
+                    node.remove_child(child)
+                    node.add_child(grandchild)
+                    collapsed_count += 1
+                    # Check this node again in case there are multiple levels
+                    nodes_to_check.append(node)
+                else:
+                    # Add child to check queue if it's not a leaf
+                    if not child.is_leaf:
+                        nodes_to_check.append(child)
+        
+        print(f"  Collapsed {collapsed_count} single-child internal nodes")
+        
+        # Recount after collapsing
+        print("\nInternal node children counts after collapsing:")
+        children_counts_after = {}
+        for node in tree.traverse():
+            if not node.is_leaf:
+                num_children = len(node.children)
+                children_counts_after[num_children] = children_counts_after.get(num_children, 0) + 1
+        
+        for num_children in sorted(children_counts_after.keys()):
+            count = children_counts_after[num_children]
+            print(f"  Internal nodes with {num_children} children: {count}")
+    
+    # Debug: check some internal node names
+    print("\nDebug: Checking internal node names...")
+    internal_with_names = 0
+    internal_without_names = 0
+    for node in tree.traverse():
+        if not node.is_leaf:
+            if node.name and node.name.strip():
+                internal_with_names += 1
+                if internal_with_names <= 5:  # Show first 5
+                    print(f"  Sample internal node: '{node.name}'")
+            else:
+                internal_without_names += 1
+    print(f"  Internal nodes WITH names: {internal_with_names}")
+    print(f"  Internal nodes WITHOUT names: {internal_without_names}")
 
-    # Write to Newick
-    # ete4 changed the write() API - no longer uses format/outfile keywords
-    tree.write(outfile=args.output_file)
-    print(f"Newick tree written to: {args.output_file}")
+    # Write to Newick with internal node names
+    # In ete4, we need to manually create the newick string to include internal node names
+    # The write() method in ete4 doesn't have the same format parameter as ete3
+    
+    def needs_quotes(name):
+        """Check if a name needs quotes in Newick format."""
+        special_chars = set('():;,[] ')
+        return any(c in special_chars for c in name)
+    
+    def to_newick_with_internal_names(node):
+        """Recursively build newick string including internal node names."""
+        if node.is_leaf:
+            # Quote leaf names if they contain special characters
+            if needs_quotes(node.name):
+                return f"'{node.name}'"
+            return node.name
+        else:
+            # Get newick strings for all children
+            children_newick = ','.join([to_newick_with_internal_names(child) for child in node.children])
+            # Include the node name if it exists
+            if node.name:
+                # Quote internal node names if they contain special characters
+                if needs_quotes(node.name):
+                    return f"({children_newick})'{node.name}'"
+                return f"({children_newick}){node.name}"
+            else:
+                return f"({children_newick})"
+    
+    newick_string = to_newick_with_internal_names(tree) + ";"
+    
+    # Validate parentheses are balanced
+    open_count = newick_string.count('(')
+    close_count = newick_string.count(')')
+    if open_count != close_count:
+        print(f"WARNING: Unbalanced parentheses in newick string!")
+        print(f"  Open: {open_count}, Close: {close_count}")
+    else:
+        print(f"  Newick validation: {open_count} balanced parentheses")
+    
+    with open(args.output_file, 'w') as f:
+        f.write(newick_string)
+    
+    print(f"\nNewick tree written to: {args.output_file}")
+    print(f"  (Includes internal node labels)")
     
     # Export TimeTree-compatible species list if requested
     if args.timetree_list:
@@ -443,6 +638,11 @@ def main():
         print("\nNote: Custom phylogeny flag enabled.")
         print("      For full custom topology support, consider using the lineage-based")
         print("      approach in plot_ALG_fusions_v3.py before tree construction.")
+    
+    # Close log file and restore stdout
+    sys.stdout = original_stdout
+    log_handle.close()
+    print(f"Log saved to: {log_file}")
 
 if __name__ == '__main__':
     main()
