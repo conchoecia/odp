@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Program  : plot_ALG_fusions_v2.py
+Program  : plot_ALG_fusions_v3.py
 Language : python
 Date     : 2024-02-07
 Author   : Darrin T. Schultz
@@ -15,21 +15,188 @@ Citation : If you use this software for your scientific publication, please cite
            Ancient gene linkages support ctenophores as sister to other animals. Nature (2023).
            https://doi.org/10.1038/s41586-023-05936-6
 
-Description:
-  This program is an updated version of the plot_ALG_fusions.py.
-  In this version, we construct event string for each species. We do not bother to make the rest of the table.
-    The rest of the table is the part that contains the matrix of whether or not an ALG is colocalized on the same chromosome in that species.
+DESCRIPTION:
+============
+This program analyzes ancestral linkage group (ALG) fusions, losses, and splits across species
+by constructing phylogenetic event strings for each species. It tracks chromosomal rearrangements
+across evolutionary time and generates interactive visualizations.
+
+This version (v3) is an updated version of plot_ALG_fusions.py that:
+- Constructs detailed event strings for each species showing gains/losses/splits
+- Maps ALG colocalizations onto phylogenetic trees
+- Generates UMAP visualizations of chromosomal architecture patterns
+- Creates per-species and per-node analyses of chromosomal changes
+
+KEY FEATURES:
+=============
+1. ALG Colocalization Analysis: Identifies which ALGs are found on the same chromosome
+2. Phylogenetic Event Mapping: Tracks when fusions, losses, and splits occurred
+3. Interactive Visualizations: Creates UMAP plots showing species clustering by chromosomal patterns
+4. Automated Caching: Saves intermediate results to speed up re-runs
+
+INPUT FILES:
+============
+1. Directory of RBH files (-d, --directory):
+   - One .rbh file per species comparison against ALGs
+   - Each file contains reciprocal best hits with columns:
+     * {ALGname}_scaf, {ALGname}_gene, {ALGname}_pos
+     * {species}_scaf, {species}_gene, {species}_pos
+     * whole_FET: Fisher's Exact Test p-value for colocalization
+     * rbh, gene_group, color
+
+2. ALG RBH reference file (-r, --ALG_rbh):
+   - Master RBH file defining ALG properties (names, sizes, colors)
+   - Used as the reference database for all ALGs
+   - Typically named something like "BCnS.rbh" or similar
+
+3. ALG database name (-a, --ALGname):
+   - Name of the ALG database (e.g., "BCnSSimakov2022", "BCnS")
+   - Must match the column prefix in the RBH files
+
+4. Calibrated tree file (-t, --tree_info) [OPTIONAL]:
+   - Path to node_information.tsv from Newick_to_common_ancestors.py
+   - Contains custom topology (e.g., Ctenophora placement) and calibrated divergence times
+   - If not provided, falls back to NCBI taxonomy with apply_custom_phylogeny()
+   - Recommended for consistent phylogenetic framework across analyses
+
+REQUIRED PARAMETERS:
+====================
+-d, --directory    : Directory containing species .rbh files
+-a, --ALGname      : Name of ALG database (e.g., "BCnSSimakov2022")
+-r, --ALG_rbh      : Path to master ALG RBH file
+
+OPTIONAL PARAMETERS:
+====================
+-t, --tree_info    : Path to node_information.tsv from Newick_to_common_ancestors.py
+                     Uses pre-built calibrated tree with custom topology and TimeTree ages
+                     If not provided, builds tree from NCBI + custom phylogeny
+-m, --minsig       : Minimum significance for whole_FET (default: 0.005)
+                     Lower values = more stringent colocalization requirement
+
+OUTPUT FILES:
+=============
+1. locdf.tsv
+   - Location dataframe showing which ALGs are on which scaffolds
+   - Columns: sample, gene_group, scaffold, pvalue, num_genes, frac_of_this_ALG_on_this_scaffold
+
+2. perspchrom.tsv
+   - "Perspective chromosome" dataframe with presence/absence and colocalization
+   - One row per species
+   - Columns for each ALG (binary: present=1, absent=0, split>1)
+   - Columns for each ALG pair (binary: colocalized=1, separate=0)
+   - Contains 'changestrings' encoding evolutionary events
+
+3. per_species_ALG_presence_fusions.tsv
+   - Extended perspchrom with detailed changestrings
+   - Changestring format: taxid-([coloc_gains]|[losses]|[splits])-taxid-...
+   - Example: "1-([]|[]|[])-131567-([('A1b','B3')]|[]|[])-2759-..."
+
+4. tree1.tsv.gz
+   - Phylogenetic tree structure with all evolutionary events
+   - Used for downstream plotting and analysis
+
+5. tree1_umap.html
+   - Interactive UMAP visualization (Plotly)
+   - Shows species clustering based on chromosomal architecture
+   - Color-coded by taxonomy
+
+CHANGESTRING FORMAT:
+====================
+The changestring encodes events on branches leading TO each node:
+Format: taxid-([colocalizations]|[losses]|[splits])-taxid-(...)
+- [colocalizations]: List of ALG pairs that fused on this branch
+- [losses]: List of ALGs that were lost on this branch
+- [splits]: List of ALGs that split on this branch
+
+Example:
+"1-([]|[]|[])-131567-([]|[]|[])-2759-([('A','B')]|['C']|[])-33208-..."
+This shows:
+- At taxid 2759: ALGs A and B fused, ALG C was lost
+- No events at taxids 1, 131567
+
+ALGORITHM OVERVIEW:
+===================
+1. Parse all RBH files to identify ALG-chromosome associations
+2. Build presence/absence matrix (perspchrom) for all species
+3. For each species, walk up phylogenetic tree (NCBI taxonomy)
+4. At each node, compare to sister clades to infer:
+   - New fusions (ALG pairs colocalized here but not in sister clades)
+   - Losses (ALGs present in sister but absent here)
+   - Splits (ALGs on 1 chromosome in sister, >1 here)
+5. Construct phylogenetic tree object with all events
+6. Generate UMAP projection for visualization
+
+THRESHOLDS:
+===========
+- min_for_missing = 0.8
+  An ALG is considered "missing" in a clade if absent in 80%+ of species
+  
+- min_for_noncolocalized = 0.5
+  ALG pairs are "separated" if colocalized in <50% of sister clade
+
+USAGE EXAMPLES:
+===============
+Basic usage:
+    python plot_ALG_fusions_v3.py \\
+        -d /path/to/rbh_files/ \\
+        -a BCnSSimakov2022 \\
+        -r /path/to/BCnS.rbh
+
+With calibrated tree (recommended):
+    python plot_ALG_fusions_v3.py \\
+        -d /path/to/rbh_files/ \\
+        -a BCnSSimakov2022 \\
+        -r /path/to/BCnS.rbh \\
+        -t output_prefix.node_information.tsv
+
+With custom significance threshold:
+    python plot_ALG_fusions_v3.py \\
+        -d ./rbh_output/ \\
+        -a BCnSSimakov2022 \\
+        -r BCnS.rbh \\
+        -t calibrated_tree.node_information.tsv \\
+        -m 0.001
+
+PERFORMANCE NOTES:
+==================
+- First run calculates locdf and perspchrom (slow, ~minutes to hours depending on dataset size)
+- Subsequent runs use cached files (fast, seconds)
+- Delete locdf.tsv and perspchrom.tsv to force recalculation
+- Tree construction is also cached in tree1.tsv.gz
 
 PREREQUISITES:
-  - This script requires the ete3 toolkit to be installed. This can be done with conda:
-    https://anaconda.org/conda-forge/ete3
-  - You must also preload the taxonomy toolkit with the following commands:
-    http://etetoolkit.org/docs/latest/tutorial/tutorial_ncbitaxonomy.html
-    ```
-    from ete3 import NCBITaxa
+==============
+Required Python packages:
+- pandas, numpy
+- ete4 (phylogenetic trees)
+- matplotlib
+- umap-learn
+- plotly (for interactive plots)
+- scikit-learn
+- networkx
+- PIL
+
+NCBI Taxonomy Database:
+You must initialize the NCBI taxonomy database before first use:
+    ```python
+    from ete4 import NCBITaxa
     ncbi = NCBITaxa()
     ncbi.update_taxonomy_database()
     ```
+    
+See: http://etetoolkit.org/docs/latest/tutorial/tutorial_ncbitaxonomy.html
+
+NOTES:
+======
+- The script automatically caches intermediate results to speed up re-runs
+- ALG inference node is hardcoded as "1;131567;2759;33154;33208" (Metazoa)
+- Modify this value in the code if analyzing different taxonomic groups
+- The script uses Fisher's Exact Test to determine significant colocalizations
+- Connected components are used to group multi-way fusions (AxBxC counts as 1 event)
+
+AUTHORS: Darrin T. Schultz
+VERSION: 3.0
+DATE: 2024
 """
 
 import argparse
@@ -44,6 +211,8 @@ import re
 import sys
 import time
 import umap
+from multiprocessing import Pool
+import threading
 #import warnings
 #warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
@@ -76,18 +245,23 @@ def parse_args():
     The args that we need to parse are the following:
       - directory: the directory where the ALG files are saved
       - ALGname: the name of the ALG database - use this to correctly identify the columns in the rbh file
-      - prefix: the prefix of the rbh files. Also potentially includes the directory for the rbh files.
       - ALG_rbh: the name of the rbh file that contains the ALG information. This is used to get the ALG names, sizes, and colors.
+      - tree_info: (optional) path to node_information.tsv from Newick_to_common_ancestors.py with calibrated tree
       - minsig: the minimum significance value for the whole_FET column in the rbh files. This is used to filter the rbh files.
     """
     parser = argparse.ArgumentParser(description='Plot the size of ALGs against the number of colocalized ALGs')
     parser.add_argument('-d', '--directory', type=str,   required=True,   help='The directory where the ALG files are saved')
     parser.add_argument('-a', '--ALGname',   type=str,   required=True,   help='The name of the ALG database')
-    parser.add_argument('-p', '--prefix',    type=str,   required=True,   help='The prefix of the rbh files. Also potentially includes the directory for the rbh files.')
     parser.add_argument('-r', '--ALG_rbh',   type=str,   required=True,   help='The name of the rbh file that contains the ALG information. This is used to get the ALG names, sizes, and colors.')
+    parser.add_argument('-t', '--tree_info', type=str,   required=False,  help='Path to node_information.tsv from Newick_to_common_ancestors.py with calibrated tree topology. If not provided, falls back to NCBI taxonomy with custom phylogeny.')
     parser.add_argument('-m', '--minsig',    type=float, default = 0.005, help='The minimum significance value for the whole_FET column in the rbh files. This is used to filter the rbh files.')
+    parser.add_argument('--parallel', action='store_true', help='Use multiprocessing for changestring generation (recommended for large datasets)')
+    parser.add_argument('--ncores', type=int, default=20, help='Number of CPU cores to use for parallel processing (default: 20)')
 
     args = parser.parse_args()
+    # Check if tree_info file exists if provided
+    if args.tree_info and not os.path.exists(args.tree_info):
+        raise ValueError(f'The tree info file {args.tree_info} does not exist')
     # make sure that the directory exists
     if not os.path.exists(args.directory):
         raise ValueError('The directory {} does not exist'.format(args.directory))
@@ -338,10 +512,102 @@ def plot_ALG_fusions(Fusion_df, ALG_df, ALGname, outprefix=None):
         outfile = "ALG_fusions.pdf"
     plt.savefig(outfile)
 
-def taxids_to_taxidstringdict(taxids) -> dict:
+def apply_custom_phylogeny(lineage, taxid, ncbi):
+    """
+    Apply custom phylogenetic placement that differs from NCBI taxonomy.
+    
+    CUSTOM TOPOLOGY:
+    ================
+    This function implements the following alternative animal phylogeny:
+    
+    Metazoa (33208)
+    ├─ Myriazoa (-67) [CUSTOM NODE - not in NCBI]
+    │  ├─ Porifera (6040)
+    │  └─ Eumetazoa (6072)
+    │     ├─ Cnidaria (6073)
+    │     └─ [other Eumetazoa]
+    └─ Ctenophora (10197) [MOVED - sister to Myriazoa]
+    
+    In NCBI, Ctenophora is nested within Eumetazoa (6072), but phylogenomic
+    evidence suggests they are sister to all other animals (Schultz et al. 2023).
+    
+    Parameters:
+    -----------
+    lineage : list
+        Original NCBI lineage as list of taxids
+    taxid : int
+        The taxid being processed
+    ncbi : NCBITaxa
+        NCBI taxonomy database object
+        
+    Returns:
+    --------
+    list : Modified lineage with custom phylogenetic placement
+    
+    Notes:
+    ------
+    - Myriazoa (-67) is a fake taxid representing Porifera + Eumetazoa
+    - Negative taxids will not conflict with real NCBI taxids (all positive)
+    - The function checks if taxid is Ctenophora or descendant thereof
+    - If not Ctenophora-related, checks if taxid is Porifera/Eumetazoa/descendants
+    """
+    CTENOPHORA_TAXID = 10197
+    EUMETAZOA_TAXID = 6072
+    PORIFERA_TAXID = 6040
+    METAZOA_TAXID = 33208
+    MYRIAZOA_TAXID = -67  # Custom fake taxid for Porifera + Eumetazoa clade
+    
+    # Check if this taxid is Ctenophora or a descendant
+    if CTENOPHORA_TAXID in lineage:
+        # Find where Metazoa is in the lineage
+        if METAZOA_TAXID in lineage:
+            metazoa_index = lineage.index(METAZOA_TAXID)
+            # Build custom lineage: [root...Metazoa, Ctenophora, ...descendants]
+            # Remove any intermediate nodes between Metazoa and Ctenophora
+            new_lineage = lineage[:metazoa_index + 1]  # Everything up to and including Metazoa
+            
+            # Find the position of Ctenophora in original lineage
+            cteno_index = lineage.index(CTENOPHORA_TAXID)
+            # Add everything from Ctenophora onwards
+            new_lineage.extend(lineage[cteno_index:])
+            return new_lineage
+    
+    # Check if this taxid is Porifera, Eumetazoa, or descendants thereof
+    elif PORIFERA_TAXID in lineage or EUMETAZOA_TAXID in lineage:
+        # Find where Metazoa is in the lineage
+        if METAZOA_TAXID in lineage:
+            metazoa_index = lineage.index(METAZOA_TAXID)
+            # Build custom lineage: [root...Metazoa, Myriazoa, Porifera/Eumetazoa, ...descendants]
+            new_lineage = lineage[:metazoa_index + 1]  # Everything up to and including Metazoa
+            new_lineage.append(MYRIAZOA_TAXID)  # Insert fake Myriazoa node
+            
+            # Add the rest of the lineage after Metazoa
+            new_lineage.extend(lineage[metazoa_index + 1:])
+            return new_lineage
+    
+    # For all other taxa, return original lineage unchanged
+    return lineage
+
+
+def taxids_to_taxidstringdict(taxids, use_custom_phylogeny=True) -> dict:
     """
     This function takes a list of taxids and returns a dictionary where the key is the species name and the value is the taxid string.
     The taxid string will be a string of taxids separated by a semicolon.
+    
+    Parameters:
+    -----------
+    taxids : list/set/dict
+        Iterable of taxids to process
+    use_custom_phylogeny : bool, default=True
+        If True, applies custom phylogenetic corrections (e.g., Ctenophora placement)
+        If False, uses NCBI taxonomy exactly as-is
+        
+    Notes:
+    ------
+    When use_custom_phylogeny=True:
+    - Ctenophora (10197) is placed as sister to Myriazoa (Porifera + Eumetazoa)
+    - Myriazoa is represented by fake taxid -67
+    - This reflects the phylogenomic hypothesis from Schultz et al. (2023) Nature
     """
     ncbi = NCBITaxa()
 
@@ -361,6 +627,11 @@ def taxids_to_taxidstringdict(taxids) -> dict:
     for taxid in taxids:
         # get the lineage of the taxid
         lineage = ncbi.get_lineage(taxid)
+        
+        # Apply custom phylogeny if requested
+        if use_custom_phylogeny:
+            lineage = apply_custom_phylogeny(lineage, taxid, ncbi)
+        
         # Return the complete taxid string, text delimited by a semicolon
         returnstr = ";".join([str(x) for x in lineage])
         taxid_to_taxidstring[taxid] = returnstr
@@ -883,7 +1154,66 @@ def unsplit_ALGs(df, max_frac_split = 0.5):
             ALG_qc[ALG] = len(df[df[ALG] > 1]) / len(df[df[ALG] >= 1])
     return [x for x in ALG_qc if ALG_qc[x] <= max_frac_split ]
 
-def rbh_files_to_locdf_and_perspchrom(rbh_files, ALGrbhfile, minsig, ALGname) -> (pd.DataFrame, pd.DataFrame):
+def load_calibrated_tree(node_info_file):
+    """
+    Load calibrated phylogenetic tree from Newick_to_common_ancestors.py output.
+    
+    This function reads the node_information.tsv file which contains the custom topology
+    and calibrated divergence times from TimeTree.org.
+    
+    Parameters:
+    -----------
+    node_info_file : str
+        Path to {prefix}.node_information.tsv from Newick_to_common_ancestors.py
+        
+    Returns:
+    --------
+    dict : Dictionary with two keys:
+        'lineages' : dict mapping taxid (int) -> lineage_string (str)
+            Where lineage_string is semicolon-delimited taxid path from root to tip
+            Example: "1;131567;2759;33154;33208;-67;6072;33213;7711;9606"
+        'ages' : dict mapping taxid (int) -> nodeage (float)
+            Where nodeage is the divergence time in millions of years ago (MYA)
+            Only includes internal nodes that have calibrated ages
+        
+    Notes:
+    ------
+    - Preserves custom topology (e.g., Ctenophora placement, Myriazoa node)
+    - Uses lineage_string column which has the full taxid path
+    - Only includes leaf nodes (species) in lineages, internal nodes in ages
+    - Ages are from TimeTree.org molecular clock calibration
+    """
+    print(f"Loading calibrated tree from: {node_info_file}", file=sys.stderr)
+    
+    # Read the node information file
+    node_df = pd.read_csv(node_info_file, sep="\t")
+    
+    # Filter to only leaf nodes (species) - these have lineage_string values
+    # Internal nodes might have different structure
+    leaf_nodes = node_df[node_df['lineage_string'].notna()].copy()
+    
+    # Build mapping of taxid -> lineage_string
+    taxid_to_lineage = {}
+    for idx, row in leaf_nodes.iterrows():
+        taxid = int(row['taxid'])
+        lineage_str = str(row['lineage_string'])
+        taxid_to_lineage[taxid] = lineage_str
+    
+    # Build mapping of taxid -> nodeage for all nodes with calibrated ages
+    # This includes internal nodes that have divergence times
+    taxid_to_age = {}
+    age_nodes = node_df[node_df['nodeage'].notna()].copy()
+    for idx, row in age_nodes.iterrows():
+        taxid = int(row['taxid'])
+        nodeage = float(row['nodeage'])
+        taxid_to_age[taxid] = nodeage
+    
+    print(f"  Loaded lineages for {len(taxid_to_lineage)} species from calibrated tree", file=sys.stderr)
+    print(f"  Loaded node ages for {len(taxid_to_age)} nodes from calibrated tree", file=sys.stderr)
+    
+    return {'lineages': taxid_to_lineage, 'ages': taxid_to_age}
+
+def rbh_files_to_locdf_and_perspchrom(rbh_files, ALGrbhfile, minsig, ALGname, calibrated_tree_data=None) -> (pd.DataFrame, pd.DataFrame):
     """
     This takes in a list of rbh files and returns two dataframes.
     The RBH files are those that are species against ALGs.
@@ -947,21 +1277,78 @@ def rbh_files_to_locdf_and_perspchrom(rbh_files, ALGrbhfile, minsig, ALGname) ->
     locdf = pd.concat(entries).reset_index(drop=True)
 
     # Now that we know the NCBI taxid for each sample, generate the taxid_to_lineagestring
-    NCBI = NCBITaxa()
+    # Use calibrated tree if provided, otherwise fall back to NCBI + custom phylogeny
     sample_to_taxidstring = {}
-    for k in sample_to_taxid:
-        taxid = sample_to_taxid[k]
-        taxdict = NCBI_taxid_to_taxdict(NCBI, taxid)
-        lineage_string = ";".join([str(x) for x in taxdict["taxid_list"]])
-        sample_to_taxidstring[k] = lineage_string
+    
+    if calibrated_tree_data is not None:
+        # Use pre-built lineages from calibrated tree
+        # calibrated_tree_data is now a dict with 'lineages' and 'ages' keys
+        lineages_dict = calibrated_tree_data['lineages']
+        print("  Using lineages from calibrated tree", file=sys.stderr)
+        missing_taxa = []
+        for k in sample_to_taxid:
+            taxid = sample_to_taxid[k]
+            if taxid in lineages_dict:
+                sample_to_taxidstring[k] = lineages_dict[taxid]
+            else:
+                missing_taxa.append((k, taxid))
+        
+        if missing_taxa:
+            print(f"\n  WARNING: {len(missing_taxa)} taxa not found in calibrated tree", file=sys.stderr)
+            print(f"  These samples will be EXCLUDED from analysis to avoid topology conflicts\n", file=sys.stderr)
+            
+            # Write full list to a file for later review
+            missing_file = "missing_taxa_from_calibrated_tree.txt"
+            with open(missing_file, 'w') as f:
+                f.write(f"# {len(missing_taxa)} taxa found in RBH files but missing from calibrated tree\n")
+                f.write(f"# These samples are EXCLUDED to avoid topology conflicts\n")
+                f.write(f"# The calibrated tree has different custom nodes (-67, -68) than apply_custom_phylogeny()\n")
+                f.write(f"#\n")
+                f.write("# Format: sample_name\ttaxid\n")
+                for k, taxid in sorted(missing_taxa, key=lambda x: x[0]):
+                    f.write(f"{k}\t{taxid}\n")
+            
+            print(f"  Full list saved to: {missing_file}", file=sys.stderr)
+            print(f"  First 20 missing samples:", file=sys.stderr)
+            for k, taxid in sorted(missing_taxa, key=lambda x: x[0])[:20]:
+                print(f"    - {k} (taxid: {taxid})", file=sys.stderr)
+            if len(missing_taxa) > 20:
+                print(f"    ... and {len(missing_taxa) - 20} more (see {missing_file})", file=sys.stderr)
+            
+            # Remove missing samples from sample_to_taxid dict
+            # This prevents them from being added to perspchrom
+            for k, taxid in missing_taxa:
+                del sample_to_taxid[k]
+            
+            print(f"\n  Continuing with {len(sample_to_taxid)} samples that are in calibrated tree\n", file=sys.stderr)
+            
+            # Filter locdf to only include samples that have lineages
+            excluded_samples = [k for k, taxid in missing_taxa]
+            original_len = len(locdf)
+            locdf = locdf[~locdf["sample"].isin(excluded_samples)].reset_index(drop=True)
+            print(f"  Filtered locdf from {original_len} to {len(locdf)} entries\n", file=sys.stderr)
+    else:
+        # Fall back to NCBI taxonomy with custom phylogeny correction
+        print("  Building lineages from NCBI taxonomy with custom phylogeny", file=sys.stderr)
+        NCBI = NCBITaxa()
+        for k in sample_to_taxid:
+            taxid = sample_to_taxid[k]
+            taxdict = NCBI_taxid_to_taxdict(NCBI, taxid)
+            lineage = taxdict["taxid_list"]
+            
+            # Apply custom phylogeny correction (Ctenophora as sister to Myriazoa)
+            lineage = apply_custom_phylogeny(lineage, taxid, NCBI)
+            
+            lineage_string = ";".join([str(x) for x in lineage])
+            sample_to_taxidstring[k] = lineage_string
 
     # now make a pandas dataframe of the sample_to_taxidstring. The columns are "sample", "taxid"
     perspchrom = pd.DataFrame.from_dict(sample_to_taxid, orient='index')
     # change the index to a column. the former index is "species", the other column is "taxid"
     perspchrom = perspchrom.reset_index()
     perspchrom = perspchrom.rename(columns={"index": "species", 0: "taxid"})
-    # the taxidstring is the sample_to_taxidstring dictionary. use map.
-    perspchrom["taxidstring"] = perspchrom["taxid"].map(sample_to_taxidstring)
+    # the taxidstring is the sample_to_taxidstring dictionary. Map by species name, not taxid.
+    perspchrom["taxidstring"] = perspchrom["species"].map(sample_to_taxidstring)
     perspchrom = perspchrom.sort_values(by="taxidstring", ascending=True).reset_index(drop=True)
 
     # how many queries do we need to make?
@@ -1249,17 +1636,34 @@ class SplitLossColocTree:
                          # Amphibia
                           8342:  "#AFC73E",
                   10197:   "#54AB53", # Ctenophores
-                  6040 :   "#DCC0F3", # Sponges
+                  6040 :   "#682CAE", # Sponges
                   6073 :   "#387FB2", # Cnidarians
                   10226:   "#C72480", # Placozoans
                   }
-    def __init__(self, perspchrom) -> None:
+    # Secondary color dict for more specific subclades (empty by default, can be populated)
+    color_dict = {}
+    
+    def __init__(self, perspchrom, calibrated_ages=None) -> None:
         # initialize the bidirectional graph using networkx
         self.G = nx.DiGraph()
         self.perspchrom = perspchrom
         # Before we delete anything, make a dict of samples to the taxidstring
         self.sample_to_taxidlist = self.perspchrom.set_index("species")["taxidstring"].to_dict()
-        self.sample_to_taxidlist = {k: [int(x) for x in v.split(";")] for k, v in self.sample_to_taxidlist.items()}
+        # Handle cases where taxidstring might be NaN (float) - report and filter those out
+        invalid_samples = []
+        valid_sample_to_taxidlist = {}
+        for k, v in self.sample_to_taxidlist.items():
+            if isinstance(v, str):
+                valid_sample_to_taxidlist[k] = [int(x) for x in v.split(";")]
+            else:
+                invalid_samples.append((k, v))
+        
+        if invalid_samples:
+            print(f"WARNING: {len(invalid_samples)} samples have invalid taxidstring (NaN or non-string):", file=sys.stderr)
+            for sample, value in invalid_samples:
+                print(f"  - {sample}: {value}", file=sys.stderr)
+        
+        self.sample_to_taxidlist = valid_sample_to_taxidlist
         self._build_tree_from_perspchrom()
 
         # define the ALG nodes and the combination nodes
@@ -1275,6 +1679,9 @@ class SplitLossColocTree:
                 self.G.nodes[node]["completed"] = False
         # keep track of all the leaves as places to start
         self.leaves = [x for x in self.G.nodes() if self.G.out_degree(x) == 0]
+        
+        # Rebuild lineage strings from actual topology to handle pruned nodes
+        self._rebuild_lineage_strings_from_topology()
 
         # reindex the perspchrom dataframe with the species column
         self.perspchrom = self.perspchrom.set_index("species")
@@ -1293,12 +1700,194 @@ class SplitLossColocTree:
             # make sure it returns a dataframe and not a series
             self.G.nodes[thisnode]["dataframe"] = self.perspchrom.loc[[thisnode]].copy()
 
+        # Store calibrated ages if provided and add them to graph nodes
+        self.calibrated_ages = calibrated_ages
+        if self.calibrated_ages is not None:
+            self._add_node_ages()
+
         # assign the colors for all the nodes
         self.node_to_color = {}
         self.assign_colors()
 
         # Final df for the tree
         self.tree_df = None
+
+    def _rebuild_lineage_strings_from_topology(self):
+        """
+        Build lineage strings from actual graph topology.
+        This ensures consistency when nodes have been pruned from the calibrated tree.
+        """
+        print("  Rebuilding lineage strings from tree topology", file=sys.stderr)
+        
+        updated_count = 0
+        conflicts = []  # Collect all conflicts for detailed error reporting
+        cycles = []     # Collect cycle information
+        
+        for sample in self.leaves:
+            # Traverse from leaf to root, collecting taxid nodes
+            lineage = []
+            current = sample
+            visited = set()  # Prevent infinite loops
+            
+            while current is not None:
+                if current in visited:
+                    cycles.append((sample, current))
+                    break
+                visited.add(current)
+                
+                # Only include integer taxid nodes in lineage
+                if isinstance(current, int):
+                    lineage.append(current)
+                
+                # Get parent
+                predecessors = list(self.G.predecessors(current))
+                if len(predecessors) == 0:
+                    break
+                elif len(predecessors) == 1:
+                    current = predecessors[0]
+                else:
+                    # Record conflict: node has multiple predecessors (reticulation)
+                    conflicts.append((sample, current, predecessors))
+                    break
+            
+            # Reverse to get root → leaf order
+            lineage.reverse()
+            
+            # Update if different from original
+            if sample in self.sample_to_taxidlist:
+                if self.sample_to_taxidlist[sample] != lineage:
+                    updated_count += 1
+            self.sample_to_taxidlist[sample] = lineage
+        
+        # Check for topology conflicts and crash with detailed diagnostics
+        if conflicts or cycles:
+            error_msg = "\n" + "="*80 + "\n"
+            error_msg += "ERROR: Graph topology conflicts detected!\n"
+            error_msg += "="*80 + "\n\n"
+            
+            if conflicts:
+                error_msg += f"Found {len(conflicts)} node(s) with MULTIPLE PREDECESSORS:\n"
+                error_msg += "This indicates the graph contains references to non-existent internal nodes.\n\n"
+                error_msg += "CAUSE: perspchrom.tsv contains lineage strings with taxids that were\n"
+                error_msg += "pruned from the calibrated tree (internal nodes with only one child).\n"
+                error_msg += "These pruned nodes create edges to nodes that already have parents in\n"
+                error_msg += "the calibrated tree, resulting in multiple predecessors.\n\n"
+                error_msg += "SOLUTION: Delete cache files and rebuild from calibrated tree:\n"
+                error_msg += "  rm locdf.tsv perspchrom.tsv\n"
+                error_msg += "  bash run_persp_chr.sh\n\n"
+                error_msg += "First 10 conflicts (sample → node → predecessors):\n"
+                for i, (sample, node, preds) in enumerate(conflicts[:10]):
+                    error_msg += f"  {i+1}. Sample '{sample}' → Node {node} has predecessors: {preds}\n"
+                if len(conflicts) > 10:
+                    error_msg += f"  ... and {len(conflicts) - 10} more conflicts\n"
+            
+            if cycles:
+                error_msg += f"\nFound {len(cycles)} cycle(s) in graph:\n"
+                for sample, node in cycles[:10]:
+                    error_msg += f"  Sample '{sample}' → Cycle at node {node}\n"
+            
+            error_msg += "\n" + "="*80 + "\n"
+            
+            print(error_msg, file=sys.stderr)
+            raise IOError(error_msg)
+        
+        print(f"    Updated {updated_count} lineage strings from topology", file=sys.stderr)
+
+    def _add_node_ages(self):
+        """
+        Add node ages from calibrated tree to graph nodes.
+        
+        Node naming convention:
+        - Internal nodes: integers (taxids)
+        - Leaf nodes: strings (sample names)
+        
+        For leaf nodes, we look up the terminal taxid from their lineage.
+        For internal nodes, we use the node name directly as taxid.
+        """
+        print("  Adding node ages from calibrated tree to graph nodes", file=sys.stderr)
+        nodes_with_ages = 0
+        
+        for node in self.G.nodes():
+            node_taxid = None
+            
+            # Determine node type and extract taxid
+            if isinstance(node, int):
+                # Internal node - node name IS the taxid
+                node_taxid = node
+            elif isinstance(node, str):
+                # Leaf node - sample name, get taxid from lineage
+                if node in self.sample_to_taxidlist:
+                    taxidlist = self.sample_to_taxidlist[node]
+                    if len(taxidlist) > 0:
+                        # Last taxid in lineage is the terminal taxid for this species
+                        node_taxid = taxidlist[-1]
+            
+            # Look up age if we found a taxid
+            if node_taxid is not None and node_taxid in self.calibrated_ages:
+                self.G.nodes[node]['nodeage'] = self.calibrated_ages[node_taxid]
+                nodes_with_ages += 1
+        
+        print(f"    Added ages to {nodes_with_ages} nodes", file=sys.stderr)
+
+    def calculate_branch_lengths(self):
+        """
+        Calculate branch lengths in millions of years for all edges.
+        Branch length = parent.nodeage - child.nodeage
+        
+        Stores 'branch_length_mya' attribute on each edge.
+        Only calculates for nodes that have nodeage attributes.
+        """
+        print("  Calculating branch lengths from node ages", file=sys.stderr)
+        edges_with_lengths = 0
+        
+        for parent, child in self.G.edges():
+            parent_age = self.G.nodes[parent].get('nodeage', None)
+            child_age = self.G.nodes[child].get('nodeage', None)
+            
+            if parent_age is not None and child_age is not None:
+                branch_length = parent_age - child_age
+                if branch_length < 0:
+                    print(f"    WARNING: Negative branch length {branch_length:.2f} for edge {parent} -> {child}", file=sys.stderr)
+                    branch_length = 0.0
+                self.G.edges[parent, child]['branch_length_mya'] = branch_length
+                edges_with_lengths += 1
+        
+        print(f"    Calculated branch lengths for {edges_with_lengths} edges", file=sys.stderr)
+
+    def calculate_event_rates(self):
+        """
+        Calculate fusion and loss rates per million years for all edges.
+        Rate = number_of_events / branch_length_mya
+        
+        Stores 'fusions_per_my' and 'losses_per_my' attributes on each edge.
+        Only calculates for edges that have branch_length_mya attributes.
+        Handles zero branch length by setting rate to NaN.
+        """
+        print("  Calculating event rates (fusions and losses per MY)", file=sys.stderr)
+        edges_with_rates = 0
+        
+        for parent, child in self.G.edges():
+            branch_length = self.G.edges[parent, child].get('branch_length_mya', None)
+            
+            if branch_length is not None:
+                # Get fusion and loss counts from edge attributes
+                num_fusions = self.G.edges[parent, child].get('num_fusions', 0)
+                num_losses = self.G.edges[parent, child].get('num_losses', 0)
+                
+                # Calculate rates, handle zero branch length
+                if branch_length > 0:
+                    fusions_per_my = num_fusions / branch_length
+                    losses_per_my = num_losses / branch_length
+                else:
+                    # Zero branch length - set to NaN
+                    fusions_per_my = float('nan')
+                    losses_per_my = float('nan')
+                
+                self.G.edges[parent, child]['fusions_per_my'] = fusions_per_my
+                self.G.edges[parent, child]['losses_per_my'] = losses_per_my
+                edges_with_rates += 1
+        
+        print(f"    Calculated rates for {edges_with_rates} edges", file=sys.stderr)
 
     def assign_colors(self):
         """
@@ -1357,6 +1946,12 @@ class SplitLossColocTree:
         for col in self.ALGcols:
             all_dfs[col] = all_dfs[col].astype(int)
 
+        # Add node name column at the beginning for easier grepping
+        node_names = [str(x) for x in all_dfs.index]
+        all_dfs = pd.concat([pd.DataFrame({'node': node_names}, index=all_dfs.index),
+                             all_dfs],
+                             axis=1)
+
         # Add the colors column to the dataframe. Use concat because pandas
         #  complains about performance if I try to add a column using
         #  older spells: a la all_dfs["color"] = colors
@@ -1364,6 +1959,16 @@ class SplitLossColocTree:
         all_dfs = pd.concat([pd.DataFrame({'color': colors}, index=all_dfs.index),
                              all_dfs],
                              axis=1)
+
+        # Add node ages if available (from calibrated tree)
+        if self.calibrated_ages is not None:
+            nodeages = []
+            for node in all_dfs.index:
+                node_age = self.G.nodes[node].get('nodeage', float('nan'))
+                nodeages.append(node_age)
+            all_dfs = pd.concat([all_dfs,
+                                 pd.DataFrame({'nodeage_mya': nodeages}, index=all_dfs.index)],
+                                 axis=1)
 
         # save to self.tree_df
         self.tree_df = all_dfs
@@ -1381,7 +1986,28 @@ class SplitLossColocTree:
             # we don't need to do anything because we're at the end of the tree.
             return None
         elif len(predecessors) > 1:
-            raise IOError(f"There should only be one predecessor in a phylogenetic tree. Found {predecessors}")
+            # Add debugging information about the problematic node
+            print(f"\nERROR: Multiple predecessors found!", file=sys.stderr)
+            print(f"  Current node: {node}", file=sys.stderr)
+            print(f"  Type: {type(node)}", file=sys.stderr)
+            print(f"  Predecessors: {predecessors}", file=sys.stderr)
+            
+            # If it's a leaf node (string), show its lineage
+            if isinstance(node, str) and node in self.sample_to_taxidlist:
+                print(f"  Lineage: {';'.join(map(str, self.sample_to_taxidlist[node]))}", file=sys.stderr)
+            
+            # Try to identify what taxa these are
+            try:
+                from ete4 import NCBITaxa
+                ncbi = NCBITaxa()
+                for pred in predecessors:
+                    if isinstance(pred, int):
+                        name = ncbi.get_taxid_translator([pred]).get(pred, "Unknown")
+                        print(f"    {pred}: {name}", file=sys.stderr)
+            except:
+                pass
+                
+            raise IOError(f"There should only be one predecessor in a phylogenetic tree. Node: {node}, Found predecessors: {predecessors}")
         elif len(predecessors) == 1:
             # there is only one parent
             parent_node = list(self.G.predecessors(node))[0]
@@ -1430,9 +2056,19 @@ class SplitLossColocTree:
 
         # start at the leaves
         queue = list(self.leaves)
+        total_nodes = len(self.G.nodes())
+        processed_nodes = len([n for n in self.G.nodes() if self.G.nodes[n]["completed"]])
+        last_report = 0
+        
         while len(queue) > 0:
-            #print(f"Queue length: {len(queue)}, queue: {queue}", file = sys.stderr)
             thisnode = queue.pop(0)
+            
+            # Report progress every 100 nodes
+            current_processed = len([n for n in self.G.nodes() if self.G.nodes[n]["completed"]])
+            if current_processed - last_report >= 100:
+                print(f"\r  Percolating: {current_processed}/{total_nodes} nodes completed, queue: {len(queue)}", 
+                      end="", file=sys.stderr)
+                last_report = current_processed
 
             # ┏┓┏┓┏┳┓  ┏┓┏┓┳┓┏┓┳┓┏┳┓ - We need to get the parent node of thisnode.
             # ┃┓┣  ┃   ┃┃┣┫┣┫┣ ┃┃ ┃    Then we must determine whether the ancestral state of the parent node
@@ -1512,6 +2148,12 @@ class SplitLossColocTree:
                     self.G.nodes[predecessor]["dataframe"] = pdf
                     self.G.nodes[predecessor]["completed"] = True
                     queue.append(predecessor)
+        
+        # Print final completion message
+        final_completed = len([n for n in self.G.nodes() if self.G.nodes[n]["completed"]])
+        print(f"\r  Percolating: {final_completed}/{total_nodes} nodes completed - Done!        ", file=sys.stderr)
+        print("", file=sys.stderr)  # New line after progress
+        print("", file=sys.stderr)  # Additional blank line for spacing
 
     def _conservation_of_colocalizations(self, df):
         """
@@ -1687,7 +2329,7 @@ class SplitLossColocTree:
         results = probabilities_log.apply(lambda x: 1 if np.log(np.random.random()) < x else 0)
         # print the results sideways, so we can see the results of the random number generation
         # The pdf has the same colnames as results. Use the results dataframe to update these values in the pdf.
-        pdf[results.index] = results
+        pdf.loc[:, results.index] = results.values
         return pdf
 
     def add_taxname_to_all_nodes(self):
@@ -1754,9 +2396,269 @@ class SplitLossColocTree:
 
         return in_edges + self._get_edges_in_clade_helper(node)
 
+def compute_changestring_for_species(species_row, perspchrom, ALG_columns, ALG_combos,
+                                       min_for_missing, min_for_noncolocalized, checkpoint_dir, ALG_node):
+    """
+    Compute changestring for a single species.
+    
+    Parameters:
+    -----------
+    species_row : pandas.Series
+        Row from perspchrom containing species data
+    perspchrom : pandas.DataFrame
+        Full perspchrom dataframe for comparison queries
+    ALG_columns : list
+        List of ALG column names
+    ALG_combos : list
+        List of ALG combination tuple column names
+    min_for_missing : float
+        Threshold for considering ALG missing in clade (default 0.8)
+    min_for_noncolocalized : float
+        Threshold for considering ALG pair non-colocalized in clade (default 0.5)
+    checkpoint_dir : str
+        Directory to save/load checkpoints
+    ALG_node : str
+        Node where ALGs were inferred
+        
+    Returns:
+    --------
+    tuple : (changestring, was_loaded)
+        changestring: str - the computed or loaded changestring
+        was_loaded: bool - True if loaded from checkpoint, False if computed
+    """
+    # Check for existing checkpoint first
+    checkpoint_file = os.path.join(checkpoint_dir, f"{species_row['species']}.txt")
+    if os.path.exists(checkpoint_file):
+        with open(checkpoint_file, 'r') as f:
+            return (f.read().strip(), True)
+    
+    # Initialize changeString for this species
+    changeString = []
+    thistaxidstring = species_row["taxidstring"]
+    
+    # --------- CONSERVED ----------- #
+    ALGsConservedInThisSample = [x for x in ALG_columns if species_row[x] >= 1]
+    
+    # ---------- MISSING ------------ #
+    ALGsMissingInThisSample = [x for x in ALG_columns if species_row[x] == 0]
+    ALGsMissingInThisSampleAccountedFor = []
+    
+    # ---------- COLOCALIZED -------- #
+    ColocalizedPairsInThisSample = [x for x in ALG_combos if species_row[x] >= 1]
+    ColocalizedPairsInThisSampleAccountedFor = []
+    
+    # ---------- SPLIT -------------- #
+    ALGsSplitInThisSample = [x for x in ALG_columns if species_row[x] > 1]
+    ALGsSplitInThisSampleAccountedFor = []
+    
+    # Walk through lineage from tip to root
+    while thistaxidstring.count(";") > 0:
+        prevtaxidstring = thistaxidstring
+        thisdf = perspchrom[perspchrom["taxidstring"] == thistaxidstring]
+        
+        # Move up one node
+        thistaxidstring = ";".join(thistaxidstring.split(";")[:-1])
+        
+        # Initialize event lists for this branch
+        ALG_colocalizations_on_this_branch = []
+        ALG_losses_on_this_branch = []
+        ALG_splits_on_this_branch = []
+        
+        # At the ALG inference node, all remaining events are placed here
+        if thistaxidstring == ALG_node:
+            ALG_losses_on_this_branch = [x for x in ALGsMissingInThisSample if x not in ALGsMissingInThisSampleAccountedFor]
+            ALGsMissingInThisSampleAccountedFor.extend(ALG_losses_on_this_branch)
+            
+            ALG_colocalizations_on_this_branch = [x for x in ColocalizedPairsInThisSample if x not in ColocalizedPairsInThisSampleAccountedFor]
+            ColocalizedPairsInThisSampleAccountedFor.extend(ALG_colocalizations_on_this_branch)
+            
+            ALG_splits_on_this_branch = [x for x in ALGsSplitInThisSample if x not in ALGsSplitInThisSampleAccountedFor]
+            ALGsSplitInThisSampleAccountedFor.extend(ALG_splits_on_this_branch)
+        else:
+            # Compare to other clades at this level
+            subdf = perspchrom[perspchrom["taxidstring"].str.contains(thistaxidstring) &
+                               ~perspchrom["taxidstring"].str.contains(prevtaxidstring)]
+            
+            if len(subdf) > 0:
+                # ----- ALG LOSSES -----
+                missingALGsInThisClade, presentALGsInThisClade = missing_present_ALGs(subdf, min_for_missing=min_for_missing)
+                ALGsLostOnThisBranch = [x for x in presentALGsInThisClade
+                                         if x in ALGsMissingInThisSample
+                                         and x not in ALGsMissingInThisSampleAccountedFor]
+                ALGsMissingInThisSampleAccountedFor.extend(ALGsLostOnThisBranch)
+                ALG_losses_on_this_branch.extend(ALGsLostOnThisBranch)
+                
+                # ----- ALG COLOCALIZATION EVENTS -----
+                notLocalizedInThisClade = separate_ALG_pairs(subdf, min_for_noncolocalized=min_for_noncolocalized)
+                pairsColocalizedOnThisBranch = [x for x in notLocalizedInThisClade
+                                                 if x in ColocalizedPairsInThisSample
+                                                 and x not in ColocalizedPairsInThisSampleAccountedFor]
+                ColocalizedPairsInThisSampleAccountedFor.extend(pairsColocalizedOnThisBranch)
+                ALG_colocalizations_on_this_branch.extend(pairsColocalizedOnThisBranch)
+                
+                # ----- ALG SPLITS -----
+                notSplitInThisClade = unsplit_ALGs(subdf, max_frac_split=min_for_noncolocalized)
+                ALGsplitsThisBranch = [x for x in notSplitInThisClade
+                                        if x in ALGsSplitInThisSample
+                                        and x not in ALGsSplitInThisSampleAccountedFor]
+                ALGsSplitInThisSampleAccountedFor.extend(ALGsplitsThisBranch)
+                ALG_splits_on_this_branch.extend(ALGsplitsThisBranch)
+        
+        thisChange = "({}|{}|{})".format(
+            sorted(ALG_colocalizations_on_this_branch),
+            sorted(ALG_losses_on_this_branch),
+            sorted(ALG_splits_on_this_branch))
+        changeString.append(prevtaxidstring.split(";")[-1])
+        changeString.append(thisChange)
+    
+    # Handle unaccounted ALG losses (widespread ancient losses)
+    if sorted(ALGsMissingInThisSampleAccountedFor) != sorted(ALGsMissingInThisSample):
+        unaccounted_losses = [x for x in ALGsMissingInThisSample 
+                              if x not in ALGsMissingInThisSampleAccountedFor]
+        if unaccounted_losses:
+            ALGsMissingInThisSampleAccountedFor.extend(unaccounted_losses)
+    
+    # Verify accounting for losses
+    if sorted(ALGsMissingInThisSampleAccountedFor) != sorted(ALGsMissingInThisSample):
+        raise IOError(f"ALG loss accounting failed for {species_row['species']}")
+    
+    # Handle unaccounted colocalizations (widespread)
+    if sorted(ColocalizedPairsInThisSampleAccountedFor) != sorted(ColocalizedPairsInThisSample):
+        unaccounted_colocs = [x for x in ColocalizedPairsInThisSample 
+                              if x not in ColocalizedPairsInThisSampleAccountedFor]
+        if unaccounted_colocs:
+            ColocalizedPairsInThisSampleAccountedFor.extend(unaccounted_colocs)
+    
+    if sorted(ColocalizedPairsInThisSampleAccountedFor) != sorted(ColocalizedPairsInThisSample):
+        raise IOError(f"ALG colocalization accounting failed for {species_row['species']}")
+    
+    # Handle unaccounted splits (widespread)
+    if sorted(ALGsSplitInThisSampleAccountedFor) != sorted(ALGsSplitInThisSample):
+        unaccounted_splits = [x for x in ALGsSplitInThisSample 
+                              if x not in ALGsSplitInThisSampleAccountedFor]
+        if unaccounted_splits:
+            ALGsSplitInThisSampleAccountedFor.extend(unaccounted_splits)
+    
+    if sorted(ALGsSplitInThisSampleAccountedFor) != sorted(ALGsSplitInThisSample):
+        raise IOError(f"ALG split accounting failed for {species_row['species']}")
+    
+    # Finalize changestring - add the root node
+    changeString.append(thistaxidstring)
+    changeString = "-".join(changeString[::-1])
+    
+    # Save checkpoint
+    with open(checkpoint_file, 'w') as f:
+        f.write(changeString)
+    
+    return (changeString, False)
+
+def process_species_batch(args):
+    """
+    Process a batch of species indices in parallel.
+    Worker function for multiprocessing.Pool.
+    
+    Parameters:
+    -----------
+    args : tuple
+        (indices, perspchrom, ALG_columns, ALG_combos, min_for_missing, min_for_noncolocalized, checkpoint_dir, ALG_node)
+        
+    Returns:
+    --------
+    list : List of (index, changestring, was_loaded) tuples
+    """
+    indices, perspchrom, ALG_columns, ALG_combos, min_for_missing, min_for_noncolocalized, checkpoint_dir, ALG_node = args
+    
+    results = []
+    for i in indices:
+        row = perspchrom.iloc[i]
+        changestring, was_loaded = compute_changestring_for_species(
+            row, perspchrom, ALG_columns, ALG_combos,
+            min_for_missing, min_for_noncolocalized, checkpoint_dir, ALG_node
+        )
+        results.append((i, changestring, was_loaded))
+    
+    return results
+
+def monitor_progress(checkpoint_dir, total, stop_event):
+    """
+    Monitor progress by counting completed checkpoint files.
+    Runs in background thread during parallel processing.
+    """
+    while not stop_event.is_set():
+        try:
+            completed = len([f for f in os.listdir(checkpoint_dir) if f.endswith('.txt')])
+            print(f"\r  Progress: {completed}/{total} species completed          ", end="", file=sys.stderr)
+        except:
+            pass
+        time.sleep(2)
+
 def main():
+    """
+    Main execution function for ALG fusion analysis.
+    
+    WORKFLOW:
+    =========
+    1. Parse command line arguments
+    2. Load or calculate location dataframe (locdf) and perspective chromosome dataframe (perspchrom)
+       - locdf: Which ALGs are on which scaffolds in each species
+       - perspchrom: Presence/absence matrix + colocalization data
+    3. Build phylogenetic tree structure with evolutionary events
+    4. Generate UMAP visualization of chromosomal architecture patterns
+    
+    CACHING BEHAVIOR:
+    =================
+    The script uses intelligent caching to speed up re-runs:
+    
+    - If locdf.tsv AND perspchrom.tsv exist:
+      * Reads cached files (fast)
+      * Sets overwrite=False
+      
+    - If either file is missing:
+      * Calculates both from scratch (slow, could take hours)
+      * Saves to locdf.tsv and perspchrom.tsv
+      * Sets overwrite=True
+      
+    - If overwrite=True:
+      * Constructs full phylogenetic tree with event strings
+      * Saves to tree1.tsv.gz
+      
+    - If overwrite=False:
+      * Reads cached tree1.tsv.gz if it exists
+      * Raises error if tree1.tsv.gz doesn't exist
+    
+    OUTPUTS GENERATED:
+    ==================
+    Always generated:
+    - tree1_umap.html: Interactive UMAP visualization (Plotly)
+    
+    Generated on first run (then cached):
+    - locdf.tsv: ALG locations on scaffolds
+    - perspchrom.tsv: Presence/absence and colocalization matrix
+    - per_species_ALG_presence_fusions.tsv: Extended perspchrom with changestrings
+    - tree1.tsv.gz: Complete phylogenetic tree with events
+    
+    FORCE RECALCULATION:
+    ====================
+    To force complete recalculation, delete:
+    - locdf.tsv
+    - perspchrom.tsv
+    - tree1.tsv.gz (if you want to rebuild the tree too)
+    
+    NOTES:
+    ======
+    - Progress is printed to stderr
+    - Uses NCBI taxonomy database (must be initialized first)
+    - Exits after generating UMAP (sys.exit() before deprecated code sections)
+    """
     # parse the args
     args = parse_args()
+
+    # Load calibrated tree if provided
+    calibrated_tree_data = None
+    if args.tree_info:
+        calibrated_tree_data = load_calibrated_tree(args.tree_info)
+    else:
+        print("No calibrated tree provided (--tree_info), will use NCBI taxonomy with custom phylogeny", file=sys.stderr)
 
     # get the rbh files in the directory
     rbh_files = list(sorted([os.path.join(args.directory, f)
@@ -1782,8 +2684,15 @@ def main():
     else:
         # The files do not yet exist, so we need to calculate them
         print("Calculating the locdf and perspchrom df from the input files.", file = sys.stderr)
+        print("  locdf contains ALG localization data: which ALGs appear on which", file = sys.stderr)
+        print("    scaffolds in each sample, with significance values, gene counts,", file = sys.stderr)
+        print("    and fraction of each ALG on each scaffold.", file = sys.stderr)
+        print("  perspchrom contains species-level summary data: taxonomic lineages,", file = sys.stderr)
+        print("    chromosome counts, ALG presence/absence (number of scaffolds per", file = sys.stderr)
+        print("    ALG), and ALG colocalization patterns (pairs of ALGs on same scaffold).", file = sys.stderr)
         locdf, perspchrom = rbh_files_to_locdf_and_perspchrom(rbh_files, args.ALG_rbh,
-                                                              args.minsig, args.ALGname)
+                                                              args.minsig, args.ALGname,
+                                                              calibrated_tree_data=calibrated_tree_data)
         # save the locdf and perspchrom to a file
         locdf.to_csv("locdf.tsv", sep = "\t", index = False)
         perspchrom.to_csv("perspchrom.tsv", sep = "\t", index = False)
@@ -1794,28 +2703,43 @@ def main():
 
     resultstsv = "tree1.tsv.gz"
     resultsdf = None
+    
+    # If tree file doesn't exist, we need to build it regardless of overwrite flag
+    if not os.path.exists(resultstsv):
+        overwrite = True
+    
     if overwrite:
         # now that we have the perspchrom, we should construct the tree structure
-        T = SplitLossColocTree(perspchrom)
+        # Pass calibrated ages if available
+        calibrated_ages = None
+        if calibrated_tree_data is not None:
+            calibrated_ages = calibrated_tree_data['ages']
+        
+        T = SplitLossColocTree(perspchrom, calibrated_ages=calibrated_ages)
         print("Percolating", file = sys.stderr)
         T.percolate()
+        
+        # Calculate branch lengths and rates if we have calibrated ages
+        if calibrated_ages is not None:
+            T.calculate_branch_lengths()
+            T.calculate_event_rates()
+        
         print("Saving the tree to tsv", file = sys.stderr)
         T.save_tree_to_df(resultstsv)
         resultsdf = T.tree_df
-    elif not overwrite:
-        # if we don't want to overwrite the results (tree1.tsv)
-        # then we just read it in as a pdf
-        if os.path.exists(resultstsv):
-            resultsdf = pd.read_csv(resultstsv, sep = "\t", index_col = 0)
-        else:
-            raise IOError(f"The file {resultstsv} does not exist. We need to calculate the tree.")
+    else:
+        # tree1.tsv.gz exists, just read it
+        resultsdf = pd.read_csv(resultstsv, sep = "\t", index_col = 0)
     #
     print("Making a UMAP with matplotlib", file = sys.stderr)
     #save_UMAP(resultsdf)
     print("Making a UMAP with plotly", file = sys.stderr)
-    save_UMAP_plotly(resultsdf, "tree1")
+    try:
+        save_UMAP_plotly(resultsdf, "tree1")
+    except ModuleNotFoundError:
+        print("  Skipping plotly UMAP (plotly not installed)", file = sys.stderr)
 
-    sys.exit()
+    # Continue to changestring generation
     # *********************************************************************************************************************
     #     ┏┓┓ ┏┓  ┳┓┳┏┓┏┓┏┓┳┓┏┓┳┏┓┳┓  ┏┓┳┓┳┓  ┏┓┳┳┏┓┳┏┓┳┓
     #     ┣┫┃ ┃┓  ┃┃┃┗┓┃┛┣ ┣┫┗┓┃┃┃┃┃  ┣┫┃┃┃┃  ┣ ┃┃┗┓┃┃┃┃┃
@@ -1857,6 +2781,15 @@ def main():
     ALG_combos  = [x for x in perspchrom.columns if isinstance(x, tuple) and not x in remove_these]
     perspchrom["changestrings"] = ""
 
+    print("\nGenerating changestrings for each species", file=sys.stderr)
+    print(f"  Processing {len(perspchrom)} species to identify ALG fusions, losses, and splits\n", file=sys.stderr)
+
+    # Create checkpoint directory for crash recovery and future parallelization
+    checkpoint_dir = "changestring_checkpoints"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    checkpoints_loaded = 0
+    checkpoints_computed = 0
+
     # This is a magic number used to determine whether an ALG is missing or not.
     #  If an ALG is missing in 80%, or 0.8, of the clade in question, then we consider it missing.
     min_for_missing = 0.8
@@ -1864,163 +2797,282 @@ def main():
     #  then we consider that this ALG pair is not colocalized in this clade.
     min_for_noncolocalized = 0.5
 
-    for i, row in perspchrom.iterrows():
-        # ----- ALG PRESENCE ABSENCE -----
-        # For this species, we keep track of the changes on each branch with a structured list.
-        # The format is [taxid, "(gain|loss|split)", "taxid", "(gain|loss|split)", ...]
-        #  We add new entries as we go through the tree to the root.
-        #  At the end, we flip the order and make a parsable string
-        changeString = []
-        # we have access to ["species", "taxid", "taxidstring"]
-        thistaxidstring = row["taxidstring"]
+    if args.parallel:
+        # ============= PARALLEL MODE =============
+        print(f"  Using {args.ncores} parallel processes for changestring generation", file=sys.stderr)
+        
+        # Split indices into batches for workers
+        all_indices = list(range(len(perspchrom)))
+        batch_size = max(1, len(perspchrom) // args.ncores)
+        batches = [all_indices[i:i+batch_size] 
+                   for i in range(0, len(all_indices), batch_size)]
+        
+        print(f"  Processing {len(perspchrom)} species in {len(batches)} batches", file=sys.stderr)
+        
+        # Prepare worker arguments (all batches get same parameters)
+        worker_args = [(batch, perspchrom, ALG_columns, ALG_combos,
+                        min_for_missing, min_for_noncolocalized, checkpoint_dir, ALG_node)
+                       for batch in batches]
+        
+        # Start progress monitoring thread
+        stop_event = threading.Event()
+        monitor_thread = threading.Thread(target=monitor_progress,
+                                           args=(checkpoint_dir, len(perspchrom), stop_event))
+        monitor_thread.start()
+        
+        # Process in parallel using multiprocessing Pool with immediate error handling
+        checkpoints_loaded = 0
+        checkpoints_computed = 0
+        try:
+            with Pool(args.ncores) as pool:
+                # Use imap_unordered to get results as they complete (fail fast on errors)
+                for batch_results in pool.imap_unordered(process_species_batch, worker_args):
+                    # Collect results from this batch
+                    for i, changestring, was_loaded in batch_results:
+                        perspchrom.at[i, "changestrings"] = changestring
+                        if was_loaded:
+                            checkpoints_loaded += 1
+                        else:
+                            checkpoints_computed += 1
+        except Exception as e:
+            # If any worker fails, stop progress monitoring and terminate pool
+            stop_event.set()
+            monitor_thread.join()
+            print(f"\n\nERROR: Worker process failed. Shutting down all workers.", file=sys.stderr)
+            raise
+        
+        # Stop the progress monitoring thread
+        stop_event.set()
+        monitor_thread.join()
+        
+        print(f"\r  Changestrings complete (parallel): {checkpoints_loaded} loaded from checkpoints, {checkpoints_computed} computed - Done!     ", file=sys.stderr)
+    
+    else:
+        # ============= SEQUENTIAL MODE (ORIGINAL) =============
+        print("  Using sequential processing for changestring generation", file=sys.stderr)
+        
+        for i, row in perspchrom.iterrows():
+            # Check for existing checkpoint
+            checkpoint_file = os.path.join(checkpoint_dir, f"{row['species']}.txt")
+            if os.path.exists(checkpoint_file):
+                with open(checkpoint_file, 'r') as f:
+                    changeString = f.read().strip()
+                perspchrom.at[i, "changestrings"] = changeString
+                checkpoints_loaded += 1
+                if (i+1) % 100 == 0 or i == 0:
+                    print(f"\r  Loaded from checkpoints: {checkpoints_loaded}, Computing: {checkpoints_computed}, Progress: {i+1}/{len(perspchrom)}          ", end="", file=sys.stderr)
+                continue
+            
+            # ----- ALG PRESENCE ABSENCE -----
+            # For this species, we keep track of the changes on each branch with a structured list.
+            # The format is [taxid, "(gain|loss|split)", "taxid", "(gain|loss|split)", ...]
+            #  We add new entries as we go through the tree to the root.
+            #  At the end, we flip the order and make a parsable string
+            changeString = []
+            # we have access to ["species", "taxid", "taxidstring"]
+            thistaxidstring = row["taxidstring"]
 
-        # --------- CONSERVED ----------- #
-        # note the ALGs that have a value of 1 here. These are conserved in this species and will never be in changeString
-        ALGsConservedInThisSample = [x for x in ALG_columns if row[x] >= 1]
-        # Note the things specifically missing in this species. These will be added to the changeString at some point
+            # --------- CONSERVED ----------- #
+            # note the ALGs that have a value of 1 here. These are conserved in this species and will never be in changeString
+            ALGsConservedInThisSample = [x for x in ALG_columns if row[x] >= 1]
+            # Note the things specifically missing in this species. These will be added to the changeString at some point
 
-        # ---------- MISSING ------------ #
-        #  This list will not be changed at all during execution of this loop. Only the next ALGsMissingInThisSampleAccountedFor will be changed.
-        ALGsMissingInThisSample   = [x for x in ALG_columns if row[x] == 0]
-        # We will add to this list as we go through the tree. This will be the list of ALGs that were lost on various branches.
-        ALGsMissingInThisSampleAccountedFor = [] # At the end, all of the missing ALGs must appear somewhere in ALGsMissingInThisSample
+            # ---------- MISSING ------------ #
+            #  This list will not be changed at all during execution of this loop. Only the next ALGsMissingInThisSampleAccountedFor will be changed.
+            ALGsMissingInThisSample   = [x for x in ALG_columns if row[x] == 0]
+            # We will add to this list as we go through the tree. This will be the list of ALGs that were lost on various branches.
+            ALGsMissingInThisSampleAccountedFor = [] # At the end, all of the missing ALGs must appear somewhere in ALGsMissingInThisSample
 
-        # ----------- SPLITS ------------ #
-        ALGsSplitInThisSample = [x for x in ALG_columns if row[x] > 1]
-        ALGsSplitInThisSampleAccountedFor = []
+            # ----------- SPLITS ------------ #
+            ALGsSplitInThisSample = [x for x in ALG_columns if row[x] > 1]
+            ALGsSplitInThisSampleAccountedFor = []
 
-        # ----- ALG COLOCALIZATION ------ #
-        # For each species, we similarly need to keep track of which ALG combos are gained on each branch.
-        ColocalizedPairsInThisSample             = [x for x in ALG_combos if row[x] == 1]
-        ColocalizedPairsInThisSampleAccountedFor = []
+            # ----- ALG COLOCALIZATION ------ #
+            # For each species, we similarly need to keep track of which ALG combos are gained on each branch.
+            ColocalizedPairsInThisSample             = [x for x in ALG_combos if row[x] == 1]
+            ColocalizedPairsInThisSampleAccountedFor = []
 
-        ## DEBUG
-        #print()
-        #print("The sample is {}".format(row["species"]))
-        #print("ALGsConservedInThisSample: {}".format(ALGsConservedInThisSample))
-        #print("ALGsMissingInThisSample: {}".format(ALGsMissingInThisSample))
-        #print("ALGsSplitInThisSample: {}".format(ALGsSplitInThisSample))
-        #print("num ColocalizedPairsInThisSample: {}".format(len(ColocalizedPairsInThisSample)))
-        #print()
+            ## DEBUG
+            #print()
+            #print("The sample is {}".format(row["species"]))
+            #print("ALGsConservedInThisSample: {}".format(ALGsConservedInThisSample))
+            #print("ALGsMissingInThisSample: {}".format(ALGsMissingInThisSample))
+            #print("ALGsSplitInThisSample: {}".format(ALGsSplitInThisSample))
+            #print("num ColocalizedPairsInThisSample: {}".format(len(ColocalizedPairsInThisSample)))
+            #print()
 
-        #print("Starting taxidstring: {}".format(thistaxidstring))
-        #print("species", row["species"])
-        #print("ALGsMissingInThisSample: {}".format(ALGsMissingInThisSample))
-        #print("ALGsConservedInThisSample: {}".format(ALGsConservedInThisSample))
-        #print("ColocalizedPairsInThisSample: {}".format(ColocalizedPairsInThisSample))
+            #print("Starting taxidstring: {}".format(thistaxidstring))
+            #print("species", row["species"])
+            #print("ALGsMissingInThisSample: {}".format(ALGsMissingInThisSample))
+            #print("ALGsConservedInThisSample: {}".format(ALGsConservedInThisSample))
+            #print("ColocalizedPairsInThisSample: {}".format(ColocalizedPairsInThisSample))
 
-        while thistaxidstring.count(";") > 0:
-            # we need to know where we came from. Keep the previous taxidstring
-            prevtaxidstring = thistaxidstring
-            thisdf = perspchrom[perspchrom["taxidstring"] == thistaxidstring]
+            while thistaxidstring.count(";") > 0:
+                # we need to know where we came from. Keep the previous taxidstring
+                prevtaxidstring = thistaxidstring
+                thisdf = perspchrom[perspchrom["taxidstring"] == thistaxidstring]
 
-            # remove the last taxid from the string
-            thistaxidstring = ";".join(thistaxidstring.split(";")[:-1])
+                # remove the last taxid from the string
+                thistaxidstring = ";".join(thistaxidstring.split(";")[:-1])
 
-            # these will be used to keep track of what is gained or lost on this branch
-            ALG_colocalizations_on_this_branch = []
-            ALG_losses_on_this_branch = []
-            ALG_splits_on_this_branch = []
+                # these will be used to keep track of what is gained or lost on this branch
+                ALG_colocalizations_on_this_branch = []
+                ALG_losses_on_this_branch = []
+                ALG_splits_on_this_branch = []
 
-            # Now we perform the logic of estimating whether an ALG was lost or gained on this branch,
-            #  and whether an ALG combo was gained on this branch.
-            if thistaxidstring == ALG_node:
-                # ----- ALG PRESENCE ABSENCE -----
-                # In this case we are at the node for which the ALGs were inferred.
-                # For example, for the BCnS ALGs, the node is Metazoa: "1;131567;2759;33154;33208"
-                #  We need to place the remaining ALGs on the branch between the previous node and this node.
-                ALG_losses_on_this_branch = [x for x in ALGsMissingInThisSample if x not in ALGsMissingInThisSampleAccountedFor]
-                # add all the new ALG losses to the ALGsMissingInThisSampleAccountedFor
-                ALGsMissingInThisSampleAccountedFor.extend(ALG_losses_on_this_branch)
-
-                # ----- ALG COLOCALIZATION EVENTS -----
-                ALG_colocalizations_on_this_branch = [x for x in ColocalizedPairsInThisSample if x not in ColocalizedPairsInThisSampleAccountedFor]
-                # add all the new ALG colocalizations to the ColocalizedPairsInThisSampleAccountedFor
-                ColocalizedPairsInThisSampleAccountedFor.extend(ALG_colocalizations_on_this_branch)
-
-                # ----- ALG SPLITS -----
-                ALG_splits_on_this_branch = [x for x in ALGsSplitInThisSample if x not in ALGsMissingInThisSampleAccountedFor]
-                # add all the new ALG splits to the ALGsMissingInThisSampleAccountedFor
-                ALGsSplitInThisSampleAccountedFor.extend(ALG_splits_on_this_branch)
-            else:
-                # Because we're not at the last node we need to do some more work
-                # Get the subdf of the perspchrom df for rows with a taxidstring that contains the new thistaxidstring, but not the prevtaxidstring
-                #  Excluding the prevtaxidstring is important, because it compares this clade only to sister clades at the same level,
-                #  and removes the possibility of paraphyletic comparisons.
-                subdf = perspchrom[perspchrom["taxidstring"].str.contains(thistaxidstring) &
-                                   ~perspchrom["taxidstring"].str.contains(prevtaxidstring)]
-                if len(subdf) == 0:
-                    # If there is nothing to compare to in this clade, then we don't need to do anything and can proceed to printing the changeString.
-                    #   - 20240207: The fundamental reason that we can't do anything here is that we don't have any information about the ALGs in this clade.
-                    # Deprecated:
-                    #   - 20240207: In the future there could be an option to put ambiguous changes of gains or losses here, but for now
-                    #     we are just going to put the changes on the oldest nodes that we can find.
-                    pass
-                else:
+                # Now we perform the logic of estimating whether an ALG was lost or gained on this branch,
+                #  and whether an ALG combo was gained on this branch.
+                if thistaxidstring == ALG_node:
                     # ----- ALG PRESENCE ABSENCE -----
-                    # If there are some species to compare here then we apply the logic detailed above in the section ALG PRESENCE ABSENCE
-                    missingALGsInThisClade, presentALGsInThisClade = missing_present_ALGs(subdf, min_for_missing = min_for_missing)
-
-                    # The only time we mark a loss of an ALG is if it is not missing in 80% of the comparison clade.
-                    #  These are the things that are in the presentALGsInThisClade list.
-                    #  If there is something in presentALGsInThisClade, but in ALGsMissingInThisSample, then we mark it as a loss on this branch.
-                    ALGsLostOnThisBranch = [x for x in presentALGsInThisClade
-                                            if x in ALGsMissingInThisSample
-                                            and x not in ALGsMissingInThisSampleAccountedFor]
-                    #print("Present ALGs: {}".format(presentALGsInThisClade))
-                    #print("ALGs accounted for so far: {}".format(ALGsMissingInThisSampleAccountedFor))
-                    #print("ALGs lost on this branch: {}", ALGsLostOnThisBranch)
-                    # note that we have to print these.
-                    ALG_losses_on_this_branch.extend(ALGsLostOnThisBranch)
-                    # then update the dataframe saying that we know that these ALGs were lost on this branch
-                    ALGsMissingInThisSampleAccountedFor.extend(ALGsLostOnThisBranch)
+                    # In this case we are at the node for which the ALGs were inferred.
+                    # For example, for the BCnS ALGs, the node is Metazoa: "1;131567;2759;33154;33208"
+                    #  We need to place the remaining ALGs on the branch between the previous node and this node.
+                    ALG_losses_on_this_branch = [x for x in ALGsMissingInThisSample if x not in ALGsMissingInThisSampleAccountedFor]
+                    # add all the new ALG losses to the ALGsMissingInThisSampleAccountedFor
+                    ALGsMissingInThisSampleAccountedFor.extend(ALG_losses_on_this_branch)
 
                     # ----- ALG COLOCALIZATION EVENTS -----
-                    notLocalizedInThisClade = separate_ALG_pairs(subdf, min_for_noncolocalized = min_for_noncolocalized)
-                    pairsColocalizedOnThisBranch = [x for x in notLocalizedInThisClade
-                                                    if x in ColocalizedPairsInThisSample
-                                                    and x not in ColocalizedPairsInThisSampleAccountedFor]
-                    #print("notLocalizedInThisClade: {}".format(notLocalizedInThisClade))
-                    #print("pairsColocalizedOnThisBranch: {}".format(pairsColocalizedOnThisBranch))
-                    # Mark which colocalizations we have accounted for already
-                    ColocalizedPairsInThisSampleAccountedFor.extend(pairsColocalizedOnThisBranch)
-                    # Mark which colocalizations we have gained on this branch
-                    ALG_colocalizations_on_this_branch.extend(pairsColocalizedOnThisBranch)
+                    ALG_colocalizations_on_this_branch = [x for x in ColocalizedPairsInThisSample if x not in ColocalizedPairsInThisSampleAccountedFor]
+                    # add all the new ALG colocalizations to the ColocalizedPairsInThisSampleAccountedFor
+                    ColocalizedPairsInThisSampleAccountedFor.extend(ALG_colocalizations_on_this_branch)
 
                     # ----- ALG SPLITS -----
-                    notSplitInThisClade = unsplit_ALGs(subdf,
-                                                       max_frac_split = min_for_noncolocalized)
-                    ALGsplitsThisBranch = [x for x in notSplitInThisClade
-                                           if x in ALGsSplitInThisSample
-                                           and x not in ALGsSplitInThisSampleAccountedFor]
-                    ALG_splits_on_this_branch.extend(ALGsplitsThisBranch)
-                #print()
-            thisChange = "({}|{}|{})".format(
-                sorted(ALG_colocalizations_on_this_branch),
-                sorted(ALG_losses_on_this_branch),
-                sorted(ALG_splits_on_this_branch))
-            changeString.append(prevtaxidstring.split(";")[-1])
-            changeString.append(thisChange)
-        # Now we should check that ALGsMissingInThisSampleAccountedFor is the same as ALGsMissingInThisSample.
-        # This means that we have found all of the missing ALGs at some point in the tree.
-        # If this is not the case, then we need to raise an error.
-        if sorted(ALGsMissingInThisSampleAccountedFor) != sorted(ALGsMissingInThisSample):
-            raise IOError("There is a discrepancy between the ALGsMissingInThisSampleAccountedFor and ALGsMissingInThisSample. Write more debugging code to figure out what the issue is, because I haven't worked on this yet.")
-        # we should do the same for the colocalizations
-        if sorted(ColocalizedPairsInThisSampleAccountedFor) != sorted(ColocalizedPairsInThisSample):
-            raise IOError("There is a discrepancy between the ColocalizedPairsInThisSampleAccountedFor and ColocalizedPairsInThisSample. Write more debugging code to figure out what the issue is, because I haven't worked on this yet.")
-        # we should do this for splits
-        if sorted(ALGsSplitInThisSampleAccountedFor) != sorted(ALGsSplitInThisSample):
-            raise IOError("There is a discrepancy between the ALGsSplitInThisSampleAccountedFor and ALGsSplitInThisSample. Write more debugging code to figure out what the issue is, because I haven't worked on this yet.")
-        # We have stepped out of the for loop, now we add the last taxidstring to the changeString
-        changeString.append(thistaxidstring)
-        # flip the changeString and make it a parsable string
-        changeString = "-".join(changeString[::-1])
-        # The final string will look something like this: 1-([]|[])-131567-([]|[])-2759-([]|[])-33154-([]|[])-33208-([]|['A1b', 'A2', 'B2', 'B3', 'C1', 'C2', 'D', 'Ea', 'F', 'G', 'H', 'I', 'J1', 'K', 'L', 'M', 'N', 'O1', 'P', 'Qa', 'Qb', 'Qc', 'Qd', 'R'])-6040-([]|[])-60882-([]|[])-60883-([]|[])-60884-([]|[])-472148-([]|[])-111877-([]|[])-111878
-        # We add the final string to the perspchrom df
-        perspchrom.at[i, "changestrings"] = changeString
-        # print a progress bar on the same line to tell the user how much longer we have to go
-        print("\r{}/{}          ".format(i+1, len(perspchrom)), end="")
+                    ALG_splits_on_this_branch = [x for x in ALGsSplitInThisSample if x not in ALGsMissingInThisSampleAccountedFor]
+                    # add all the new ALG splits to the ALGsMissingInThisSampleAccountedFor
+                    ALGsSplitInThisSampleAccountedFor.extend(ALG_splits_on_this_branch)
+                else:
+                    # Because we're not at the last node we need to do some more work
+                    # Get the subdf of the perspchrom df for rows with a taxidstring that contains the new thistaxidstring, but not the prevtaxidstring
+                    #  Excluding the prevtaxidstring is important, because it compares this clade only to sister clades at the same level,
+                    #  and removes the possibility of paraphyletic comparisons.
+                    subdf = perspchrom[perspchrom["taxidstring"].str.contains(thistaxidstring) &
+                                       ~perspchrom["taxidstring"].str.contains(prevtaxidstring)]
+                    if len(subdf) == 0:
+                        # If there is nothing to compare to in this clade, then we don't need to do anything and can proceed to printing the changeString.
+                        #   - 20240207: The fundamental reason that we can't do anything here is that we don't have any information about the ALGs in this clade.
+                        # Deprecated:
+                        #   - 20240207: In the future there could be an option to put ambiguous changes of gains or losses here, but for now
+                        #     we are just going to put the changes on the oldest nodes that we can find.
+                        pass
+                    else:
+                        # ----- ALG PRESENCE ABSENCE -----
+                        # If there are some species to compare here then we apply the logic detailed above in the section ALG PRESENCE ABSENCE
+                        missingALGsInThisClade, presentALGsInThisClade = missing_present_ALGs(subdf, min_for_missing = min_for_missing)
+
+                        # The only time we mark a loss of an ALG is if it is not missing in 80% of the comparison clade.
+                        #  These are the things that are in the presentALGsInThisClade list.
+                        #  If there is something in presentALGsInThisClade, but in ALGsMissingInThisSample, then we mark it as a loss on this branch.
+                        ALGsLostOnThisBranch = [x for x in presentALGsInThisClade
+                                                if x in ALGsMissingInThisSample
+                                                and x not in ALGsMissingInThisSampleAccountedFor]
+                        #print("Present ALGs: {}".format(presentALGsInThisClade))
+                        #print("ALGs accounted for so far: {}".format(ALGsMissingInThisSampleAccountedFor))
+                        #print("ALGs lost on this branch: {}", ALGsLostOnThisBranch)
+                        # note that we have to print these.
+                        ALG_losses_on_this_branch.extend(ALGsLostOnThisBranch)
+                        # then update the dataframe saying that we know that these ALGs were lost on this branch
+                        ALGsMissingInThisSampleAccountedFor.extend(ALGsLostOnThisBranch)
+
+                        # ----- ALG COLOCALIZATION EVENTS -----
+                        notLocalizedInThisClade = separate_ALG_pairs(subdf, min_for_noncolocalized = min_for_noncolocalized)
+                        pairsColocalizedOnThisBranch = [x for x in notLocalizedInThisClade
+                                                        if x in ColocalizedPairsInThisSample
+                                                        and x not in ColocalizedPairsInThisSampleAccountedFor]
+                        #print("notLocalizedInThisClade: {}".format(notLocalizedInThisClade))
+                        #print("pairsColocalizedOnThisBranch: {}".format(pairsColocalizedOnThisBranch))
+                        # Mark which colocalizations we have accounted for already
+                        ColocalizedPairsInThisSampleAccountedFor.extend(pairsColocalizedOnThisBranch)
+                        # Mark which colocalizations we have gained on this branch
+                        ALG_colocalizations_on_this_branch.extend(pairsColocalizedOnThisBranch)
+
+                        # ----- ALG SPLITS -----
+                        notSplitInThisClade = unsplit_ALGs(subdf,
+                                                           max_frac_split = min_for_noncolocalized)
+                        ALGsplitsThisBranch = [x for x in notSplitInThisClade
+                                               if x in ALGsSplitInThisSample
+                                               and x not in ALGsSplitInThisSampleAccountedFor]
+                        ALG_splits_on_this_branch.extend(ALGsplitsThisBranch)
+                    #print()
+                thisChange = "({}|{}|{})".format(
+                    sorted(ALG_colocalizations_on_this_branch),
+                    sorted(ALG_losses_on_this_branch),
+                    sorted(ALG_splits_on_this_branch))
+                changeString.append(prevtaxidstring.split(";")[-1])
+                changeString.append(thisChange)
+            # Now we should check that ALGsMissingInThisSampleAccountedFor is the same as ALGsMissingInThisSample.
+            # This means that we have found all of the missing ALGs at some point in the tree.
+            # If this is not the case, then we need to raise an error.
+            if sorted(ALGsMissingInThisSampleAccountedFor) != sorted(ALGsMissingInThisSample):
+                raise IOError("There is a discrepancy between the ALGsMissingInThisSampleAccountedFor and ALGsMissingInThisSample. Write more debugging code to figure out what the issue is, because I haven't worked on this yet.")
+            
+            # Handle colocalizations that couldn't be placed anywhere in phylogeny
+            # This occurs when ALG pairs are colocalized in >50% of both the focal clade and sister clades
+            if sorted(ColocalizedPairsInThisSampleAccountedFor) != sorted(ColocalizedPairsInThisSample):
+                unaccounted_colocs = [x for x in ColocalizedPairsInThisSample 
+                                      if x not in ColocalizedPairsInThisSampleAccountedFor]
+                if unaccounted_colocs:
+                    # Mark these as accounted (ancient/widespread colocalizations)
+                    ColocalizedPairsInThisSampleAccountedFor.extend(unaccounted_colocs)
+            
+            # Final check for colocalizations - should now pass
+            if sorted(ColocalizedPairsInThisSampleAccountedFor) != sorted(ColocalizedPairsInThisSample):
+                raise IOError("There is a discrepancy between the ColocalizedPairsInThisSampleAccountedFor and ColocalizedPairsInThisSample. Write more debugging code to figure out what the issue is, because I haven't worked on this yet.")
+            
+            # Handle splits that couldn't be placed anywhere in phylogeny
+            # This occurs when ALGs are split in >50% of both the focal clade and sister clades
+            # (widespread splits that predate observable divergences)
+            if sorted(ALGsSplitInThisSampleAccountedFor) != sorted(ALGsSplitInThisSample):
+                unaccounted_splits = [x for x in ALGsSplitInThisSample 
+                                      if x not in ALGsSplitInThisSampleAccountedFor]
+                if unaccounted_splits:
+                    # Mark these as accounted (ancient/widespread splits)
+                    ALGsSplitInThisSampleAccountedFor.extend(unaccounted_splits)
+            
+            # Final check - should now pass
+            if sorted(ALGsSplitInThisSampleAccountedFor) != sorted(ALGsSplitInThisSample):
+                error_msg = "\n" + "="*80 + "\n"
+                error_msg += "ERROR: ALG split accounting discrepancy detected\n"
+                error_msg += "="*80 + "\n\n"
+                error_msg += f"Species: {row['species']} (taxid: {row['taxid']})\n\n"
+                error_msg += f"ALGs split in this sample (expected): {len(ALGsSplitInThisSample)}\n"
+                error_msg += f"  {sorted(ALGsSplitInThisSample)}\n\n"
+                error_msg += f"ALGs split accounted for: {len(ALGsSplitInThisSampleAccountedFor)}\n"
+                error_msg += f"  {sorted(ALGsSplitInThisSampleAccountedFor)}\n\n"
+                
+                missing_from_accounted = set(ALGsSplitInThisSample) - set(ALGsSplitInThisSampleAccountedFor)
+                extra_in_accounted = set(ALGsSplitInThisSampleAccountedFor) - set(ALGsSplitInThisSample)
+                
+                if missing_from_accounted:
+                    error_msg += f"Missing from accounted: {sorted(missing_from_accounted)}\n"
+                if extra_in_accounted:
+                    error_msg += f"Extra in accounted: {sorted(extra_in_accounted)}\n"
+                
+                error_msg += "\nThis may indicate an issue with the split detection logic or\n"
+                error_msg += "with the clade comparison thresholds (min_for_noncolocalized).\n"
+                error_msg += "="*80 + "\n"
+                print(error_msg, file=sys.stderr)
+                raise IOError(error_msg)
+            # We have stepped out of the for loop, now we add the last taxidstring to the changeString
+            changeString.append(thistaxidstring)
+            # flip the changeString and make it a parsable string
+            changeString = "-".join(changeString[::-1])
+            # The final string will look something like this: 1-([]|[])-131567-([]|[])-2759-([]|[])-33154-([]|[])-33208-([]|['A1b', 'A2', 'B2', 'B3', 'C1', 'C2', 'D', 'Ea', 'F', 'G', 'H', 'I', 'J1', 'K', 'L', 'M', 'N', 'O1', 'P', 'Qa', 'Qb', 'Qc', 'Qd', 'R'])-6040-([]|[])-60882-([]|[])-60883-([]|[])-60884-([]|[])-472148-([]|[])-111877-([]|[])-111878
+            # We add the final string to the perspchrom df
+            perspchrom.at[i, "changestrings"] = changeString
+            
+            # Save checkpoint immediately
+            with open(checkpoint_file, 'w') as f:
+                f.write(changeString)
+            checkpoints_computed += 1
+            
+            # print a progress bar on the same line to tell the user how much longer we have to go
+            print(f"\r  Loaded from checkpoints: {checkpoints_loaded}, Computing: {checkpoints_computed}, Progress: {i+1}/{len(perspchrom)}          ", end="", file=sys.stderr)
+    
+        print(f"\r  Changestrings complete (sequential): {checkpoints_loaded} loaded from checkpoints, {checkpoints_computed} computed - Done!     ", file=sys.stderr)
+    
+    # Common final steps (both parallel and sequential)
+    print(f"  Checkpoints saved to: {checkpoint_dir}/", file=sys.stderr)
+    print()
 
     # save the file to a tsv
     perspchrom.to_csv("per_species_ALG_presence_fusions.tsv", sep='\t', index=False)

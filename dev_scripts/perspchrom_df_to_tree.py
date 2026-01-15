@@ -1,4 +1,77 @@
 #!/usr/bin/env python3
+"""
+Analyze chromosomal rearrangements (fusions and losses) across phylogenetic lineages.
+
+This script performs Monte Carlo simulations to determine whether certain ancestral linkage
+groups (ALGs) tend to fuse or disperse more than expected by chance. It tracks chromosomal
+changes along phylogenetic branches and compares observed fusion/loss patterns against
+randomized null expectations.
+
+OVERVIEW:
+---------
+The analysis proceeds in several steps:
+1. Parse ALG colocalization and loss events from a perspective chromosome dataframe
+2. Build a phylogenetic tree from NCBI taxid lineages
+3. Run Monte Carlo simulations with both real and randomized ALG sizes
+4. Compare observed vs. expected fusion/loss patterns for different ALG size classes
+5. Generate heatmaps showing enrichment/depletion of specific fusion patterns
+
+INPUT FILES:
+------------
+1. Perspective chromosome dataframe (per_species_ALG_presence_fusions.tsv)
+   - Contains ALG presence/absence and colocalization information per species
+   - Must have columns: 'species', 'changestrings', 'taxidstring'
+   - 'changestrings': encodes fusions/losses along phylogenetic branches
+     Format: taxid-([colocalizations]|[losses]|[splits])-taxid-...
+     Example: 1-([]|[]|[])-131567-([('A1b','B3')]|[]|[])-2759-...
+
+2. RBH file (reciprocal best hits, typically a .rbh file)
+   - Defines ALGs with their sizes and colors
+   - Used to determine ALG properties for the analysis
+   - Parsed by rbh_tools.parse_ALG_rbh_to_colordf()
+
+MAIN FUNCTIONS:
+---------------
+- generate_stats_df(): Creates summary statistics of chromosomal changes per branch
+- run_n_simulations_save_results(): Runs Monte Carlo simulations (observed + randomized)
+- read_simulations_and_make_heatmaps(): Aggregates simulation results and generates plots
+
+OUTPUT:
+-------
+1. statsdf.tsv: Summary statistics of changes on each phylogenetic branch
+2. Simulation files: simulations/sim_results_*.tsv (one per simulation run)
+3. PDF heatmaps: One per clade of interest, showing:
+   - Mean fusion counts per ALG size class
+   - Log2(observed/expected) ratios for different fusion patterns
+   - Convergence traces across simulations
+   - Separate panels for absolute ALG sizes vs. fractions of largest ALG
+   - Separate panels for individual ALGs vs. connected components (CCs)
+
+CLADES OF INTEREST:
+-------------------
+The script generates separate plots for major animal clades including:
+- Bilateria (33213), Protostomia (33317), Deuterostomia (33511)
+- Cnidaria (6073), Ctenophora (10197), Porifera (6040)
+- Major bilaterian groups: Annelida, Mollusca, Arthropoda, Chordata, etc.
+
+USAGE:
+------
+python perspchrom_df_to_tree.py <perspchrom_df.tsv> <rbh_file>
+
+Example:
+python perspchrom_df_to_tree.py per_species_ALG_presence_fusions.tsv BCnS.rbh
+
+NOTES:
+------
+- The script uses parallelizable Monte Carlo simulations (default: 60 simulations)
+- Each simulation compares real ALG sizes vs. randomized sizes
+- Results are saved incrementally to allow resuming interrupted runs
+- Heatmaps use log2(obs/exp) with values capped at ±6 for visualization
+- Pseudocounts of 1 are added to avoid division by zero
+
+AUTHORS: Darrin T. Schultz
+DATE: 2024
+"""
 # the file path is the first positional arg. use sys.
 import ast
 import os
@@ -7,8 +80,23 @@ import numpy as np
 import pandas as pd
 import random
 import sys
-from ete3 import NCBITaxa
+
+# Force unbuffered output for real-time monitoring in SLURM logs
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+from ete4 import NCBITaxa
 import glob
+from multiprocessing import Pool
+import time
+import argparse
+import gzip
+
+# Add the workspace root to sys.path to find source directory
+script_dir = os.path.dirname(os.path.abspath(__file__))
+workspace_root = os.path.dirname(script_dir)  # Go up from dev_scripts to odp
+if workspace_root not in sys.path:
+    sys.path.insert(0, workspace_root)
 
 # import the parse_rbh_file from the plot_ALG_fusions.py script
 # this is a function that parses the RBH file into a dataframe
@@ -71,19 +159,49 @@ def parse_gain_loss_string(GL_string, samplename) -> pd.DataFrame:
            - colocalizations - ALGs that came together onto the same chromosome on this branch.
            - losses          - ALGs that were lost/dispersed/became untraceable on this branch.
     """
-    splitstring = GL_string.split("-")
+    # Protect negative taxids (custom topology: -67, -68) before splitting
+    # Replace '--' with '-~' so that '--67' becomes '-~67', which splits into ['~67']
+    GL_string_safe = GL_string.replace('--', '-~')
+    splitstring = GL_string_safe.split("-")
+    
+    # Helper function to parse taxids (handles negative custom topology taxids)
+    def parse_taxid(s):
+        if s.startswith('~'):
+            return -int(s[1:])  # ~67 -> -67
+        else:
+            return int(s)
+    
     # Go every two elements in the list.
     entries = []
     # These will be the taxids, and the things between them are the changes.
     for i in range(0,len(splitstring)-1, 2):
-        taxid1 = int(splitstring[i])
-        taxid2 = int(splitstring[i+2])
-        colocloss = splitstring[i+1].lstrip("(").rstrip(")").split("]|[")
-        # interpret the next two strings as lists
-        colocs = eval(      colocloss[0] + "]")
-        losses = eval("[" + colocloss[1] + "]")
-        splits = eval("[" + colocloss[2]      )
-        print("These are splits: {}".format(splits))
+        try:
+            taxid1 = parse_taxid(splitstring[i])
+        except (ValueError, IndexError) as e:
+            raise ValueError(f"Error parsing source taxid at position {i} in sample '{samplename}'.\n"
+                           f"Expected integer taxid but got: '{splitstring[i] if i < len(splitstring) else 'INDEX OUT OF RANGE'}'.\n"
+                           f"Full changestring: {GL_string}") from e
+        
+        try:
+            taxid2 = parse_taxid(splitstring[i+2])
+        except (ValueError, IndexError) as e:
+            raise ValueError(f"Error parsing target taxid at position {i+2} in sample '{samplename}'.\n"
+                           f"Expected integer taxid but got: '{splitstring[i+2] if i+2 < len(splitstring) else 'INDEX OUT OF RANGE'}'.\n"
+                           f"Full changestring: {GL_string}") from e
+        
+        try:
+            colocloss = splitstring[i+1].lstrip("(").rstrip(")").split("]|[")
+            # interpret the next two strings as lists
+            colocs = eval(      colocloss[0] + "]")
+            losses = eval("[" + colocloss[1] + "]")
+            splits = eval("[" + colocloss[2]      )
+        except (IndexError, SyntaxError) as e:
+            raise ValueError(f"Error parsing changes between taxids {taxid1} and {taxid2} in sample '{samplename}'.\n"
+                           f"Change string at position {i+1}: '{splitstring[i+1] if i+1 < len(splitstring) else 'INDEX OUT OF RANGE'}'.\n"
+                           f"Full changestring: {GL_string}") from e
+        
+        # debug statement
+        #print("These are splits: {}".format(splits))
         entry = {"source_taxid": taxid1,    # already an int, we cast it earlier
                  "target_taxid": taxid2,    # already an int, we cast it earlier
                  "colocalizations": colocs, # this is a list
@@ -125,6 +243,38 @@ def parse_gain_loss_from_perspchrom_df(perspchromdf) -> pd.DataFrame:
     # concatenate the list of dataframes into one big dataframe
     changedf = pd.concat(df_list)
     return changedf
+
+def safe_get_taxid_translator(ncbi, taxids):
+    """
+    Get taxid names from NCBI, handling custom negative taxids used in custom phylogeny.
+    Custom taxids:
+      -67: Myriazoa (Porifera + Eumetazoa, sister to Ctenophora)
+      -68: Parahoxozoa (Placozoa/Cnidaria + Bilateria)
+    
+    Args:
+        ncbi: NCBITaxa instance
+        taxids: List of taxids (may include negative custom taxids)
+    
+    Returns:
+        Dictionary mapping taxid -> name for all input taxids
+    """
+    custom_names = {
+        -67: "Myriazoa",
+        -68: "Parahoxozoa"
+    }
+    
+    # Filter to only positive (real NCBI) taxids
+    valid_taxids = [t for t in taxids if t > 0]
+    
+    # Get NCBI names for valid taxids
+    names = ncbi.get_taxid_translator(valid_taxids) if valid_taxids else {}
+    
+    # Add custom taxid names
+    for taxid in taxids:
+        if taxid < 0 and taxid in custom_names:
+            names[taxid] = custom_names[taxid]
+    
+    return names
 
 def stats_on_changedf(sampledf, changedf) -> pd.DataFrame:
     """
@@ -218,10 +368,10 @@ def stats_on_changedf(sampledf, changedf) -> pd.DataFrame:
     #   For example, 33213 is the clade leading up to bilateria, and this is the branch on which we know those changes occurred.
     groupby_target["change_frac_total"] = groupby_target.apply(lambda row: row["counts"]/change_to_total_counts[row["change"]], axis=1)
     groupby_target["frac_samples_w_this_taxid_w_this_change"] = groupby_target.apply(lambda row: row["counts"]/taxid_to_sample_count[row["target_taxid"]], axis=1)
-    # use ete3 to get the names of the taxids
+    # use ete4 to get the names of the taxids (handles custom topology taxids like -67 Myriazoa)
     ncbi = NCBITaxa()
     # get the names of the target taxids
-    target_taxid_names = ncbi.get_taxid_translator(groupby_target["target_taxid"].tolist())
+    target_taxid_names = safe_get_taxid_translator(ncbi, groupby_target["target_taxid"].tolist())
     # add a column to the dataframe that contains the names of the target taxids
     groupby_target["target_taxid_name"] = groupby_target["target_taxid"].map(target_taxid_names)
     return groupby_target
@@ -597,7 +747,8 @@ class coloc_array():
         Updates self.plotmatrix_concatdf and self.plotmatrix_sumdf
         """
         all_dfs = []
-        for thisfile in simulation_filepaths:
+        for file_idx, thisfile in enumerate(simulation_filepaths):
+            print(f"  Aggregating file {file_idx + 1}/{len(simulation_filepaths)}...", flush=True)
             # make sure the file exists
             if not os.path.exists(thisfile):
                 raise Exception("File does not exist: {}".format(thisfile))
@@ -627,6 +778,7 @@ class coloc_array():
         if len(self.plotmatrix_concatdf) == 0:
             raise Exception("No data was read in. Check that the simulation filepaths are correct.")
 
+        print("  Combining and summarizing data across all files...", flush=True)
         # SUMDF FOR FINAL PLOTTING. Sum up both the obs_count and the counts
         sumdf  = self.plotmatrix_concatdf.groupby(["ALG_num", "branch", "bin", "ob_ex", "size_frac", "abs_CC"])["counts"].sum().reset_index()
         sumdf2 = self.plotmatrix_concatdf.groupby(["ALG_num", "branch", "bin", "ob_ex", "size_frac", "abs_CC"])["obs_count"].sum().reset_index()
@@ -894,6 +1046,7 @@ def generate_stats_df(sample_df_filepath, outfilename) -> int:
     # overwriting is ok. Don't bother to check if the file exists
     # save the stats df to a tsv file with headers
     statsdf.to_csv(outfilename, sep="\t", index=False)
+    print(f"  Saved statistics with {len(statsdf)} rows to {outfilename}")
     return 0
 
 def i2f(i, dimension):
@@ -1371,11 +1524,271 @@ def generate_obs_exp_panel(ax, cax, sumdf, size_frac, abs_CC, absmax = 6):
 
     return ax, cax
 
-def generate_trace_panel(ax, branches_in_clade, simulation_filepaths, ALG_num, frac_or_size, abs_CC):
+def save_trace_cache_to_file(cache, cache_dir="simulations/trace_cache"):
+    """
+    Save trace cache to TSV.gz file for reuse in future runs.
+    """
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, "trace_cache.tsv.gz")
+    
+    print(f"Saving trace cache to {cache_file}...")
+    
+    # Convert nested cache dict to flat dataframe
+    rows = []
+    for taxid, combos in cache.items():
+        for (ALG_num, frac_or_size, abs_CC), cache_entry in combos.items():
+            for bin_key, trace_data in cache_entry['lines'].items():
+                for num_sim, value in zip(trace_data['num_sim'], trace_data['value']):
+                    rows.append({
+                        'taxid': taxid,
+                        'ALG_num': ALG_num,
+                        'frac_or_size': frac_or_size,
+                        'abs_CC': abs_CC,
+                        'bin': bin_key,
+                        'num_sim': num_sim,
+                        'value': value
+                    })
+    
+    df = pd.DataFrame(rows)
+    df.to_csv(cache_file, sep='\t', index=False, compression='gzip')
+    print(f"✓ Saved {len(df)} trace points to cache\n")
+
+def load_trace_cache_from_file(cache_dir="simulations/trace_cache"):
+    """
+    Load trace cache from TSV.gz file if it exists.
+    Returns None if file doesn't exist.
+    """
+    cache_file = os.path.join(cache_dir, "trace_cache.tsv.gz")
+    
+    if not os.path.exists(cache_file):
+        return None
+    
+    print(f"Loading existing trace cache from {cache_file}...")
+    df = pd.read_csv(cache_file, sep='\t', compression='gzip')
+    
+    # Reconstruct nested cache structure
+    cache = {}
+    for taxid in df['taxid'].unique():
+        cache[taxid] = {}
+        taxid_df = df[df['taxid'] == taxid]
+        
+        for _, combo_row in taxid_df[['ALG_num', 'frac_or_size', 'abs_CC']].drop_duplicates().iterrows():
+            ALG_num = combo_row['ALG_num']
+            frac_or_size = combo_row['frac_or_size']
+            abs_CC = combo_row['abs_CC']
+            key = (ALG_num, frac_or_size, abs_CC)
+            
+            combo_df = taxid_df[
+                (taxid_df['ALG_num'] == ALG_num) &
+                (taxid_df['frac_or_size'] == frac_or_size) &
+                (taxid_df['abs_CC'] == abs_CC)
+            ]
+            
+            lines = {}
+            for bin_key in combo_df['bin'].unique():
+                bin_df = combo_df[combo_df['bin'] == bin_key].sort_values('num_sim')
+                lines[bin_key] = {
+                    'num_sim': bin_df['num_sim'].tolist(),
+                    'value': bin_df['value'].tolist()
+                }
+            
+            # Get max num_sims from the data
+            max_num_sims = combo_df['num_sim'].max() if len(combo_df) > 0 else 0
+            
+            cache[taxid][key] = {
+                'lines': lines,
+                'num_sims': int(max_num_sims)
+            }
+    
+    print(f"✓ Loaded cache with {len(df)} trace points for {len(cache)} clades\n")
+    return cache
+
+def is_trace_cache_stale(simulation_filepaths, cache_dir="simulations/trace_cache"):
+    """
+    Check if trace cache is stale (older than any simulation file).
+    Returns True if cache should be rebuilt, False if cache is valid.
+    """
+    cache_file = os.path.join(cache_dir, "trace_cache.tsv.gz")
+    
+    if not os.path.exists(cache_file):
+        return True  # No cache, need to build
+    
+    cache_mtime = os.path.getmtime(cache_file)
+    
+    # Check if any simulation file is newer than cache
+    for simfile in simulation_filepaths:
+        if os.path.exists(simfile):
+            if os.path.getmtime(simfile) > cache_mtime:
+                print(f"Cache is stale (simulation file {simfile} is newer)")
+                return True
+    
+    return False  # Cache is fresh
+
+def precompute_trace_cache(simulation_filepaths, T, clades_of_interest):
+    """
+    Pre-compute all trace data for all clades by reading simulation files once.
+    
+    Uses adaptive convergence detection to skip combinations that have stabilized.
+    Stops early if all traces converge before processing all files.
+    
+    Returns a nested dictionary:
+    {
+        taxid: {
+            (ALG_num, frac_or_size, abs_CC): {
+                'lines': {bin: {'num_sim': [...], 'value': [...]}, ...},
+                'max_num_sims': int
+            }
+        }
+    }
+    """
+    # Check for existing cache first
+    if not is_trace_cache_stale(simulation_filepaths):
+        cached = load_trace_cache_from_file()
+        if cached is not None:
+            return cached
+    
+    print("Pre-computing trace data from simulation files (this avoids re-reading files 115 times)...")
+    print("(Using adaptive convergence detection to skip processing of converged traces)")
+    start_time = time.time()
+    
+    # Initialize cache structure and track convergence
+    cache = {}
+    converged_keys = set()  # Set of (taxid, ALG_num, frac_or_size, abs_CC) tuples that have converged
+    total_combinations = 0
+    
+    for taxid in clades_of_interest:
+        if taxid not in T.G.nodes():
+            continue
+        cache[taxid] = {}
+        # All combinations we'll need
+        for ALG_num in ["ALG", "num"]:
+            for frac_or_size in ["frac", "size"]:
+                for abs_CC in ["abs", "CC"]:
+                    cache[taxid][(ALG_num, frac_or_size, abs_CC)] = {
+                        'dicts': {"observed": {}, "expected": {}},
+                        'num_sims': 0,
+                        'lines': {},
+                        'convergence_values': []  # Track recent mean values for convergence check
+                    }
+                    total_combinations += 1
+    
+    # Read each simulation file once
+    for file_idx, thisfile in enumerate(simulation_filepaths):
+        print(f"  Processing file {file_idx + 1}/{len(simulation_filepaths)} ({len(converged_keys)}/{total_combinations} converged)...", flush=True)
+        
+        df = pd.read_csv(thisfile, sep="\t")
+        
+        # Process each clade
+        for taxid in clades_of_interest:
+            if taxid not in T.G.nodes():
+                continue
+            
+            branches_in_clade = [str(x) for x in T.get_edges_in_clade(taxid)]
+            if len(branches_in_clade) == 0:
+                continue
+            
+            # Filter to this clade's branches
+            clade_df = df[df["branch"].isin(branches_in_clade)]
+            if len(clade_df) == 0:
+                continue
+            
+            # Process each combination
+            for ALG_num in ["ALG", "num"]:
+                for frac_or_size in ["frac", "size"]:
+                    for abs_CC in ["abs", "CC"]:
+                        combo_key = (taxid, ALG_num, frac_or_size, abs_CC)
+                        
+                        # Skip if already converged
+                        if combo_key in converged_keys:
+                            continue
+                        
+                        # Filter to this specific combination
+                        tempdf = clade_df[
+                            (clade_df["ALG_num"] == ALG_num) &
+                            (clade_df["size_frac"] == frac_or_size) &
+                            (clade_df["abs_CC"] == abs_CC)
+                        ]
+                        
+                        if len(tempdf) == 0:
+                            continue
+                        
+                        key = (ALG_num, frac_or_size, abs_CC)
+                        cache_entry = cache[taxid][key]
+                        
+                        # Update num_sims
+                        cache_entry['num_sims'] += int(tempdf["obs_count"].max())
+                        
+                        # Accumulate counts
+                        for _, row in tempdf.iterrows():
+                            bin_key = row["bin"]
+                            ob_ex = row["ob_ex"]
+                            if bin_key not in cache_entry['dicts'][ob_ex]:
+                                cache_entry['dicts'][ob_ex][bin_key] = 0
+                            cache_entry['dicts'][ob_ex][bin_key] += row["counts"]
+                        
+                        # Generate obs/exp values and update lines
+                        ove_size = df_to_obs_exp_dict(cache_entry['dicts'])
+                        for thisbin in ove_size:
+                            if thisbin not in cache_entry['lines']:
+                                cache_entry['lines'][thisbin] = {"num_sim": [], "value": []}
+                            cache_entry['lines'][thisbin]["num_sim"].append(cache_entry['num_sims'])
+                            cache_entry['lines'][thisbin]["value"].append(ove_size[thisbin])
+                        
+                        # Track mean value across all bins for convergence check
+                        if len(ove_size) > 0:
+                            mean_ove = np.mean(list(ove_size.values()))
+                            cache_entry['convergence_values'].append(mean_ove)
+        
+        # Check for convergence after processing at least 3 files
+        if file_idx >= 2:  # Need at least 3 data points
+            newly_converged = []
+            for taxid in clades_of_interest:
+                if taxid not in T.G.nodes():
+                    continue
+                for ALG_num in ["ALG", "num"]:
+                    for frac_or_size in ["frac", "size"]:
+                        for abs_CC in ["abs", "CC"]:
+                            combo_key = (taxid, ALG_num, frac_or_size, abs_CC)
+                            if combo_key in converged_keys:
+                                continue
+                            
+                            key = (ALG_num, frac_or_size, abs_CC)
+                            cache_entry = cache[taxid][key]
+                            conv_vals = cache_entry['convergence_values']
+                            
+                            # Check convergence: need at least 3 values and CV < 0.05
+                            if len(conv_vals) >= 3:
+                                last_3 = conv_vals[-3:]
+                                mean_val = np.mean(last_3)
+                                if abs(mean_val) > 0.01:  # Avoid division by near-zero
+                                    cv = np.std(last_3) / abs(mean_val)
+                                    if cv < 0.05:  # 5% coefficient of variation
+                                        converged_keys.add(combo_key)
+                                        newly_converged.append(combo_key)
+            
+            if newly_converged:
+                print(f"    ✓ {len(newly_converged)} trace(s) converged", flush=True)
+        
+        # Early stopping if all converged
+        if len(converged_keys) == total_combinations:
+            print(f"\n  ✓ All {total_combinations} traces converged! Stopping at file {file_idx + 1}/{len(simulation_filepaths)}")
+            break
+    
+    elapsed = time.time() - start_time
+    print(f"✓ Trace cache built in {elapsed:.1f}s ({elapsed/60:.1f} min)\n")
+    
+    # Save cache for future runs
+    save_trace_cache_to_file(cache)
+    
+    return cache
+
+def generate_trace_panel(ax, branches_in_clade, simulation_filepaths, ALG_num, frac_or_size, abs_CC, trace_cache=None):
     """
     This generates the traces for the observed/expected matrices.
     We will use this to check for convergence.
     Instead of plotting some normalized values, we will just plot the raw values.
+    
+    If trace_cache is provided, uses cached data. Otherwise falls back to reading files.
     """
     # make sure that ALG_num is either ALG or num
     if not ALG_num in ["ALG", "num"]:
@@ -1387,40 +1800,35 @@ def generate_trace_panel(ax, branches_in_clade, simulation_filepaths, ALG_num, f
     if abs_CC not in ["abs", "CC"]:
         raise Exception("abs_CC must be either abs or CC")
 
-    lines = {}
-    # using dictionaries to keep track of these values, because pandas was failing sometimes
-    dicts = {"observed": {},
-             "expected": {}}
-    num_sims = 0
-    # this will be updated each time we go through
-    for thisfile in simulation_filepaths:
-        # if the df is None, then read in the file
-        tempdf = pd.read_csv(thisfile, sep="\t")
-        # filter on size_frac column
-        tempdf = tempdf[tempdf["ALG_num"]   == ALG_num      ] # get the rows that are or are not ALGs
-        tempdf = tempdf[tempdf["size_frac"] == frac_or_size ] # get the rows that match the method variable
-        tempdf = tempdf[tempdf["abs_CC"]    == abs_CC       ] # get the rows that match the abs_CC variable
-        # get only the rows that have the branches_in_clade
-        tempdf = tempdf[tempdf["branch"].isin(branches_in_clade)]
+    # Use cached data if available, otherwise fall back to file reading
+    if trace_cache is not None:
+        lines = trace_cache['lines']
+        num_sims = trace_cache['num_sims']
+    else:
+        # Legacy file-reading approach (fallback)
+        lines = {}
+        dicts = {"observed": {}, "expected": {}}
+        num_sims = 0
+        for thisfile in simulation_filepaths:
+            tempdf = pd.read_csv(thisfile, sep="\t")
+            tempdf = tempdf[tempdf["ALG_num"]   == ALG_num      ]
+            tempdf = tempdf[tempdf["size_frac"] == frac_or_size ]
+            tempdf = tempdf[tempdf["abs_CC"]    == abs_CC       ]
+            tempdf = tempdf[tempdf["branch"].isin(branches_in_clade)]
 
-        # assert that we are only dealing with a single type of size_frac and abs_CC
-        assert_single_size_abs_condition(tempdf)
-        num_sims += int(tempdf["obs_count"].max())
-        # go through the rows and add values. Yes, using a for loop :)
-        for i, row in tempdf.iterrows():
-            # add the value to the dict
-            if row["bin"] not in dicts[row["ob_ex"]]:
-                dicts[row["ob_ex"]][   row["bin"]  ] = 0
-            dicts[row["ob_ex"]][       row["bin"]  ] += row["counts"]
+            assert_single_size_abs_condition(tempdf)
+            num_sims += int(tempdf["obs_count"].max())
+            for i, row in tempdf.iterrows():
+                if row["bin"] not in dicts[row["ob_ex"]]:
+                    dicts[row["ob_ex"]][row["bin"]] = 0
+                dicts[row["ob_ex"]][row["bin"]] += row["counts"]
 
-       # now that we have updated the database (this dicts object), we generate an ove dict and add those values to a
-        ove_size = df_to_obs_exp_dict(dicts)
-        # now we go through the matrix and add the traces for this value
-        for thisbin in ove_size:
-            if thisbin not in lines:
-                lines[thisbin] = {"num_sim": [], "value": []}
-            lines[thisbin]["num_sim"].append( num_sims         )
-            lines[thisbin]["value"].append(   ove_size[thisbin])
+            ove_size = df_to_obs_exp_dict(dicts)
+            for thisbin in ove_size:
+                if thisbin not in lines:
+                    lines[thisbin] = {"num_sim": [], "value": []}
+                lines[thisbin]["num_sim"].append(num_sims)
+                lines[thisbin]["value"].append(ove_size[thisbin])
 
     # now we plot each of the lines
     for thisbin in lines:
@@ -1529,13 +1937,15 @@ class PhyloTree:
 
     def add_taxname_to_all_nodes(self):
         """
-        This function adds the taxname to a single node. Uses ete3.
+        This function adds the taxname to a single node. Uses ete4.
+        Handles custom topology taxids like -67 (Myriazoa) and -68 (Parahoxozoa).
         """
-        # use ete3 to get the names of the taxids
+        # use ete4 to get the names of the taxids
         ncbi = NCBITaxa()
 
         for node in self.G.nodes():
-            self.G.nodes[node]["taxname"] = ncbi.get_taxid_translator([node])[node].replace(" ", "-")
+            node_names = safe_get_taxid_translator(ncbi, [node])
+            self.G.nodes[node]["taxname"] = node_names[node].replace(" ", "-")
 
     def add_lineage_string(self, lineage_string) -> int:
         """
@@ -1606,24 +2016,28 @@ def generate_node_taxid_file_from_per_sp_chrom_df(per_sp_chrom_df, outfile):
         for node in T.G.nodes():
             f.write("{}\t{}\n".format(node, T.G.nodes[node]["taxname"]))
 
-def _make_one_simulation_plot(algdf, c, T, taxid, simulation_filepaths,
-                              outfileprefix, absmax = 6):
+def _make_one_simulation_plot(algdf, plotdf_sumdf, num_observed_observations, num_expected_observations,
+                              T, taxid, simulation_filepaths,
+                              outfileprefix, absmax = 6, trace_cache=None):
     """
     makes a single plot for a single NCBI taxid
 
     Inputs:
-      - c is the coloc_array object
+      - plotdf_sumdf is the pre-filtered dataframe for this clade
+      - num_observed_observations and num_expected_observations are counts from coloc_array
       - T is the PhyloTree object
       - taxid is the NCBI taxid that we are plotting
+      - trace_cache is the pre-computed cache for trace data (optional)
     """
     plotting = True
     # At this point we're not even sure if this species is in the graph. We must first check.
     if not taxid in T.G.nodes():
         # it isn't in the graph, we can't plot it.
         plotting = False
-        # use ete3 ncbi to get the taxon name
+        # use ete4 ncbi to get the taxon name (handles custom topology taxids)
         ncbi = NCBITaxa()
-        taxon_name = ncbi.get_taxid_translator([taxid])[taxid].replace(" ", "-")
+        taxon_name_dict = safe_get_taxid_translator(ncbi, [taxid])
+        taxon_name = taxon_name_dict[taxid].replace(" ", "-")
     else:
         # There is a chance we can plot it still
         # First we figure out which branches are in the clade we care about.
@@ -1640,17 +2054,18 @@ def _make_one_simulation_plot(algdf, c, T, taxid, simulation_filepaths,
         # raise an error if ther eis nothing in this clade
         if len(branches_in_clade) == 0:
             raise Exception("There are no branches in the clade {}".format(taxid))
-        # make a filtered df that only contains the branches in the clade
-        plotdf = c.plotmatrix_sumdf[c.plotmatrix_sumdf["branch"].isin(branches_in_clade)]
+        
+        # Use pre-filtered dataframe (already filtered by branches in read_simulations_and_make_heatmaps)
+        plotdf = plotdf_sumdf.copy()
 
         # now we don't care about the branch. Groupby the other columns and sum them up. They are all counts
         plotdf  = plotdf.groupby(["ALG_num", "bin", "ob_ex", "size_frac", "abs_CC" ])["counts"].sum().reset_index()
-        # if ob_ex is expected, "obs_count" will be c.expected_obs_count, otherwise it will be c.observed_obs_count
-        plotdf["obs_count"] = [c.num_expected_observations if x == "expected" else c.num_observed_observations for x in plotdf["ob_ex"]]
+        # if ob_ex is expected, "obs_count" will be num_expected_observations, otherwise it will be num_observed_observations
+        plotdf["obs_count"] = [num_expected_observations if x == "expected" else num_observed_observations for x in plotdf["ob_ex"]]
         # merge these so that the sumdf has both the counts and the obs_count
         plotdf["count_per_sim"] = plotdf["counts"] / plotdf["obs_count"]
 
-        print("the plotdf is:\n{}".format(plotdf))
+        print(f"  Generating heatmap for {taxon_name} (taxid {taxid}): {len(plotdf)} data points", flush=True)
         plotting = True if len(plotdf) > 0 else False
 
     if not plotting:
@@ -1702,8 +2117,13 @@ def _make_one_simulation_plot(algdf, c, T, taxid, simulation_filepaths,
                 # generate the square for the trace.
                 axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
                 # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+                # Get cached trace data if available
+                cached_trace = None
+                if trace_cache is not None and taxid in trace_cache:
+                    cached_trace = trace_cache[taxid].get(("num", thissize, thisabs))
                 axes[-1] = generate_trace_panel(axes[-1], branches_in_clade,
-                                                simulation_filepaths, "num", thissize, thisabs)
+                                                simulation_filepaths, "num", thissize, thisabs,
+                                                trace_cache=cached_trace)
 
                 # update the bottom
                 bottom = bottom + panelheight + 1.1
@@ -1729,8 +2149,12 @@ def _make_one_simulation_plot(algdf, c, T, taxid, simulation_filepaths,
         # generate the square for the trace.
         axes.append(fig.add_axes(gen_square_ax(left3, bottom, fw, fh, panelheight)))
         # add the trace to the trace panel. This is sort of complicated, so add a function just to modify this panel
+        cached_trace = None
+        if trace_cache is not None and taxid in trace_cache:
+            cached_trace = trace_cache[taxid].get(("ALG", "size", "abs"))
         axes[-1] = generate_trace_panel(axes[-1], branches_in_clade,
-                                        simulation_filepaths, "ALG", "size", "abs")
+                                        simulation_filepaths, "ALG", "size", "abs",
+                                        trace_cache=cached_trace)
 
         # Add a title to the plot to indicate the NCBI taxid and the taxon name
         # Move it to the middle of the plot
@@ -1741,9 +2165,10 @@ def _make_one_simulation_plot(algdf, c, T, taxid, simulation_filepaths,
         # save the plot as a pdf
         fig.savefig(outfilename, bbox_inches="tight")
         plt.close()
+        print(f"    ✓ Saved {outfilename}", flush=True)
 
 def read_simulations_and_make_heatmaps(simulation_filepaths, per_sp_df, algdfpath, outfileprefix,
-                                       clades_of_interest, absmax = 6):
+                                       clades_of_interest, absmax = 6, num_processes=4, skip_traces=False):
     """
     This function reads in a file list of simulation files, sums up all the data,
      and makes a heatmap of the results.
@@ -1764,12 +2189,72 @@ def read_simulations_and_make_heatmaps(simulation_filepaths, per_sp_df, algdfpat
     algdf = rbh_tools.parse_ALG_rbh_to_colordf(algdfpath)
     algdf = algdf.sort_values(by=["Size"]).reset_index(drop=True)
 
+    print(f"Reading {len(simulation_filepaths)} simulation files to aggregate observed/expected counts...")
+    print(f"(This reads all files once to build summary matrices)")
     c = coloc_array()
     c.plotmatrix_listoffiles_to_plotmatrix(simulation_filepaths)
+    print(f"✓ Aggregation complete\n")
 
+    # Pre-compute trace cache to avoid re-reading files 115 times (unless skipped)
+    if skip_traces:
+        print("Skipping trace panel generation (--skip-traces flag set)\n")
+        trace_cache = None
+    else:
+        trace_cache = precompute_trace_cache(simulation_filepaths, T, clades_of_interest)
+
+    # Prepare arguments for parallel processing
+    print(f"Pre-filtering data for {len(clades_of_interest)} clades...")
+    worker_args = []
     for taxid in clades_of_interest:
-        _make_one_simulation_plot(algdf, c, T, taxid, simulation_filepaths,
-                                  outfileprefix, absmax = absmax)
+        if taxid in T.G.nodes():
+            # Pre-filter the dataframe to only this clade's branches
+            branches_in_clade = [str(x) for x in T.get_edges_in_clade(taxid)]
+            plotdf_sumdf = c.plotmatrix_sumdf[c.plotmatrix_sumdf["branch"].isin(branches_in_clade)]
+        else:
+            # Clade not in tree, pass empty dataframe
+            plotdf_sumdf = pd.DataFrame()
+        
+        worker_args.append((algdf, plotdf_sumdf, c.num_observed_observations, 
+                           c.num_expected_observations, T, taxid, 
+                           simulation_filepaths, outfileprefix, absmax, trace_cache))
+    
+    print(f"Generating heatmaps for {len(clades_of_interest)} clades using {num_processes} process(es)...")
+    
+    # Process clades in parallel
+    start_time = time.time()
+    
+    if num_processes == 1:
+        # Serial processing for single process
+        results = [_make_heatmap_worker(args) for args in worker_args]
+    else:
+        # Parallel processing
+        with Pool(processes=num_processes) as pool:
+            try:
+                results = pool.map(_make_heatmap_worker, worker_args)
+            except KeyboardInterrupt:
+                print("\n\n⚠️  Keyboard interrupt received. Terminating heatmap generation...\n")
+                pool.terminate()
+                pool.join()
+                raise
+    
+    # Report results
+    elapsed_time = time.time() - start_time
+    succeeded = [r for r in results if r['status'] == 'success']
+    failed = [r for r in results if r['status'] == 'failed']
+    
+    print(f"\n{'='*70}")
+    print(f"Heatmap Generation Summary:")
+    print(f"  Total clades: {len(results)}")
+    print(f"  Successful: {len(succeeded)}")
+    print(f"  Failed: {len(failed)}")
+    print(f"  Time elapsed: {elapsed_time:.1f}s ({elapsed_time/60:.1f} min)")
+    
+    if failed:
+        print(f"\n⚠️  Failed clades:")
+        for r in failed:
+            print(f"    - {r['taxon_name']} (taxid {r['taxid']}): {r['message']}")
+    
+    print(f"{'='*70}")
 
 def unit_test_coloc_array_identical():
     """
@@ -1823,8 +2308,173 @@ def unit_test_coloc_array_identical():
         print(coloc2_unique)
         raise Exception("coloc_dfs are not the same")
 
+# Global variables for multiprocessing worker
+_global_sampledf_path = None
+_global_algdf_path = None
+
+def _run_simulation_worker(args):
+    """
+    Worker function for parallel simulation execution with robust error handling.
+    Returns a dict with status information.
+    """
+    i, num_sims, abs_bin_size, frac_bin_size = args
+    outname = f"simulations/sim_results_{i}_{num_sims}.tsv"
+    
+    result = {
+        'index': i,
+        'status': 'unknown',
+        'message': '',
+        'filename': outname
+    }
+    
+    try:
+        # Skip if file already exists
+        if os.path.exists(outname):
+            result['status'] = 'skipped'
+            result['message'] = 'File already exists'
+            return result
+        
+        # Run the simulation
+        run_n_simulations_save_results(
+            _global_sampledf_path,
+            _global_algdf_path,
+            outname,
+            num_sims=num_sims,
+            abs_bin_size=abs_bin_size,
+            frac_bin_size=frac_bin_size,
+            verbose=False
+        )
+        
+        result['status'] = 'success'
+        result['message'] = 'Completed successfully'
+        return result
+        
+    except KeyboardInterrupt:
+        result['status'] = 'interrupted'
+        result['message'] = 'Interrupted by user'
+        return result
+        
+    except Exception as e:
+        result['status'] = 'failed'
+        result['message'] = f'{type(e).__name__}: {str(e)}'
+        # Print error immediately so user knows what's happening
+        print(f"\n⚠️  Simulation {i} failed: {result['message']}", flush=True)
+        return result
+
+def _make_heatmap_worker(args):
+    """
+    Worker function for parallel heatmap generation with robust error handling.
+    Returns a dict with status information.
+    """
+    algdf, plotdf_sumdf, num_obs, num_exp, T, taxid, simulation_filepaths, outfileprefix, absmax, trace_cache = args
+    
+    # Get taxon name for reporting
+    if taxid in T.G.nodes():
+        taxon_name = T.G.nodes[taxid]["taxname"]
+    else:
+        ncbi = NCBITaxa()
+        taxon_name_dict = safe_get_taxid_translator(ncbi, [taxid])
+        taxon_name = taxon_name_dict[taxid].replace(" ", "-")
+    
+    outfilename = f"{outfileprefix}_{taxid}_{taxon_name}.pdf"
+    
+    result = {
+        'taxid': taxid,
+        'taxon_name': taxon_name,
+        'status': 'unknown',
+        'message': '',
+        'filename': outfilename
+    }
+    
+    try:
+        _make_one_simulation_plot(algdf, plotdf_sumdf, num_obs, num_exp,
+                                  T, taxid, simulation_filepaths,
+                                  outfileprefix, absmax=absmax, trace_cache=trace_cache)
+        result['status'] = 'success'
+        result['message'] = 'Completed successfully'
+        return result
+        
+    except KeyboardInterrupt:
+        result['status'] = 'interrupted'
+        result['message'] = 'Interrupted by user'
+        return result
+        
+    except Exception as e:
+        result['status'] = 'failed'
+        result['message'] = f'{type(e).__name__}: {str(e)}'
+        # Print error immediately so user knows what's happening
+        print(f"\n⚠️  Heatmap for {taxon_name} (taxid {taxid}) failed: {result['message']}", flush=True)
+        return result
 
 def main():
+    """
+    Main execution function.
+    
+    Steps:
+    1. Generate statistics dataframe from perspective chromosome data
+    2. Run Monte Carlo simulations (60 total, 2 per file for parallelization)
+    3. Aggregate simulation results and generate heatmap PDFs for each clade
+    
+    Command line arguments:
+    sys.argv[1]: Path to perspective chromosome TSV file
+    sys.argv[2]: Path to RBH file defining ALGs
+    """
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description='Phylogenetic chromosome perspective analysis with Monte Carlo simulations',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''Examples:
+  # Basic usage (just generate stats)
+  python perspchrom_df_to_tree.py per_species_ALG_presence_fusions.tsv
+  
+  # With simulations (default 2 simulations)
+  python perspchrom_df_to_tree.py per_species_ALG_presence_fusions.tsv BCnS.rbh
+  
+  # Run 1000 simulations with 20 parallel processes
+  python perspchrom_df_to_tree.py input.tsv ALG.rbh --num-simulations 1000 --num-processes 20
+  
+  # Custom bin sizes for ALG size binning
+  python perspchrom_df_to_tree.py input.tsv ALG.rbh --abs-bin-size 50 --frac-bin-size 0.1
+  
+  # Skip simulations or heatmaps (for testing/partial runs)
+  python perspchrom_df_to_tree.py input.tsv ALG.rbh --skip-simulations
+''')
+    
+    # Positional arguments
+    parser.add_argument('perspchrom_file', 
+                        help='Path to perspective chromosome TSV file (e.g., per_species_ALG_presence_fusions.tsv)')
+    parser.add_argument('alg_rbh_file', nargs='?', default=None,
+                        help='Path to RBH file defining ALGs (required for simulations and heatmaps)')
+    
+    # Simulation parameters
+    parser.add_argument('--num-simulations', type=int, default=2,
+                        help='Total number of Monte Carlo simulations to run (default: 2)')
+    parser.add_argument('--sims-per-run', type=int, default=10,
+                        help='Number of simulations per output file (default: 10)')
+    parser.add_argument('--num-processes', type=int, default=4,
+                        help='Number of parallel processes to use (default: 4)')
+    
+    # Binning parameters for ALG size matrices
+    parser.add_argument('--abs-bin-size', type=int, default=25,
+                        help='Bin size for absolute ALG sizes in genes (default: 25)')
+    parser.add_argument('--frac-bin-size', type=float, default=0.05,
+                        help='Bin size for fractional ALG sizes, e.g. 0.05 = 5%% bins (default: 0.05)')
+    
+    # Output control flags
+    parser.add_argument('--skip-simulations', action='store_true',
+                        help='Skip simulation step (only generate statistics dataframe)')
+    parser.add_argument('--skip-heatmaps', action='store_true',
+                        help='Skip heatmap generation step')
+    parser.add_argument('--skip-traces', action='store_true',
+                        help='Skip trace panel generation in heatmaps (faster, no convergence diagnostics)')
+    
+    args = parser.parse_args()
+    
+    # Validate arguments
+    if not args.skip_simulations and not args.skip_heatmaps and args.alg_rbh_file is None:
+        parser.error('ALG RBH file is required for simulations and heatmaps. '
+                     'Use --skip-simulations and --skip-heatmaps to run stats-only mode.')
+    
     #generate_node_taxid_file_from_per_sp_chrom_df(sys.argv[1], "node_taxid.tsv")
 
     # how many BCnS ALGs correspond to two or more chromosomes
@@ -1858,8 +2508,19 @@ def main():
                           6042,    # Demospongiae
                           ]
 
+    # Print analysis header
+    print(f"\n{'='*70}")
+    print(f"perspchrom_df_to_tree: Phylogenetic chromosome perspective analysis")
+    print(f"{'='*70}")
+    print(f"Input file: {args.perspchrom_file}")
+    if args.alg_rbh_file:
+        print(f"RBH file:   {args.alg_rbh_file}")
+    print(f"{'='*70}\n")
+
     # Specify the file path of the TSV file. Use sys.argv[1]. The file will be called something like per_species_ALG_presence_fusions.tsv
-    generate_stats_df(sys.argv[1], "statsdf.tsv")
+    print("Step 1/3: Generating statistics dataframe...")
+    generate_stats_df(args.perspchrom_file, "statsdf.tsv")
+    print("✓ Statistics saved to statsdf.tsv\n")
 
     #run_n_simulations_save_results(sys.argv[1]       ,
     #                               sys.argv[2]       ,
@@ -1884,28 +2545,137 @@ def main():
     #print(ALG_coloc_df)
     #sys.exit()
 
-    num_simulations = 60
-    sims_per_run    = 2
-    for i in range(int(num_simulations/sims_per_run)):
-        outname = "simulations/sim_results_{}_{}.tsv".format(i, sims_per_run)
-        if not os.path.exists(outname):
-            print("running simulation {}/{}".format(i+1, int(num_simulations/sims_per_run)))
-            run_n_simulations_save_results(sys.argv[1],
-                                           sys.argv[2],
-                                           outname,
-                                           num_sims=sims_per_run,
-                                           abs_bin_size=25,
-                                           frac_bin_size=0.05,
-                                           verbose = True)
+    # Skip simulations if requested or if no RBH file provided
+    if args.skip_simulations or args.alg_rbh_file is None:
+        if args.alg_rbh_file is None:
+            print("\nSkipping simulations (no RBH file provided)\n")
+        else:
+            print("\nSkipping simulations (--skip-simulations flag set)\n")
+    else:
+        # Validate and parse RBH file upfront
+        print(f"\nValidating RBH file...")
+        try:
+            algdf = rbh_tools.parse_ALG_rbh_to_colordf(args.alg_rbh_file)
+            num_algs = len(algdf)
+            print(f"✓ Successfully parsed RBH file with {num_algs} ALGs\n")
+            print("This is the algdf")
+            print(algdf)
+            print()  # Extra newline for spacing
+        except Exception as e:
+            print(f"✗ Error parsing RBH file: {e}")
+            raise
+        
+        # Create simulations directory if it doesn't exist
+        if not os.path.exists("simulations"):
+            os.makedirs("simulations")
 
-    # find all the files in this directory that start with sim_results_ or dfsim_run_
-    simulation_filepaths =  list(set(glob.glob("./simulations/sim_results_*.tsv")) | set(glob.glob("./simulations/dfsim_run_*.tsv")))
-    print(simulation_filepaths)
-    if len(simulation_filepaths) == 0:
-        raise Exception("No simulation files found in ./simulations/")
-    read_simulations_and_make_heatmaps(simulation_filepaths,
-                                       sys.argv[1], sys.argv[2],
-                                       "simulations", clades_of_interest)
+        print(f"Step 2/3: Running Monte Carlo simulations...")
+        num_simulations = args.num_simulations
+        sims_per_run    = args.sims_per_run
+        num_processes   = args.num_processes
+        abs_bin_size    = args.abs_bin_size
+        frac_bin_size   = args.frac_bin_size
+        
+        num_jobs = int(num_simulations / sims_per_run)
+        print(f"Total simulations: {num_simulations} ({num_jobs} file(s) with {sims_per_run} simulations each)")
+        print(f"Running with {num_processes} parallel processes")
+        print(f"Bin sizes: absolute={abs_bin_size} genes, fractional={frac_bin_size}\n")
+        
+        # Set global variables for workers
+        global _global_sampledf_path, _global_algdf_path
+        _global_sampledf_path = args.perspchrom_file
+        _global_algdf_path = args.alg_rbh_file
+        
+        # Prepare arguments for each job
+        job_args = [(i, sims_per_run, abs_bin_size, frac_bin_size) for i in range(num_jobs)]
+        
+        # Check if all simulation files already exist
+        existing_files = [os.path.exists(f"simulations/sim_results_{i}_{sims_per_run}.tsv") 
+                          for i in range(num_jobs)]
+        num_existing = sum(existing_files)
+        
+        if all(existing_files):
+            print(f"✓ All {num_jobs} simulation files already exist ({num_jobs * sims_per_run} simulations).")
+            print(f"  Skipping simulation step.\n")
+        else:
+            needed = num_jobs - num_existing
+            if num_existing > 0:
+                print(f"Found {num_existing}/{num_jobs} existing files. Running {needed} new simulations.\n")
+            
+            # Run simulations in parallel with timeout protection
+            start_time = time.time()
+            results = []
+            completed_count = 0
+            skipped_count = 0
+            try:
+                with Pool(processes=num_processes) as pool:
+                    # Use imap_unordered for better progress tracking
+                    for result in pool.imap_unordered(_run_simulation_worker, job_args):
+                        results.append(result)
+                        if result['status'] == 'success':
+                            completed_count += 1
+                            print(f"✓ Completed {completed_count}/{num_jobs} simulation files ({completed_count * sims_per_run} total simulations)", flush=True)
+                        elif result['status'] == 'skipped':
+                            skipped_count += 1
+                            print(f"- Skipped {skipped_count}/{num_jobs} (already exists)", flush=True)
+                    
+                    pool.close()
+                    pool.join()
+                    
+            except KeyboardInterrupt:
+                print("\n\n⚠️  Interrupted by user. Terminating workers...")
+                pool.terminate()
+                pool.join()
+                print("Workers terminated. Partial results may be available.\n")
+                
+            except Exception as e:
+                print(f"\n\n⚠️  Error in parallel execution: {e}")
+                pool.terminate()
+                pool.join()
+            
+            elapsed = time.time() - start_time
+            
+            # Summary report
+            succeeded = [r for r in results if r['status'] == 'success']
+            skipped = [r for r in results if r['status'] == 'skipped']
+            failed = [r for r in results if r['status'] == 'failed']
+            
+            print(f"\n{'='*70}")
+            print(f"Simulation Summary ({elapsed:.1f} seconds):")
+            print(f"  ✓ Successful: {len(succeeded)}/{num_jobs}")
+            print(f"  - Skipped:    {len(skipped)}/{num_jobs}")
+            if failed:
+                print(f"  ✗ Failed:     {len(failed)}/{num_jobs}")
+                print(f"\nFailed simulations:")
+                for r in failed:
+                    print(f"  - Simulation {r['index']}: {r['message']}")
+            print(f"{'='*70}\n")
+            
+            # Continue even if some failed - we can still analyze partial results
+            if len(succeeded) + len(skipped) == 0:
+                raise Exception("All simulations failed! Cannot proceed with analysis.")
+
+    # Skip heatmaps if requested or if no RBH file provided
+    if args.skip_heatmaps or args.alg_rbh_file is None:
+        if args.alg_rbh_file is None:
+            print("\nSkipping heatmap generation (no RBH file provided)\n")
+        else:
+            print("\nSkipping heatmap generation (--skip-heatmaps flag set)\n")
+    else:
+        # find all the files in this directory that start with sim_results_ or dfsim_run_
+        print(f"\nStep 3/3: Generating heatmaps for {len(clades_of_interest)} clades of interest...")
+        simulation_filepaths =  list(set(glob.glob("./simulations/sim_results_*.tsv")) | set(glob.glob("./simulations/dfsim_run_*.tsv")))
+        print(f"Found {len(simulation_filepaths)} simulation file(s) in ./simulations/\n")
+        if len(simulation_filepaths) == 0:
+            raise Exception("No simulation files found in ./simulations/")
+        read_simulations_and_make_heatmaps(simulation_filepaths,
+                                           args.perspchrom_file, args.alg_rbh_file,
+                                           "simulations", clades_of_interest,
+                                           num_processes=args.num_processes,
+                                           skip_traces=args.skip_traces)
+        print(f"\n{'='*70}")
+        print(f"✓ Analysis complete! Check output files and simulations/ directory.")
+        print(f"{'='*70}\n")
 
 if __name__ == "__main__":
     main()

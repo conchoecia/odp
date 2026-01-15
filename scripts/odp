@@ -343,7 +343,7 @@ rule make_diamond_and_blast_db:
     benchmark: "benchmarks/make_diamond_and_blast_db/{sample}.make_diamond_and_blast_db.benchmark.txt"
     resources:
         io_slots = 1,
-        mem_mb = 1000, # should be small
+        mem_mb = 7999, # should be small
         runtime   = 10  # ten minutes
     threads: 1 # No reason to have more than one thread
     shell:
@@ -399,7 +399,7 @@ rule reciprocal_best_hits:
         blastp2to1 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample2}_and_{sample1}_recip.temp.blastp"
     benchmark: "benchmarks/reciprocal_best_hits/{sample1}_{sample2}.reciprocal_best_hits.benchmark.txt"
     resources:
-        mem_mb = 1000, # Should be small
+        mem_mb = 7999, # Should be small. 20251230 updated to about 8GB to ensure space.
         runtime   = 20  # 20 minutes in seconds
     threads: 1
     run:

@@ -6,14 +6,14 @@ This performs fourier transforms on a set of rates from the plot_branch_stats_vs
 
 import argparse
 import os
+import sys
 
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from   scipy.signal import hann
-from scipy.signal import correlate
+from scipy.signal import correlate, find_peaks
 from scipy.fftpack import fft, fftfreq
-from scipy.signal import medfilt, correlate
+from scipy import stats
 
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -32,13 +32,16 @@ def parse_args():
       - custom_peaks: comma-separated list of peaks to plot
     """
     parser = argparse.ArgumentParser(description='Perform fourier transforms on a set of rates')
-    parser.add_argument('--rates', type=str, help='Path to the tsv file containing the rates')
-    parser.add_argument('--agecol', type=str, default='age', help='The name of the column containing the ages')
-    parser.add_argument('--ratecol', type=str, default='fusion_rate_at_this_age_mean', help='The name of the column containing the rates')
-    parser.add_argument('--minage', type=float, default=-1, help='The minimum age to consider')
-    parser.add_argument('--polynomial', type=int, default=3, help='The degree of the polynomial to fit to the data')
-    parser.add_argument('--outprefix', type=str, default='fourier', help='The prefix of the output files')
+    parser.add_argument('--rates',        type=str, help='Path to the tsv file containing the rates')
+    parser.add_argument('--agecol',       type=str, default='age', help='The name of the column containing the ages')
+    parser.add_argument('--ratecol',      type=str, default='fusion_rate_at_this_age_mean', help='The name of the column containing the rates')
+    parser.add_argument('--minage',       type=float, default=-1, help='[DEPRECATED] Use --min_time instead. The minimum age to consider')
+    parser.add_argument('--min_time',     type=float, default=1.0, help='Minimum age in MYA for periodicity analysis (default: 1.0)')
+    parser.add_argument('--max_time',     type=float, default=542.0, help='Maximum age in MYA for periodicity analysis (default: 542.0)')
+    parser.add_argument('--polynomial',   type=int, default=3, help='The degree of the polynomial to fit to the data')
+    parser.add_argument('--outprefix',    type=str, default='fourier', help='The prefix of the output files')
     parser.add_argument('--custom_peaks', type=str, default='', help='Comma-separated list of peaks (floats, periods) to plot')
+    parser.add_argument('--include_unpadded', action='store_true', help='Also generate analysis for unpadded spectrum (default: padded only)')
     # check that the rates file exists
     args = parser.parse_args()
     if not os.path.exists(args.rates):
@@ -74,33 +77,118 @@ def fft_padded(time, values, zero_padding_factor=10):
     padded_spectrum = 2.0/padded_length * np.abs(yf_padded[:padded_length//2])
     return padded_spectrum, xf_padded, yf_padded
 
-def fourier_of_time_series(df, timecol, valuecol, polynomial, outprefix, zero_padding_factor=10, custom_peaks = []):
+def find_spectrum_peaks(spectrum, frequencies, n_peaks=3, use_peak_detection=True):
     """
-    Perform a fourier transform on the time series with x=time, y=values.
-    All of the x and y values will be ints or floats.
-
-    The input variables:
-      - df:  the dataframe containing the time series. The time is not necesasrily in order.
-      - timecol: the column name of the time values. The values of the column should be evenly spaced.
-      - valuecol: the column name of the values to be transformed.
-
-    The dataframe will be sorted by the time column, then those two columns will be extracted for the
-    Fourier transform. This will be plotted and saved to a dataframe.
+    Find distinct peaks in the Fourier spectrum.
+    
+    Parameters:
+    -----------
+    spectrum : array
+        The magnitude spectrum
+    frequencies : array
+        The corresponding frequencies
+    n_peaks : int
+        Number of peaks to return (default: 3)
+    use_peak_detection : bool
+        If True, use scipy.signal.find_peaks to find local maxima (good for smooth padded spectra).
+        If False, simply take top N magnitudes (needed for monotonically decreasing unpadded spectra).
+    
+    Returns:
+    --------
+    peak_indices : array
+        Indices of the peaks in the spectrum
+    peak_frequencies : array
+        Frequencies of the peaks (sorted by magnitude, descending)
     """
-    outpdf = outprefix + '.pdf'
-    # Drop NaN values and sort by time column
+    if use_peak_detection:
+        # Find all local maxima without any distance constraint
+        peaks, properties = find_peaks(spectrum)
+        
+        # Sort peaks by magnitude (descending) and take top n_peaks
+        if len(peaks) > 0:
+            peak_magnitudes = spectrum[peaks]
+            sorted_indices = np.argsort(peak_magnitudes)[::-1]  # descending order
+            top_peaks = peaks[sorted_indices[:n_peaks]]
+            top_frequencies = frequencies[top_peaks]
+            return top_peaks, top_frequencies
+        else:
+            # Fallback: if no peaks found, use simple magnitude sorting
+            use_peak_detection = False
+    
+    if not use_peak_detection:
+        # Simple approach: take top N magnitudes (for monotonically decreasing spectra)
+        top_indices = np.argsort(spectrum)[-n_peaks:][::-1]  # descending order
+        top_frequencies = frequencies[top_indices]
+        return top_indices, top_frequencies
+
+def fourier_of_time_series(df, timecol, valuecol, polynomial, outprefix, zero_padding_factor=10, custom_peaks = [], include_unpadded=False):
+    """
+    Orchestrator function that runs Fourier analysis for padded spectrum (always) 
+    and optionally for unpadded spectrum.
+    
+    Parameters:
+    -----------
+    df : DataFrame
+        Input dataframe with time series data
+    timecol : str
+        Column name for time values
+    valuecol : str
+        Column name for values to transform
+    polynomial : int
+        Degree of polynomial for detrending
+    outprefix : str
+        Prefix for output files
+    zero_padding_factor : int
+        Factor for zero-padding (default: 10)
+    custom_peaks : list
+        Custom peak frequencies to use (default: [])
+    include_unpadded : bool
+        Whether to also generate unpadded analysis (default: False)
+    """
+    # Prepare data once
     df = df.dropna(subset=[valuecol, timecol]).sort_values(by=[timecol])
-    # remove any row if time is 0
     df = df[df[timecol] != 0].reset_index(drop=True)
     time = df[timecol].values
-    N = len(time)
     values = df[valuecol].values
-    # ensure that the time values are evenly spaced
+    
+    # Verify evenly spaced
     time_diff = np.diff(time)
     print(df)
     if not np.allclose(time_diff, time_diff[0]):
         raise ValueError(f'The time values are not evenly spaced: {time_diff}')
-    values = df[valuecol].values
+    
+    # Always run padded analysis
+    print("\n" + "="*60)
+    print("RUNNING PADDED SPECTRUM ANALYSIS")
+    print("="*60)
+    run_single_analysis(time, values, polynomial, outprefix + "_padded", 
+                       spectrum_type="padded", custom_peaks=custom_peaks)
+    
+    # Optionally run unpadded analysis
+    if include_unpadded:
+        print("\n" + "="*60)
+        print("RUNNING UNPADDED SPECTRUM ANALYSIS")
+        print("="*60)
+        run_single_analysis(time, values, polynomial, outprefix + "_unpadded", 
+                           spectrum_type="unpadded", custom_peaks=custom_peaks)
+
+def run_single_analysis(time, values, polynomial, outprefix, spectrum_type, custom_peaks=[]):
+    """
+    Perform Fourier transform on the time series with x=time, y=values.
+    All of the x and y values will be ints or floats.
+
+    The input variables:
+      - time: array of time values (evenly spaced)
+      - values: array of values to be transformed
+      - polynomial: degree of polynomial for detrending
+      - outprefix: prefix for output files (should include _padded or _unpadded suffix)
+      - spectrum_type: "padded" or "unpadded" - determines which spectrum to use for peak detection
+      - custom_peaks: list of custom peak frequencies to use instead of auto-detection
+
+    The function will create a PDF with the Fourier analysis results.
+    """
+    outpdf = outprefix + '.pdf'
+    N = len(time)
     # fit a cubic function to the data
     p = np.polyfit(time, values, polynomial)
     detrended_values = values - np.polyval(p, time)
@@ -111,78 +199,339 @@ def fourier_of_time_series(df, timecol, valuecol, polynomial, outprefix, zero_pa
     # Zero-pad the data
     mag_spectrum_padded, xf_padded, yf_padded = fft_padded(time, detrended_values, zero_padding_factor=10)
 
+    # Detect peaks from the appropriate spectrum based on spectrum_type
+    if spectrum_type == "padded":
+        # Use find_peaks for smooth padded spectrum
+        default_peak_indices, default_peaks_freq = find_spectrum_peaks(
+            mag_spectrum_padded, xf_padded, n_peaks=3, use_peak_detection=True
+        )
+        print(f"Detected peaks from PADDED spectrum at frequencies: {default_peaks_freq}")
+    else:  # unpadded
+        # Use simple magnitude sorting for potentially monotonic unpadded spectrum
+        default_peak_indices, default_peaks_freq = find_spectrum_peaks(
+            mag_spectrum_original, xf_original, n_peaks=3, use_peak_detection=False
+        )
+        print(f"Detected peaks from UNPADDED spectrum at frequencies: {default_peaks_freq}")
+    
+    print(f"Corresponding periods (MYA): {[1/f for f in default_peaks_freq]}")
+    
+    if len(custom_peaks) > 0:
+        peaks_freq = custom_peaks
+    else:
+        peaks_freq = default_peaks_freq
+    
+    # Run simulations before creating figure to determine correct panel count
+    support_threshold = 0.85
+    min_chunks = 20
+    n_significant = 0
+    
+    cache_check = load_cached_simulation_data(outprefix)
+    if cache_check is not None:
+        print("Found cached simulation data - using for layout calculation")
+        chunk_to_support = cache_check
+        # Calculate n_significant from cache
+        for peak in peaks_freq:
+            period_val = 1/peak
+            support_col = f"period_{period_val:.2f}_observed"
+            if support_col in cache_check.columns:
+                chunk_mask = cache_check["chunks"] > min_chunks
+                filtered_data = cache_check[chunk_mask][support_col]
+                if len(filtered_data) > 0 and filtered_data.median() > support_threshold:
+                    n_significant += 1
+        print(f"Pre-computed {n_significant} significant periods for figure layout")
+    else:
+        # No cache - run simulations now to determine layout before creating figure
+        print(f"No cache found - running {spectrum_type} simulations to determine layout...")
+        if spectrum_type == "padded":
+            chunk_to_support = r_simulations(time, detrended_values, peaks_freq, mag_spectrum_padded, 
+                                            polynomial, outprefix, padded=True, simulations=5000)
+        else:  # unpadded
+            chunk_to_support = r_simulations(time, detrended_values, peaks_freq, mag_spectrum_original, 
+                                            polynomial, outprefix, padded=False, simulations=5000)
+        
+        # Calculate n_significant from fresh simulation results
+        for peak in peaks_freq:
+            period_val = 1/peak
+            support_col = f"period_{period_val:.2f}_observed"
+            if support_col in chunk_to_support.columns:
+                chunk_mask = chunk_to_support["chunks"] > min_chunks
+                filtered_data = chunk_to_support[chunk_mask][support_col]
+                if len(filtered_data) > 0 and filtered_data.median() > support_threshold:
+                    n_significant += 1
+        print(f"Calculated {n_significant} significant periods from new simulations")
+    
     # PLOTTING
-    # make three plots stacked on top of each other
-    fig, axs = plt.subplots(3, 1, figsize=(10, 15))
+    # Create figure with base 4 panels + validated comparison (if significant) + sequential removal panels
+    # If n_significant > 0: add 1 panel for validated oscillatory fit comparison
+    total_panels = 4 + (1 if n_significant > 0 else 0) + n_significant
+    fig, axs = plt.subplots(total_panels, 1, figsize=(12, 5 * total_panels))
 
-    # Top panel: Original time series with cubic fit
-    axs[0].plot(time, values, color='black', label='Original Data')
-    axs[0].plot(time, np.polyval(p, time), 'b-', label=f'Cubic Fit (Degree {polynomial})')
-    axs[0].set_xlabel('Time')
-    axs[0].set_ylabel('Values')
+    # Panel A: Original time series with polynomial fit AND detrended residuals
+    axs[0].plot(time, values, color='black', linewidth=1, label='Original Data')
+    axs[0].plot(time, np.polyval(p, time), 'b-', linewidth=1, label=f'Polynomial Fit (Degree {polynomial})')
+    axs[0].plot(time, detrended_values, 'r-', linewidth=1, alpha=0.7, label='Detrended Residuals')
+    axs[0].set_xlabel('Time (MYA)')
+    axs[0].set_ylabel('Rate / Residuals')
     axs[0].legend()
+    axs[0].set_title('Panel A: Raw Data + Polynomial Fit + Residuals')
 
-    # Top middle panel: Fourier transform (zero-padded and original)
-    axs[1].plot(xf_padded, mag_spectrum_padded, color='black', label='Zero-padded Spectrum')
+    # Use peaks detected earlier
+    colorrange = ["#4F8FB8", "#FFA07A", "#90EE90"]
+    peaks = peaks_freq
+    print(f"The peaks for {outpdf} are {peaks}")
+
+    # Panel B: Fourier spectrum (zero-padded and original)
+    axs[1].plot(xf_padded, mag_spectrum_padded, color='black', linewidth=1, label='Zero-padded Spectrum')
     ax2 = axs[1].twinx()
-    ax2.plot(xf_original, mag_spectrum_original, color='red', alpha=0.25)
+    ax2.plot(xf_original, mag_spectrum_original, color='red', linewidth=1, alpha=0.25)
     ax2.set_ylim(0, 1.1 * np.max(mag_spectrum_original))
     ax2.yaxis.label.set_color('red')
     ax2.tick_params(axis='y', colors='red')
     axs[1].plot([], [], color='red', label='Original Spectrum')
     axs[1].set_xlim(0, 0.1)
     axs[1].set_ylim(0, 1.1 * np.max(mag_spectrum_padded))
-    axs[1].set_xlabel('Frequency')
+    axs[1].set_xlabel('Frequency (cycles per MYR)')
     axs[1].set_ylabel('Magnitude (Zero-padded Spectrum)')
     ax2.set_ylabel('Magnitude (Original Spectrum)', color='red')
-
-    default_peaks = np.argsort(np.abs(yf_original[:N//2]))[-3:]
-    default_peaks = [xf_original[x] for x in default_peaks]
-    # Bottom middl panel: Residuals and sine waves
-    colorrange = ["#4F8FB8", "#FFA07A", "#90EE90"]
-    if len(custom_peaks) > 0:
-        peaks = custom_peaks
-    else:
-        peaks = default_peaks
-    print(f"The peaks for {outpdf} are {peaks}")
+    
+    # Title indicates which spectrum was used for peak detection
+    spectrum_source = "Padded" if spectrum_type == "padded" else "Unpadded"
+    axs[1].set_title(f'Panel B: Fourier Spectrum (Peaks from {spectrum_source})')
+    
+    # Add period labels at the top inside the plot
+    # Create custom period tick locations at meaningful frequencies
+    period_values = [500, 250, 140, 100, 62, 50, 40, 30, 25, 20]  # periods in MYA
+    freq_values = [1.0/p for p in period_values if 1.0/p <= 0.1]  # convert to frequencies within xlim
+    period_labels = [str(int(1.0/f)) for f in freq_values]
+    
+    # Add text annotations for periods at the top of the plot
+    y_pos = 0.95  # Position near top of plot in axis coordinates
+    for freq, label in zip(freq_values, period_labels):
+        axs[1].text(freq, y_pos, label, transform=axs[1].get_xaxis_transform(),
+                    ha='center', va='top', fontsize=8, rotation=0)
+    
+    # Add a label for the period axis
+    axs[1].text(0.5, 0.98, 'Period (MYA)', transform=axs[1].transAxes,
+                ha='center', va='top', fontsize=9, weight='bold')
+    
+    # Mark peaks on spectrum
     counter = 0
     for peak in peaks:
         period = 1/peak
-        axs[1].axvline(peak, color=colorrange[counter], linestyle='--', label = f'Peak at {peak:.4f}, Period {period:.2f}')
-        # just get the top of the box
-        y_plotpos = 0.5 * np.max(mag_spectrum_padded)
+        axs[1].axvline(peak, color=colorrange[counter], linestyle='--', 
+                      label=f'Peak at {peak:.4f}, Period {period:.2f} MYA')
         counter += 1
-    axs[1].legend()
+    
+    # Move legend to lower right to avoid overlap with period labels
+    axs[1].legend(fontsize=8, loc='lower right')
 
-    # now we actually plot the new one
-    axs[2].plot(time, detrended_values, color='black', label='Detrended Data')
-    # Plot the top peaks as sine waves with optimal alignment
+    # Panel C: Residuals with linear and oscillatory fits
+    # Fit linear regression to residuals
+    slope, intercept, r_value_linear, p_value_linear, std_err = stats.linregress(time, detrended_values)
+    linear_fit = slope * time + intercept
+    r_squared_linear = r_value_linear ** 2
+    
+    # Debug output for linear regression
+    print(f"Linear regression debug:")
+    print(f"  slope={slope:.6e}, intercept={intercept:.6e}")
+    print(f"  R²={r_squared_linear:.6f}, p={p_value_linear:.6e}")
+    print(f"  Time range: {time.min():.2f} to {time.max():.2f}")
+    print(f"  Residuals: mean={np.mean(detrended_values):.6e}, std={np.std(detrended_values):.6e}")
+    print(f"  Residuals range: {detrended_values.min():.6e} to {detrended_values.max():.6e}")
+    
+    # Plot residuals
+    axs[2].plot(time, detrended_values, color='black', linewidth=1, alpha=0.5, label='Residuals')
+    axs[2].axhline(0, color='gray', linestyle=':', linewidth=0.5)
+    
+    # Plot linear fit in red
+    axs[2].plot(time, linear_fit, 'r-', linewidth=2, label=f'Linear Regression Fit (R²={r_squared_linear:.4f}, p={p_value_linear:.2e})')
+    
+    # Build composite oscillatory fit from all peaks
+    
+    # Build composite oscillatory fit from all peaks
+    oscillatory_fit = np.zeros_like(time, dtype=float)
     for i, peak in enumerate(peaks):
         period = 1 / peak
         sine_wave = np.sin(2 * np.pi * time / period) * np.max(detrended_values) * 0.5
-
         # Compute optimal alignment using cross-correlation
         correlation = correlate(detrended_values, sine_wave, mode='full')
         lags = np.arange(-len(time) + 1, len(time))
         optimal_lag = lags[np.argmax(correlation)]
         shifted_sine_wave = np.sin(2 * np.pi * (time - time[optimal_lag]) / period) * np.max(detrended_values) * 0.5
+        oscillatory_fit += shifted_sine_wave
+    
+    # Normalize oscillatory fit to match residual scale
+    oscillatory_fit = oscillatory_fit / len(peaks)
+    
+    # Compute R² for oscillatory fit
+    ss_res_osc = np.sum((detrended_values - oscillatory_fit) ** 2)
+    ss_tot = np.sum((detrended_values - np.mean(detrended_values)) ** 2)
+    r_squared_osc = 1 - (ss_res_osc / ss_tot)
+    
+    # Build multi-line legend label with periods
+    periods_str = ', '.join([f'{1/p:.1f}' for p in peaks])
+    osc_label = f'Composite Sine Wave Fit (R²={r_squared_osc:.4f})\nPeriods: {periods_str} MYA'
+    
+    # Plot oscillatory fit in blue
+    axs[2].plot(time, oscillatory_fit, 'b-', linewidth=2, label=osc_label)
+    
+    axs[2].set_xlabel('Time (MYA)')
+    axs[2].set_ylabel('Residuals')
+    axs[2].set_title('Panel C: Residuals with Linear vs Oscillatory Fits')
+    axs[2].legend(fontsize=8)
+    
+    # Add text box with comparison
+    if r_squared_osc > r_squared_linear:
+        comparison_text = f'Oscillatory fit is better\n(ΔR² = {r_squared_osc - r_squared_linear:.4f})'
+    else:
+        comparison_text = f'Linear fit is better\n(ΔR² = {r_squared_linear - r_squared_osc:.4f})'
+    axs[2].text(0.02, 0.98, comparison_text, transform=axs[2].transAxes, 
+                fontsize=9, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
-        axs[2].plot(time, shifted_sine_wave, color=colorrange[i], linestyle='--', label=f'Sine Wave, Period {period:.2f}')
+    # Panel D: Simulation summary - box-and-whisker plots
+    # (chunk_to_support already populated from cache or fresh simulations above)
+    support_cols_obs = [col for col in chunk_to_support.columns if "period_" in col and "observed" in col]
+    support_cols_exp = [col for col in chunk_to_support.columns if "period_" in col and "expected" in col]
+    
+    print(f"\n{spectrum_type.capitalize()} box plot columns:")
+    print(f"  Found {len(support_cols_obs)} observed columns: {support_cols_obs}")
+    print(f"  Found {len(support_cols_exp)} expected columns: {support_cols_exp}")
+    print(f"  All columns: {list(chunk_to_support.columns)}")
+    
+    # Create pairs (Expected, Observed) sorted by period (ascending = shortest first)
+    periods = sorted(set([float(col.split('_')[1]) for col in support_cols_obs]))
+    data_to_plot = []
+    labels = []
+    for period in periods:
+        # Add Expected first
+        exp_col = f"period_{period:.2f}_expected"
+        if exp_col in support_cols_exp:
+            data_to_plot.append(chunk_to_support[exp_col].values)
+            labels.append(f'{period:.1f}\nExp')
+        # Then Observed
+        obs_col = f"period_{period:.2f}_observed"
+        if obs_col in support_cols_obs:
+            data_to_plot.append(chunk_to_support[obs_col].values)
+            labels.append(f'{period:.1f}\nObs')
+    
+    bp = axs[3].boxplot(data_to_plot, labels=labels, patch_artist=True)
+    # Color Expected boxes green, Observed boxes blue (alternating pattern)
+    for i, box in enumerate(bp['boxes']):
+        if i % 2 == 0:  # Even indices are Expected
+            box.set_facecolor('lightgreen')
+        else:  # Odd indices are Observed
+            box.set_facecolor('lightblue')
+    
+    axs[3].set_ylabel("Support (% Sims < Real)", fontsize=10)
+    axs[3].set_ylim(0, 1)
+    axs[3].set_title(f"Panel D: {spectrum_type.capitalize()} Simulation Support (Observed vs Expected)", fontsize=11)
+    axs[3].tick_params(axis='x', labelsize=8)
+    axs[3].axhline(0.95, color='red', linestyle='--', alpha=0.3, linewidth=1)
+    axs[3].text(0.98, 0.95, '95%', transform=axs[3].get_yaxis_transform(), 
+                ha='right', va='bottom', fontsize=8, color='red')
 
-    axs[2].legend()
-    axs[2].set_xlabel('Time')
-    axs[2].set_ylabel('Detrended Values')
+    # Add sequential period removal panels to main figure (if significant periods exist)
+    if n_significant > 0:
+        # Filter for significant periods using simulation results
+        significant_periods = []
+        for peak in peaks_freq:
+            period_val = 1/peak
+            support_col = f"period_{period_val:.2f}_observed"
+            if support_col in chunk_to_support.columns:
+                chunk_mask = chunk_to_support["chunks"] > min_chunks
+                filtered_data = chunk_to_support[chunk_mask][support_col]
+                if len(filtered_data) > 0:
+                    median_support = filtered_data.median()
+                    if median_support > support_threshold:
+                        significant_periods.append((period_val, median_support, peak))
+        
+        # Sort by support descending
+        significant_periods.sort(key=lambda x: x[1], reverse=True)
+        
+        print(f"\nAdding validated oscillatory fit comparison and {len(significant_periods)} sequential removal panels:")
+        for period_val, support, freq in significant_periods:
+            print(f"  Period {period_val:.1f} MYA: median support = {support:.3f}")
+        
+        # Panel E: Linear vs Oscillatory fit using ONLY significant peaks
+        axs[4].plot(time, detrended_values, color='black', linewidth=1, alpha=0.5, label='Residuals')
+        axs[4].axhline(0, color='gray', linestyle=':', linewidth=0.5)
+        
+        # Plot linear fit
+        axs[4].plot(time, linear_fit, 'r-', linewidth=2, label=f'Linear Fit (R²={r_squared_linear:.4f})')
+        
+        # Build composite oscillatory fit from ONLY significant peaks
+        validated_oscillatory_fit = np.zeros_like(time, dtype=float)
+        for i, (period_val, support, freq) in enumerate(significant_periods):
+            sine_wave = np.sin(2 * np.pi * time / period_val) * np.max(detrended_values) * 0.5
+            # Compute optimal alignment using cross-correlation
+            correlation = correlate(detrended_values, sine_wave, mode='full')
+            lags = np.arange(-len(time) + 1, len(time))
+            optimal_lag = lags[np.argmax(correlation)]
+            shifted_sine_wave = np.sin(2 * np.pi * (time - time[optimal_lag]) / period_val) * np.max(detrended_values) * 0.5
+            validated_oscillatory_fit += shifted_sine_wave
+        
+        # Normalize oscillatory fit to match residual scale
+        validated_oscillatory_fit = validated_oscillatory_fit / len(significant_periods)
+        
+        # Compute R² for validated oscillatory fit
+        ss_res_val_osc = np.sum((detrended_values - validated_oscillatory_fit) ** 2)
+        ss_tot = np.sum((detrended_values - np.mean(detrended_values)) ** 2)
+        r_squared_val_osc = 1 - (ss_res_val_osc / ss_tot)
+        
+        # Build legend label with validated periods
+        validated_period_labels = [f"{p:.1f} MYA" for p, s, f in significant_periods]
+        validated_legend_label = f'Validated Oscillatory Fit (R²={r_squared_val_osc:.4f})\nPeriods: ' + ', '.join(validated_period_labels)
+        
+        axs[4].plot(time, validated_oscillatory_fit, 'b-', linewidth=2, label=validated_legend_label)
+        axs[4].set_xlabel('Time (MYA)')
+        axs[4].set_ylabel('Residuals')
+        axs[4].set_title('Panel E: Residuals with Linear vs Validated Oscillatory Fits')
+        axs[4].legend(fontsize=8)
+        
+        # Add comparison text box
+        if r_squared_val_osc > r_squared_linear:
+            comparison_text = f'Validated oscillatory fit is better\n(ΔR² = {r_squared_val_osc - r_squared_linear:.4f})'
+        else:
+            comparison_text = f'Linear fit is better\n(ΔR² = {r_squared_linear - r_squared_val_osc:.4f})'
+        axs[4].text(0.02, 0.98, comparison_text, transform=axs[4].transAxes, 
+                    fontsize=9, verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        current_residuals = detrended_values.copy()
+        colorrange_seq = ["#4F8FB8", "#FFA07A", "#90EE90", "#FFD700", "#FF69B4"]
+        
+        for i, (period_val, support, freq) in enumerate(significant_periods):
+            panel_idx = 5 + i
+            panel_letter = chr(70 + i)  # F, G, H, etc.
+            
+            # Plot current residuals
+            axs[panel_idx].plot(time, current_residuals, 'k-', linewidth=1, label='Residuals')
+            axs[panel_idx].axhline(0, color='gray', linestyle=':', linewidth=0.5)
+            
+            # Fit sine wave to current residuals
+            sine_wave = fit_sine_wave_to_residuals(time, current_residuals, period_val)
+            
+            color = colorrange_seq[i % len(colorrange_seq)]
+            axs[panel_idx].plot(time, sine_wave, color=color, linestyle='--', linewidth=2, 
+                           label=f'Period {period_val:.1f} MYA (Support: {support:.3f})')
+            
+            axs[panel_idx].set_xlabel('Time (MYA)', fontsize=10)
+            axs[panel_idx].set_ylabel('Residuals', fontsize=10)
+            axs[panel_idx].set_title(f'Panel {panel_letter}: Sequential Removal Step {i+1} - Removing {period_val:.1f} MYA Period', fontsize=11)
+            axs[panel_idx].legend(fontsize=9)
+            axs[panel_idx].grid(alpha=0.3)
+            
+            # Subtract this sine wave for next iteration
+            current_residuals = current_residuals - sine_wave
+    else:
+        print("\nNo significant periods found - no sequential removal panels added")
 
-    # make the plot title be the outpdf
-    axs[0].set_title(outpdf)
-    # Save the plot to a PDF file
+    # Overall title and save
+    fig.suptitle(outpdf, fontsize=14, y=0.998)
+    plt.tight_layout(rect=[0, 0, 1, 0.995])
     plt.savefig(outpdf)
     plt.close()
-
-
-    # Now run the rsimulations and make new PDFs
-    rsims = r_simulations(time, detrended_values, default_peaks, mag_spectrum_original, polynomial, outprefix+"_unpadded", padded = False, simulations = 5000)
-    rsims = r_simulations(time, detrended_values, peaks,         mag_spectrum_padded,   polynomial, outprefix+"_padded", padded = True, simulations = 5000)
 
 def exponential_background(magnitudes, heights):
     """
@@ -192,6 +541,42 @@ def exponential_background(magnitudes, heights):
     b = np.mean(heights)
 
     return 1 - np.exp(-h / b)
+
+def fit_sine_wave_to_residuals(time, residuals, period):
+    """
+    Fit a sine wave with optimal phase alignment to residuals.
+    Returns the fitted sine wave.
+    """
+    # Create sine wave
+    sine_wave = np.sin(2 * np.pi * time / period)
+    
+    # Compute optimal alignment using cross-correlation
+    correlation = correlate(residuals, sine_wave, mode='full')
+    lags = np.arange(-len(time) + 1, len(time))
+    optimal_lag = lags[np.argmax(correlation)]
+    
+    # Shift sine wave for optimal alignment
+    if optimal_lag >= 0 and optimal_lag < len(time):
+        shifted_sine_wave = np.sin(2 * np.pi * (time - time[optimal_lag]) / period)
+    else:
+        shifted_sine_wave = sine_wave
+    
+    # Scale amplitude to match residuals using least squares
+    # Find amplitude that minimizes sum of squared residuals
+    amplitude = np.sum(residuals * shifted_sine_wave) / np.sum(shifted_sine_wave ** 2)
+    
+    return amplitude * shifted_sine_wave
+
+def load_cached_simulation_data(outprefix):
+    """
+    Check if cached simulation data exists and load it.
+    Returns the chunk_to_support dataframe if found, None otherwise.
+    """
+    chunk_support_path = outprefix + '_chunk_support.tsv'
+    if os.path.exists(chunk_support_path):
+        print(f"Found cached simulation data: {chunk_support_path}")
+        return pd.read_csv(chunk_support_path, sep='\t')
+    return None
 
 def r_simulations(time, values, peaks_to_test, magnitudes, polynomial, outprefix, padded = False, simulations = 30000):
     """
@@ -392,6 +777,14 @@ def r_simulations(time, values, peaks_to_test, magnitudes, polynomial, outprefix
     # convert the tsv_entries to a dataframe and save it to a tsv
     tsv_df = pd.DataFrame(tsv_entries)
     tsv_df.to_csv(tsv_path, sep='\t', index=False)
+    
+    # Save chunk_to_support_df for caching/reuse
+    chunk_support_path = outprefix + '_chunk_support.tsv'
+    chunk_to_support_df.to_csv(chunk_support_path, sep='\t', index=False)
+    print(f"Saved chunk support data to: {chunk_support_path}")
+    
+    # Return the summary dataframe for use in main plot
+    return chunk_to_support_df
 
 def main():
     args = parse_args()
@@ -405,15 +798,41 @@ def main():
     if args.agecol not in df.columns:
         raise ValueError(f'The column {args.agecol} is not in the dataframe')
     print(df.columns)
-    if args.minage < 0:
-        df = df[df[args.agecol] > args.minage]
+    
+    # Show age range in data before filtering
+    age_min = df[args.agecol].min()
+    age_max = df[args.agecol].max()
+    print(f"Age range in data: {age_min:.2f} - {age_max:.2f} (n={len(df)} rows)")
+    
+    # Handle deprecated --minage argument
+    if args.minage >= 0:
+        print(f"WARNING: --minage is deprecated. Use --min_time and --max_time instead.")
+        print(f"Filtering to ages >= {args.minage} Mya (ignoring --min_time and --max_time)")
+        df = df[df[args.agecol] >= args.minage]
     else:
-        df = df[df[args.agecol] < args.minage]
+        # Apply min_time and max_time filters (default: 1-542 MYA)
+        # Ages are encoded as negative (0=present, -1=1MYA, -542=542MYA)
+        # So filter to ages between -max_time and -min_time
+        print(f"Filtering to time range: {args.min_time} - {args.max_time} MYA")
+        print(f"  (filtering to age values: {-args.max_time} to {-args.min_time})")
+        df = df[(df[args.agecol] >= -args.max_time) & (df[args.agecol] <= -args.min_time)]
+    
+    print(f"After filtering: {len(df)} rows remaining")
+    
+    # Check if dataframe is empty after filtering
+    if len(df) == 0:
+        print(f"\nERROR: No data remaining after filtering to {args.min_time}-{args.max_time} MYA")
+        print(f"Original data age range was {age_min:.2f} - {age_max:.2f}")
+        print(f"Adjust --min_time and --max_time to match your data range.")
+        sys.exit(1)
+    
     print("Args.custom_peaks", args.custom_peaks)
     if len(args.custom_peaks) > 0:
-        fourier_of_time_series(df, args.agecol, args.ratecol, args.polynomial, args.outprefix, custom_peaks=args.custom_peaks)
+        fourier_of_time_series(df, args.agecol, args.ratecol, args.polynomial, args.outprefix, 
+                              custom_peaks=args.custom_peaks, include_unpadded=args.include_unpadded)
     else:
-        fourier_of_time_series(df, args.agecol, args.ratecol, args.polynomial, args.outprefix)
+        fourier_of_time_series(df, args.agecol, args.ratecol, args.polynomial, args.outprefix,
+                              include_unpadded=args.include_unpadded)
 
 if __name__ == '__main__':
     main()

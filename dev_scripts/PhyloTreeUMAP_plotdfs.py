@@ -37,6 +37,41 @@ def generate_distinct_colors(n, saturation=0.65, lightness=0.5):
         colors.append(hex_color)
     return colors
 
+# Phylum dictionary for phyla-based plotting (sorted alphabetically)
+phylum_to_taxid = {
+    "Annelida":         {"taxid": 6340,    "index": 1,  "size": "macroscopic", "length": "0.5mm-3m"},
+    "Arthropoda":       {"taxid": 6656,    "index": 2,  "size": "macroscopic", "length": "0.08mm-1m"},
+    "Brachiopoda":      {"taxid": 7568,    "index": 3,  "size": "macroscopic", "length": "1mm-100mm"},
+    "Bryozoa":          {"taxid": 10205,   "index": 4,  "size": "microscopic", "length": "0.5mm"},
+    "Chaetognatha":     {"taxid": 10229,   "index": 5,  "size": "macroscopic", "length": "2mm-120mm"},
+    "Chordata":         {"taxid": 7711,    "index": 6,  "size": "macroscopic", "length": "0.5mm-30m"},
+    "Cnidaria":         {"taxid": 6073,    "index": 7,  "size": "macroscopic", "length": "0.006mm-2m"},
+    "Ctenophora":       {"taxid": 10197,   "index": 8,  "size": "macroscopic", "length": "10mm-15cm"},
+    "Cycliophora":      {"taxid": 69815,   "index": 9,  "size": "microscopic", "length": "0.1-0.5mm"},
+    "Echinodermata":    {"taxid": 7586,    "index": 10, "size": "macroscopic", "length": "4mm-3m"},
+    "Entoprocta":       {"taxid": 43120,   "index": 11, "size": "macroscopic", "length": "0.1mm-7mm"},
+    "Gastrotricha":     {"taxid": 33313,   "index": 12, "size": "microscopic", "length": "0.06mm-3mm"},
+    "Gnathostomulida":  {"taxid": 66780,   "index": 13, "size": "microscopic", "length": "0.5mm-1mm"},
+    "Hemichordata":     {"taxid": 10219,   "index": 14, "size": "macroscopic", "length": "0.6mm-2.5m"},
+    "Kinorhyncha":      {"taxid": 51516,   "index": 15, "size": "microscopic", "length": "0.1mm-1mm"},
+    "Loricifera":       {"taxid": 310840,  "index": 16, "size": "microscopic", "length": "0.1mm-1mm"},
+    "Mollusca":         {"taxid": 6447,    "index": 17, "size": "macroscopic", "length": "0.1mm-1m"},
+    "Nematoda":         {"taxid": 6231,    "index": 18, "size": "microscopic", "length": "1mm-7mm"},
+    "Nematomorpha":     {"taxid": 33310,   "index": 19, "size": "macroscopic", "length": "5cm-10cm"},
+    "Nemertea":         {"taxid": 6217,    "index": 20, "size": "macroscopic", "length": "3mm-54m"},
+    "Onychophora":      {"taxid": 27563,   "index": 21, "size": "macroscopic", "length": "0.1cm-22cm"},
+    "Orthonectida":     {"taxid": 33209,   "index": 22, "size": "microscopic", "length": "0.035mm-0.3mm"},
+    "Phoronida":        {"taxid": 120557,  "index": 23, "size": "macroscopic", "length": "1mm-50cm"},
+    "Placozoa":         {"taxid": 10226,   "index": 24, "size": "microscopic", "length": "0.1mm-0.75mm"},
+    "Platyhelminthes":  {"taxid": 6157,    "index": 25, "size": "macroscopic", "length": "1mm-60cm"},
+    "Porifera":         {"taxid": 6040,    "index": 26, "size": "macroscopic", "length": "10mm-3.5m"},
+    "Priapulida":       {"taxid": 33467,   "index": 27, "size": "macroscopic", "length": "0.2mm-39cm"},
+    "Rotifera":         {"taxid": 10190,   "index": 28, "size": "microscopic", "length": "0.1mm-2mm"},
+    "Sipuncula":        {"taxid": 6433,    "index": 29, "size": "macroscopic", "length": "0.5cm-10cm"},
+    "Tardigrada":       {"taxid": 42241,   "index": 30, "size": "microscopic", "length": "0.1mm-1mm"},
+    "Xenacoelomorpha":  {"taxid": 1312402, "index": 31, "size": "macroscopic", "length": "2mm-50cm"}
+}
+
 
 def return_kingdom_full_sort_order():
     """Return a list of the sort order for the taxonomic rankings."""
@@ -146,6 +181,14 @@ def parse_args():
     parser.add_argument("--pdf", action = "store_true", help = "Save a {prefix}.pdf file")
     parser.add_argument("--html", action = "store_true", help = "Save a {prefix}.html file")
     parser.add_argument("--plot_features", action = "store_true", help = "Looks in the DF for features to plot. Plots everything on the same plot. Only takes in one dataframe.")
+    parser.add_argument("--plot-phyla", action = "store_true", help = "Plot UMAP with each phylum highlighted individually. Requires a 'phylum' column in the dataframe.")
+    parser.add_argument("--phyla-rotation", type=str, default="maximize_square",
+                        choices=["maximize_square", "minimize_vertical"],
+                        help="Rotation strategy for --plot-phyla: 'maximize_square' fits data optimally in square panels, 'minimize_vertical' minimizes vertical extent for condensed figures (default: maximize_square)")
+    parser.add_argument("--phyla-clean-output", action="store_true",
+                        help="For --plot-phyla, also output a clean version without labels, vectors, or grid lines (saved as {prefix}_clean.pdf)")
+    parser.add_argument("--phyla-order", type=str, default=None,
+                        help="Space-delimited list of phyla names to plot in custom order (e.g., 'Chordata Arthropoda Mollusca'). Only specified phyla will be plotted. The 2x2 'All Phyla' panel will still be shown.")
     parser.add_argument("--genome-min-bp", type=float, default=None,
                         help="Minimum genome size (bp). Values <= this are shown as --genome-min-color (grey).")
     parser.add_argument("--genome-max-bp", type=float, default=None,
@@ -165,7 +208,7 @@ def parse_args():
                           "Enables a vertical phylo-resampling grid (rows=ranks, "
                           "cols=(n_neighbors,min_dist) inferred from filenames)."))
     parser.add_argument("--num-cols", type=int, default=None,
-                        help="Number of columns for --plot_features grid layout. If not specified, uses sqrt of total panels (square grid).")
+                        help="Number of columns for --plot_features or --plot-phyla grid layout. If not specified, uses sqrt of total panels (square grid).")
 
     args = parser.parse_args()
 
@@ -202,6 +245,15 @@ def parse_args():
         elif args.directory:
             if len([x for x in os.listdir(args.directory) if x.endswith(".df")]) > 1:
                 raise ValueError("You have turned on the plot_features flag, but you have more than one file in the directory. We can only plot one file at a time with this flag.")
+
+    # If we have turned on the plot_phyla flag, then we need to make sure that we only have one file in the filelist.
+    if args.plot_phyla:
+        if args.filelist:
+            if len(args.filelist.split(" ")) > 1:
+                raise ValueError("You have turned on the plot_phyla flag, but you have more than one file in the filelist. We can only plot one file at a time with this flag.")
+        elif args.directory:
+            if len([x for x in os.listdir(args.directory) if x.endswith(".df")]) > 1:
+                raise ValueError("You have turned on the plot_phyla flag, but you have more than one file in the directory. We can only plot one file at a time with this flag.")
 
     # Make sure all the files exist
     if args.directory:
@@ -932,6 +984,618 @@ def plot_features(args, outpdf, metadata_df=None, legend_scale=0.5,
     plt.savefig(outpdf)
     plt.close(fig)
 
+def plot_phyla(args, outpdf, metadata_df=None):
+    """
+    Plot UMAP coordinates with each phylum highlighted individually.
+    Creates a multi-page PDF with:
+      - First page: all species colored by their phylum
+      - Subsequent pages: each phylum highlighted with its color, others greyed out
+    
+    Parses taxid information from 'taxid_list' or 'taxid_list_str' columns.
+    Uses the phylum_to_taxid dictionary to map taxids to phyla.
+    """
+    from matplotlib.backends.backend_pdf import PdfPages
+    import ast
+    
+    GREY_COLOR = "#D5D7DF"
+    
+    # Create reverse mapping: taxid -> phylum name
+    taxid_to_phylum = {}
+    for phylum_name, info in phylum_to_taxid.items():
+        taxid_to_phylum[info['taxid']] = phylum_name
+    
+    # Load dataframe
+    df = pd.read_csv(args.filelist, sep="\t", index_col=0)
+    
+    # Merge metadata if provided
+    if metadata_df is not None:
+        metadata_df = metadata_df.set_index("rbh")
+        metadata_df.index = metadata_df.index.astype(str).str.strip()
+        df.set_index("rbh", inplace=True, drop=False)
+        df.index = df.index.astype(str).str.strip()
+        matched = metadata_df.index.intersection(df.index)
+        print(f"Metadata merge: matched {len(matched)} of {len(df)} UMAP RBH entries")
+        df = df.join(metadata_df, how="left")
+    
+    # Check for required columns
+    if "UMAP1" not in df.columns or "UMAP2" not in df.columns:
+        raise ValueError("DataFrame must contain 'UMAP1' and 'UMAP2' columns")
+    
+    # Parse taxid information to determine phylum
+    def parse_taxids(row):
+        """Parse taxid_list or taxid_list_str to extract phylum.
+        Returns the most specific (last/deepest) phylum match in the lineage."""
+        taxids = []
+        
+        # Try taxid_list first (format: "[1, 131567, 2759, ...]")
+        if "taxid_list" in row.index and pd.notna(row["taxid_list"]):
+            try:
+                if isinstance(row["taxid_list"], str):
+                    taxids = ast.literal_eval(row["taxid_list"])
+                elif isinstance(row["taxid_list"], list):
+                    taxids = row["taxid_list"]
+            except Exception as e:
+                pass  # silently skip parse errors
+        
+        # Try taxid_list_str if taxid_list didn't work (format: "1;131567;2759;...")
+        if not taxids and "taxid_list_str" in row.index and pd.notna(row["taxid_list_str"]):
+            try:
+                taxids = [int(x) for x in str(row["taxid_list_str"]).split(";") if x.strip()]
+            except Exception as e:
+                pass  # silently skip parse errors
+        
+        # Special case: Acanthocephala (taxid 10232) is now considered part of Rotifera
+        # Check for this taxid first before doing normal phylum lookup
+        if 10232 in taxids:
+            return "Rotifera"
+        
+        # Find the most specific (last) phylum taxid in the list
+        # This handles cases where one phylum is nested within another (e.g., Sipuncula within Annelida)
+        last_phylum = None
+        for taxid in taxids:
+            if taxid in taxid_to_phylum:
+                last_phylum = taxid_to_phylum[taxid]
+        
+        return last_phylum
+    
+    # Check if we have the required columns
+    if "taxid_list" not in df.columns and "taxid_list_str" not in df.columns:
+        raise ValueError("DataFrame must contain either 'taxid_list' or 'taxid_list_str' column for --plot-phyla mode")
+    
+    # Parse phylum for each row
+    print("Parsing taxid information to determine phyla...")
+    df["phylum"] = df.apply(parse_taxids, axis=1)
+    
+    # Get unique phyla present in the data
+    phyla_in_data_original = df["phylum"].dropna().unique()
+    phyla_in_data_sorted = sorted(phyla_in_data_original)
+    
+    # Handle custom phyla order if provided
+    phyla_to_plot = phyla_in_data_sorted  # Default: plot all phyla in sorted order
+    if args.phyla_order is not None:
+        # Parse the space-delimited phyla names
+        custom_phyla_list = args.phyla_order.split()
+        
+        # Validate that all requested phyla are in the data
+        requested_phyla = set(custom_phyla_list)
+        found_phyla_set = set(phyla_in_data_original)
+        missing_requested = requested_phyla - found_phyla_set
+        
+        if missing_requested:
+            print(f"\nWarning: Requested phyla not found in data: {sorted(missing_requested)}")
+        
+        # Filter to only include phyla that are both requested and found in data
+        phyla_to_plot = [p for p in custom_phyla_list if p in found_phyla_set]
+        
+        if not phyla_to_plot:
+            raise ValueError("None of the requested phyla were found in the data")
+        
+        print(f"\nUsing custom phyla order ({len(phyla_to_plot)} phyla): {phyla_to_plot}")
+    
+    # phyla_in_data is used for individual panels (respects custom order)
+    phyla_in_data = phyla_to_plot
+    # phyla_in_data_all is used for the "All Phyla" panel (always shows everything)
+    phyla_in_data_all = list(phyla_in_data_original)
+    
+    # Report which phyla were found and which were not
+    all_known_phyla = set(phylum_to_taxid.keys())
+    found_phyla = set(phyla_in_data_original)
+    missing_phyla = all_known_phyla - found_phyla
+    
+    print(f"\nFound {len(phyla_in_data_all)} phyla in data:")
+    total_phylum_count = 0
+    for phylum in sorted(phyla_in_data_all):
+        count = (df["phylum"] == phylum).sum()
+        print(f"  - {phylum}: {count} samples")
+        total_phylum_count += count
+    print(f"\nTotal samples assigned to phyla: {total_phylum_count}")
+    print(f"Total samples in dataframe: {len(df)}")
+    
+    # If custom order was specified, also report which phyla will be plotted
+    if args.phyla_order is not None:
+        print(f"\nPlotting {len(phyla_in_data)} phyla in custom order:")
+        for phylum in phyla_in_data:
+            count = (df["phylum"] == phylum).sum()
+            print(f"  - {phylum}: {count} samples")
+    
+    if missing_phyla:
+        print(f"\nPhyla not found in data ({len(missing_phyla)}):")
+        for phylum in sorted(missing_phyla):
+            print(f"  - {phylum}")
+    else:
+        print("\nAll known phyla were found in the data!")
+    
+    # Report samples without phylum assignment
+    unassigned_count = df["phylum"].isna().sum()
+    if unassigned_count > 0:
+        print(f"\nWarning: {unassigned_count} samples could not be assigned to a known phylum")
+        # Get unassigned samples dataframe
+        unassigned_df = df[df["phylum"].isna()]
+        
+        # Print detailed information for each unassigned sample
+        print("\nUnassigned samples details:")
+        for idx, row in unassigned_df.iterrows():
+            # Get sample identifier
+            sample_id = idx
+            if "rbh" in df.columns:
+                sample_id = row["rbh"]
+            
+            # Get taxid information
+            taxid_info = "No taxid information"
+            if "taxid_list" in row.index and pd.notna(row["taxid_list"]):
+                taxid_info = f"taxid_list: {row['taxid_list']}"
+            elif "taxid_list_str" in row.index and pd.notna(row["taxid_list_str"]):
+                taxid_info = f"taxid_list_str: {row['taxid_list_str']}"
+            
+            print(f"  - {sample_id}: {taxid_info}")
+    
+    print(f"Found {len(phyla_in_data_all)} unique phyla in data: {sorted(phyla_in_data_all)}")
+    
+    # Generate colors for each phylum
+    # If the dataframe has a 'color' column, use those colors directly for plotting
+    # Otherwise, generate distinct colors for each phylum
+    if "color" in df.columns:
+        # Use the existing color column directly - each sample keeps its own color
+        # This preserves the original taxonomic-specific colors
+        use_existing_colors = True
+        phylum_colors = {}  # We'll still need this for the legend/reference
+        for phylum in phyla_in_data_all:
+            phylum_mask = df["phylum"] == phylum
+            if phylum_mask.any():
+                # Get the most common color for this phylum (for legend purposes)
+                colors = df.loc[phylum_mask, "color"].mode()
+                if len(colors) > 0:
+                    phylum_colors[phylum] = colors.iloc[0]
+                else:
+                    phylum_colors[phylum] = "#000000"
+    else:
+        # Generate distinct colors for each phylum
+        use_existing_colors = False
+        colors_list = generate_distinct_colors(len(phyla_in_data_all))
+        phylum_colors = {phylum: colors_list[i] for i, phylum in enumerate(sorted(phyla_in_data_all))}
+        # Assign colors to dataframe based on phylum
+        df["phylum_color"] = df["phylum"].map(phylum_colors)
+        df["phylum_color"] = df["phylum_color"].fillna(GREY_COLOR)
+    
+    # Create a color column based on phylum if it doesn't exist
+    df["phylum_color"] = df["phylum"].map(phylum_colors)
+    df["phylum_color"] = df["phylum_color"].fillna(GREY_COLOR)
+    
+    # Rotate UMAP coordinates based on the selected rotation strategy
+    rotation_mode = args.phyla_rotation
+    print(f"\nRotating UMAP coordinates using '{rotation_mode}' strategy...")
+    umap_coords = df[["UMAP1", "UMAP2"]].values
+    
+    # Center the data
+    mean_coords = np.mean(umap_coords, axis=0)
+    centered_coords = umap_coords - mean_coords
+    
+    # Try multiple rotation angles to find the optimal one
+    best_angle = 0
+    best_metric = float('inf')
+    
+    for angle_deg in range(0, 180, 1):  # Try every degree from 0 to 180
+        angle_rad = np.deg2rad(angle_deg)
+        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+        rotation_matrix = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+        
+        rotated = centered_coords @ rotation_matrix.T
+        
+        # Calculate bounding box (using full range, no outlier filtering)
+        x_range = rotated[:, 0].max() - rotated[:, 0].min()
+        y_range = rotated[:, 1].max() - rotated[:, 1].min()
+        
+        if rotation_mode == "maximize_square":
+            # Minimize the larger dimension (best fit for a square)
+            metric = max(x_range, y_range) ** 2
+        elif rotation_mode == "minimize_vertical":
+            # Minimize the vertical extent
+            metric = y_range
+        
+        if metric < best_metric:
+            best_metric = metric
+            best_angle = angle_deg
+    
+    # Apply the best rotation
+    angle_rad = np.deg2rad(best_angle)
+    cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+    rotation_matrix = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+    
+    rotated_coords = centered_coords @ rotation_matrix.T
+    
+    # Now find the best reflection to minimize density in top-left quadrant
+    # Test 4 orientations: original, flip-x, flip-y, flip-both
+    print("Finding optimal reflection to minimize top-left density...")
+    
+    best_reflection = None
+    best_topleft_density = float('inf')
+    reflection_options = [
+        ("none", np.array([[1, 0], [0, 1]])),
+        ("flip_x", np.array([[-1, 0], [0, 1]])),
+        ("flip_y", np.array([[1, 0], [0, -1]])),
+        ("flip_both", np.array([[-1, 0], [0, -1]]))
+    ]
+    
+    for refl_name, refl_matrix in reflection_options:
+        reflected = rotated_coords @ refl_matrix.T
+        
+        # Get quantile-based bounds for defining quadrants
+        x_median = np.median(reflected[:, 0])
+        y_median = np.median(reflected[:, 1])
+        y_75 = np.quantile(reflected[:, 1], 0.75)
+        
+        # Count points in top-left quadrant (x < median, y > 75th percentile)
+        top_left_mask = (reflected[:, 0] < x_median) & (reflected[:, 1] > y_75)
+        top_left_count = np.sum(top_left_mask)
+        
+        if top_left_count < best_topleft_density:
+            best_topleft_density = top_left_count
+            best_reflection = (refl_name, refl_matrix)
+    
+    # Apply the best reflection
+    refl_name, refl_matrix = best_reflection
+    rotated_coords = rotated_coords @ refl_matrix.T
+    
+    # Update rotation matrix to include reflection
+    rotation_matrix = rotation_matrix @ refl_matrix.T
+    
+    # Store original axis directions (for legend)
+    original_x_axis = rotation_matrix @ np.array([1, 0])
+    original_y_axis = rotation_matrix @ np.array([0, 1])
+    
+    # Update dataframe with rotated and reflected coordinates
+    df["UMAP1"] = rotated_coords[:, 0]
+    df["UMAP2"] = rotated_coords[:, 1]
+    
+    print(f"Applied {best_angle}° rotation + '{refl_name}' reflection")
+    print(f"  Top-left quadrant density: {best_topleft_density} points")
+    
+    # Report rotation results
+    final_x_range = np.quantile(df["UMAP1"], 0.998) - np.quantile(df["UMAP1"], 0.002)
+    final_y_range = np.quantile(df["UMAP2"], 0.998) - np.quantile(df["UMAP2"], 0.002)
+    aspect_ratio = final_x_range / final_y_range
+    print(f"Applied {best_angle}° rotation ({rotation_mode})")
+    print(f"  Final aspect ratio (width/height): {aspect_ratio:.2f}")
+    print(f"  X range: {final_x_range:.2f}, Y range: {final_y_range:.2f}")
+    
+    # Determine panel aspect ratio based on rotation mode
+    if rotation_mode == "minimize_vertical":
+        # Use rectangular panels that match the data aspect ratio
+        use_square_panels = False
+        panel_aspect_ratio = aspect_ratio
+        print(f"  Using rectangular panels with aspect ratio {aspect_ratio:.2f}")
+    else:
+        # Use square panels (default for maximize_square)
+        use_square_panels = True
+        panel_aspect_ratio = 1.0
+        print(f"  Using square panels")
+    
+    # Calculate grid layout - "All Phyla" will be 2x2, others are 1x1
+    # The "All Phyla" panel takes up 4 slots (positions 0,0 to 1,1)
+    num_phyla_panels = len(phyla_in_data)
+    
+    # Calculate grid size: we need space for num_phyla_panels regular panels 
+    # plus the 2x2 "All Phyla" panel (which uses 4 grid positions but counts as 1 panel)
+    # We'll add 3 to account for the 4 slots used by the large panel
+    total_grid_slots = num_phyla_panels + 3
+    
+    # Respect --num-cols if provided, otherwise calculate from sqrt
+    if args.num_cols is not None:
+        num_cols = args.num_cols
+    else:
+        num_cols = int(np.ceil(np.sqrt(total_grid_slots)))
+    
+    num_rows = int(np.ceil(total_grid_slots / num_cols))
+    
+    # Ensure we have at least 2 rows and 2 cols for the large panel
+    if num_cols < 2:
+        num_cols = 2
+    if num_rows < 2:
+        num_rows = 2
+    
+    # Figure dimensions - adjust based on panel aspect ratio
+    margin = 0.25
+    if use_square_panels:
+        panel_width = 1.5
+        panel_height = 1.5
+    else:
+        # For minimize_vertical mode, use wider panels
+        panel_height = 1.0
+        panel_width = panel_height * panel_aspect_ratio
+    
+    fig_width = (margin * 4) + (panel_width * num_cols) + (margin * (num_cols - 1)) + (margin * 4)
+    fig_height = (margin * 4) + (panel_height * num_rows) + (margin * (num_rows - 1)) + (margin * 4)
+    
+    # Helper function to create a phyla plot figure with configurable elements
+    def create_phyla_figure(include_points=True, include_labels=True, include_grid=True, include_vectors=True):
+        """
+        Create a phyla plot figure with configurable elements.
+        
+        Args:
+            include_points: Whether to plot scatter points
+            include_labels: Whether to include text labels (title, phylum names)
+            include_grid: Whether to include grid separator lines
+            include_vectors: Whether to include UMAP axis vector legend
+        
+        Returns:
+            matplotlib figure object
+        """
+        fig_new = plt.figure(figsize=(fig_width, fig_height))
+        
+        # Create axes grid - regular sized panels
+        axes_new = [[None for _ in range(num_cols)] for _ in range(num_rows)]
+        for ii in range(num_rows):
+            for jj in range(num_cols):
+                if ii < 2 and jj < 2:
+                    continue
+                left = (4 * margin) + (jj * panel_width) + (jj * margin)
+                bottom = fig_height - ((4 * margin) + ((ii + 1) * panel_height) + (ii * margin))
+                ax = fig_new.add_axes([
+                    left / fig_width,
+                    bottom / fig_height,
+                    panel_width / fig_width,
+                    panel_height / fig_height
+                ])
+                ax.set_xticks([])
+                ax.set_yticks([])
+                for spine in ["top", "right", "bottom", "left"]:
+                    ax.spines[spine].set_visible(False)
+                axes_new[ii][jj] = ax
+        
+        # Create the large "All Phyla" panel spanning 2x2 in top-left
+        left_large = (4 * margin)
+        bottom_large = fig_height - ((4 * margin) + (2 * panel_height) + (1 * margin))
+        width_large = (2 * panel_width) + margin
+        height_large = (2 * panel_height) + margin
+        ax_large_new = fig_new.add_axes([
+            left_large / fig_width,
+            bottom_large / fig_height,
+            width_large / fig_width,
+            height_large / fig_height
+        ])
+        ax_large_new.set_xticks([])
+        ax_large_new.set_yticks([])
+        for spine in ["top", "right", "bottom", "left"]:
+            ax_large_new.spines[spine].set_visible(False)
+        
+        # Add figure title if requested
+        if include_labels:
+            fig_new.suptitle(f"Phyla plot for {args.filelist}", fontsize=10)
+        
+        # Plot the large "All Phyla" panel
+        if include_points:
+            if use_existing_colors:
+                # Use phyla_in_data_all to show ALL phyla, not just the custom selection
+                for phylum in sorted(phyla_in_data_all):
+                    phylum_mask = df["phylum"] == phylum
+                    phylum_df = df[phylum_mask]
+                    ax_large_new.scatter(phylum_df["UMAP1"], phylum_df["UMAP2"],
+                              s=3.0, lw=0, alpha=0.6,
+                              color=phylum_df["color"])
+            else:
+                # Use phyla_in_data_all to show ALL phyla, not just the custom selection
+                for phylum in sorted(phyla_in_data_all):
+                    phylum_mask = df["phylum"] == phylum
+                    phylum_df = df[phylum_mask]
+                    ax_large_new.scatter(phylum_df["UMAP1"], phylum_df["UMAP2"],
+                              s=3.0, lw=0, alpha=0.6,
+                              color=phylum_colors[phylum])
+        
+        if include_labels:
+            ax_large_new.text(0.5, 1.0, "All Phyla", 
+                    transform=ax_large_new.transAxes, fontsize=12, ha='center', va='top', fontweight='bold')
+        
+        # Set limits
+        if use_square_panels:
+            set_square_limits(ax_large_new, df["UMAP1"], df["UMAP2"], q=None, pad=0.01)
+        else:
+            x = df["UMAP1"].values
+            y = df["UMAP2"].values
+            x0, x1 = x.min(), x.max()
+            y0, y1 = y.min(), y.max()
+            pad_val = 0.01
+            px = (x1 - x0) * pad_val
+            py = (y1 - y0) * pad_val
+            ax_large_new.set_xlim(x0 - px, x1 + px)
+            ax_large_new.set_ylim(y0 - py, y1 + py)
+            ax_large_new.set_aspect("equal", adjustable="box")
+        
+        # Add axis direction legend if requested
+        if include_vectors:
+            xlim = ax_large_new.get_xlim()
+            ylim = ax_large_new.get_ylim()
+            arrow_scale = 0.15 * min(xlim[1] - xlim[0], ylim[1] - ylim[0])
+            arrow_origin_x = xlim[0] + 0.1 * (xlim[1] - xlim[0])
+            arrow_origin_y = ylim[0] + 0.1 * (ylim[1] - ylim[0])
+            
+            ax_large_new.arrow(arrow_origin_x, arrow_origin_y,
+                           original_x_axis[0] * arrow_scale, original_x_axis[1] * arrow_scale,
+                           head_width=arrow_scale*0.15, head_length=arrow_scale*0.2,
+                           fc='red', ec='red', alpha=0.7, lw=1.5)
+            ax_large_new.text(arrow_origin_x + original_x_axis[0] * arrow_scale * 1.3,
+                          arrow_origin_y + original_x_axis[1] * arrow_scale * 1.3,
+                          'UMAP1', fontsize=7, color='red', ha='center', va='center', fontweight='bold')
+            
+            ax_large_new.arrow(arrow_origin_x, arrow_origin_y,
+                           original_y_axis[0] * arrow_scale, original_y_axis[1] * arrow_scale,
+                           head_width=arrow_scale*0.15, head_length=arrow_scale*0.2,
+                           fc='blue', ec='blue', alpha=0.7, lw=1.5)
+            ax_large_new.text(arrow_origin_x + original_y_axis[0] * arrow_scale * 1.3,
+                          arrow_origin_y + original_y_axis[1] * arrow_scale * 1.3,
+                          'UMAP2', fontsize=7, color='blue', ha='center', va='center', fontweight='bold')
+        
+        # Plot individual phylum panels
+        phylum_idx_new = 0
+        for ii in range(num_rows):
+            for jj in range(num_cols):
+                if ii < 2 and jj < 2:
+                    continue
+                if phylum_idx_new >= len(phyla_in_data):
+                    break
+                
+                ax = axes_new[ii][jj]
+                if ax is None:
+                    continue
+                    
+                # phyla_in_data is already in the correct order (custom or sorted)
+                phylum = phyla_in_data[phylum_idx_new]
+                
+                # Plot points if requested
+                if include_points:
+                    # Plot grey background
+                    # Exclude both the current phylum AND Sipuncula from Annelida (since Sipuncula is nested)
+                    if phylum == "Annelida":
+                        # For Annelida, exclude both Annelida AND Sipuncula from background
+                        other_mask = (df["phylum"] != phylum) & (df["phylum"] != "Sipuncula")
+                    else:
+                        other_mask = df["phylum"] != phylum
+                    other_df = df[other_mask]
+                    if len(other_df) > 0:
+                        ax.scatter(other_df["UMAP1"], other_df["UMAP2"],
+                                  s=1.0, lw=0, alpha=0.3,
+                                  color=GREY_COLOR, zorder=1)
+                    
+                    # Plot highlighted phylum
+                    # For Annelida, explicitly exclude Sipuncula since it's nested within Annelida taxonomically
+                    if phylum == "Annelida":
+                        phylum_mask = (df["phylum"] == phylum)
+                        # The parse_taxids function already assigns Sipuncula samples to "Sipuncula", not "Annelida"
+                        # So this mask will naturally exclude Sipuncula, but we're being explicit here for clarity
+                    else:
+                        phylum_mask = df["phylum"] == phylum
+                    phylum_df = df[phylum_mask]
+                    if len(phylum_df) > 0:
+                        if use_existing_colors:
+                            ax.scatter(phylum_df["UMAP1"], phylum_df["UMAP2"],
+                                      s=1.5, lw=0, alpha=0.8,
+                                      color=phylum_df["color"], zorder=2)
+                        else:
+                            ax.scatter(phylum_df["UMAP1"], phylum_df["UMAP2"],
+                                      s=1.5, lw=0, alpha=0.8,
+                                      color=phylum_colors[phylum], zorder=2)
+                
+                # Add label if requested
+                if include_labels:
+                    phylum_count = (df["phylum"] == phylum).sum()
+                    ax.text(0.5, 1.0, f"{phylum}\nn = {phylum_count}", 
+                            transform=ax.transAxes, fontsize=7, ha='center', va='top',
+                            multialignment='center')
+                
+                # Set limits
+                if use_square_panels:
+                    set_square_limits(ax, df["UMAP1"], df["UMAP2"], q=None, pad=0.01)
+                else:
+                    x = df["UMAP1"].values
+                    y = df["UMAP2"].values
+                    x0, x1 = x.min(), x.max()
+                    y0, y1 = y.min(), y.max()
+                    pad_val = 0.01
+                    px = (x1 - x0) * pad_val
+                    py = (y1 - y0) * pad_val
+                    ax.set_xlim(x0 - px, x1 + px)
+                    ax.set_ylim(y0 - py, y1 + py)
+                    ax.set_aspect("equal", adjustable="box")
+                phylum_idx_new += 1
+            
+            if phylum_idx_new >= len(phyla_in_data):
+                break
+        
+        # Add grid separator lines if requested
+        if include_grid:
+            for jj in range(1, num_cols):
+                x_pos = ((4 * margin) + (jj * panel_width) + (jj * margin) - (margin / 2)) / fig_width
+                
+                if jj < 2:
+                    y_top = ((fig_height - ((4 * margin) + (2 * panel_height) + (2 * margin))) / fig_height)
+                    y_bottom = ((4 * margin) / fig_height)
+                    line = plt.Line2D([x_pos, x_pos], [y_top, y_bottom], 
+                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    fig_new.add_artist(line)
+                elif jj == 2:
+                    y_top = ((fig_height - (4 * margin)) / fig_height)
+                    y_bottom = ((4 * margin) / fig_height)
+                    line = plt.Line2D([x_pos, x_pos], [y_top, y_bottom], 
+                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    fig_new.add_artist(line)
+                else:
+                    y_top = ((fig_height - (4 * margin)) / fig_height)
+                    y_bottom = ((4 * margin) / fig_height)
+                    line = plt.Line2D([x_pos, x_pos], [y_top, y_bottom], 
+                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    fig_new.add_artist(line)
+            
+            for ii in range(1, num_rows):
+                y_pos = ((fig_height - ((4 * margin) + (ii * panel_height) + (ii * margin) - (margin / 2))) / fig_height)
+                
+                if ii < 2:
+                    x_left = ((4 * margin) + (2 * panel_width) + (2 * margin)) / fig_width
+                    x_right = ((fig_width - (4 * margin)) / fig_width)
+                    line = plt.Line2D([x_left, x_right], [y_pos, y_pos], 
+                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    fig_new.add_artist(line)
+                elif ii == 2:
+                    x_left = ((4 * margin) / fig_width)
+                    x_right = ((fig_width - (4 * margin)) / fig_width)
+                    line = plt.Line2D([x_left, x_right], [y_pos, y_pos], 
+                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    fig_new.add_artist(line)
+                else:
+                    x_left = ((4 * margin) / fig_width)
+                    x_right = ((fig_width - (4 * margin)) / fig_width)
+                    line = plt.Line2D([x_left, x_right], [y_pos, y_pos], 
+                                    transform=fig_new.transFigure, color="#BBBBBB", lw=1.0)
+                    fig_new.add_artist(line)
+        
+        return fig_new
+    
+    # Create and save the main figure with all elements
+    fig = create_phyla_figure(include_points=True, include_labels=True, include_grid=True, include_vectors=True)
+    print(f"Saving phyla plot to {outpdf}")
+    plt.savefig(outpdf)
+    print(f"Saved phyla plot to {outpdf}")
+    
+    # If clean output requested, create additional versions
+    if args.phyla_clean_output:
+        # Clean version: only data points, no annotations
+        clean_outpdf = outpdf.replace('.pdf', '_clean.pdf')
+        print(f"\nCreating clean version without annotations...")
+        fig_clean = create_phyla_figure(include_points=True, include_labels=False, include_grid=False, include_vectors=False)
+        print(f"Saving clean phyla plot to {clean_outpdf}")
+        plt.savefig(clean_outpdf)
+        print(f"Saved clean phyla plot to {clean_outpdf}")
+        plt.close(fig_clean)
+        
+        # Annotations-only version: all annotations, no data points
+        annotations_outpdf = outpdf.replace('.pdf', '_annotations.pdf')
+        print(f"\nCreating annotations-only version (no data points)...")
+        fig_annot = create_phyla_figure(include_points=False, include_labels=True, include_grid=True, include_vectors=True)
+        print(f"Saving annotations-only phyla plot to {annotations_outpdf}")
+        plt.savefig(annotations_outpdf)
+        print(f"Saved annotations-only phyla plot to {annotations_outpdf}")
+        plt.close(fig_annot)
+    
+    plt.close(fig)
+
 def generate_umap_grid_bokeh(df_dict, output_html):
     """
     Takes a dictionary of UMAP DataFrames and generates a Bokeh grid plot.
@@ -1322,6 +1986,13 @@ def main():
         df_by_rank, all_params, row_labels = load_phylo_df_by_rank_from_phylolist(args.phylolist)
         outpdf = args.prefix + ".phyloresample.pdf"
         plot_phylo_resampling_grid(df_by_rank, all_params, row_labels, outpdf)
+        return
+
+    if args.plot_phyla:
+        metadatadf = parse_metadata_dfs(args.metadata) if args.metadata else None
+        print(f"Metadata DataFrame:\n {metadatadf.head() if metadatadf is not None else 'No metadata provided'}")
+        outpdf = args.prefix + ".phyla.pdf"
+        plot_phyla(args, outpdf, metadata_df = metadatadf)
         return
 
     if args.plot_features:

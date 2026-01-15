@@ -25,7 +25,7 @@ rule count_chromosomes:
         "chrom_counts/{sample}.chrom_counts"
     threads: 1
     resources:
-        mem_mb  = 200,
+        mem_mb  = 1000,
         runtime = 10
     shell:
         """
@@ -45,7 +45,7 @@ rule cat_results:
         outfile = "species_chrom_counts.tsv"
     threads: 1
     resources:
-        mem_mb  = 200,
+        mem_mb  = 1000,
         runtime = 10
     run:
         outhandle = open(output.outfile, "w")

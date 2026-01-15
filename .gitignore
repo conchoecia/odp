@@ -64,3 +64,12 @@ dev_scripts/snakemake_jobs_testing/find_and_plot_gzip_timing.py
 dev_scripts/snakemake_jobs_testing/gzip_time_test.snakefile
 dev_scripts/snakemake_jobs_testing/job_gzip.snakefile
 dev_scripts/snakemake_jobs_testing/job_limiting.snakefile
+dev_scripts/CUSTOM_PHYLOGENY_README.md
+dev_scripts/AnnotateSampleDf_RESOURCE_ALLOCATION.md
+REFACTORING_SUMMARY.md
+dev_scripts/analyze_resource_usage.py
+dev_scripts/diagnose_phylo_weights.py
+dev_scripts/PhyloTreeUMAP_subsampling.preedit.README.md
+dev_scripts/RESOURCE_ANALYSIS_QUICKREF.md
+dev_scripts/SIZENAN_REFACTORING_QUICK_REF.md
+dev_scripts/TEMPORAL_INTEGRATION_SUMMARY.md

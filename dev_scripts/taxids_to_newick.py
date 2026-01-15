@@ -89,6 +89,67 @@ def parse_args():
     return parser.parse_args()
 
 
+def is_subspecies_or_below(taxid, ncbi):
+    """
+    Check if a taxid represents a subspecies or lower rank.
+    Returns True if it's below species level.
+    
+    Parameters:
+    -----------
+    taxid : int
+        NCBI taxid to check
+    ncbi : NCBITaxa
+        NCBI taxonomy database object
+        
+    Returns:
+    --------
+    bool : True if subspecies or below, False otherwise
+    """
+    try:
+        # Get rank from NCBI
+        lineage = ncbi.get_lineage(taxid)
+        lineage_ranks = ncbi.get_rank(lineage)
+        rank = lineage_ranks.get(taxid, "").lower()
+        
+        # Subspecies and below should be excluded
+        subspecies_ranks = ["subspecies", "varietas", "variety", "forma", "form", "subvariety"]
+        return rank in subspecies_ranks
+    except:
+        return False
+
+
+def get_species_level_taxid(taxid, ncbi):
+    """
+    Given any taxid, return the species-level taxid.
+    If already at species level or above, return itself.
+    If subspecies, return parent species taxid.
+    
+    Parameters:
+    -----------
+    taxid : int
+        NCBI taxid to convert
+    ncbi : NCBITaxa
+        NCBI taxonomy database object
+        
+    Returns:
+    --------
+    int : Species-level taxid
+    """
+    try:
+        lineage = ncbi.get_lineage(taxid)
+        lineage_ranks = ncbi.get_rank(lineage)
+        
+        # Find the species-level taxid in the lineage
+        for tid in reversed(lineage):
+            if lineage_ranks.get(tid, "").lower() == "species":
+                return tid
+        
+        # If no species found, return original
+        return taxid
+    except:
+        return taxid
+
+
 def read_taxids_from_config(config_file):
     """
     Read taxids from a YAML config file.
@@ -122,7 +183,13 @@ def read_taxids_from_config(config_file):
     if 'species' not in config:
         raise ValueError("Config file must contain a 'species' section")
     
+    # Initialize NCBI for subspecies checking
+    ncbi = NCBITaxa()
+    
     taxids = set()
+    subspecies_converted = 0
+    subspecies_details = []
+    
     for species_name, species_data in config['species'].items():
         if 'taxid' not in species_data:
             print(f"Warning: No 'taxid' field found for species: {species_name}, skipping...")
@@ -130,6 +197,16 @@ def read_taxids_from_config(config_file):
         
         try:
             taxid = int(species_data['taxid'])
+            original_taxid = taxid
+            
+            # Convert subspecies to species-level taxid
+            if is_subspecies_or_below(taxid, ncbi):
+                species_taxid = get_species_level_taxid(taxid, ncbi)
+                if species_taxid != taxid:
+                    subspecies_details.append((species_name, taxid, species_taxid))
+                    taxid = species_taxid
+                    subspecies_converted += 1
+            
             taxids.add(taxid)
         except (ValueError, TypeError):
             print(f"Warning: Invalid taxid for species {species_name}: {species_data.get('taxid')}, skipping...")
@@ -138,7 +215,28 @@ def read_taxids_from_config(config_file):
     if len(taxids) == 0:
         raise ValueError("No valid taxids found in config file")
     
-    print(f"Extracted {len(taxids)} unique taxids from config file")
+    print(f"Extracted {len(taxids)} unique species-level taxids from config file")
+    if subspecies_converted > 0:
+        print(f"  Converted {subspecies_converted} subspecies/variety entries to species-level")
+        
+        # Write detailed conversion report to file
+        report_file = "subspecies_to_species_conversions.tsv"
+        with open(report_file, 'w') as f:
+            f.write("config_entry\toriginal_taxid\toriginal_name\tspecies_taxid\tspecies_name\n")
+            for name, sub_id, sp_id in subspecies_details:
+                sub_name = ncbi.get_taxid_translator([sub_id]).get(sub_id, f"taxid_{sub_id}")
+                sp_name = ncbi.get_taxid_translator([sp_id]).get(sp_id, f"taxid_{sp_id}")
+                f.write(f"{name}\t{sub_id}\t{sub_name}\t{sp_id}\t{sp_name}\n")
+        print(f"  Wrote conversion report to: {report_file}")
+        
+        print(f"  Example conversions (showing first 5):")
+        for name, sub_id, sp_id in subspecies_details[:5]:
+            sub_name = ncbi.get_taxid_translator([sub_id]).get(sub_id, f"taxid_{sub_id}")
+            sp_name = ncbi.get_taxid_translator([sp_id]).get(sp_id, f"taxid_{sp_id}")
+            print(f"    {name}: {sub_name} (taxid {sub_id}) -> {sp_name} (taxid {sp_id})")
+        if len(subspecies_details) > 5:
+            print(f"    ... and {len(subspecies_details) - 5} more")
+    
     return taxids
 
 
@@ -263,7 +361,8 @@ def build_subtree_with_labels(taxids, ncbi, root_taxid, root_name):
                     if most_specific:
                         try:
                             taxon_name = ncbi.get_taxid_translator([most_specific]).get(most_specific, f"taxid_{most_specific}")
-                            node.name = f"{taxon_name.replace(' ', '_')}[{most_specific}]"
+                            clean_name = taxon_name.replace(' ', '_').replace("'", "")
+                            node.name = f"{clean_name}[{most_specific}]"
                             internal_count += 1
                         except Exception as e:
                             node.name = f"node[{most_specific}]"
@@ -462,16 +561,47 @@ def main():
     print(f"Output tree file: {args.output_file}")
     print()
 
+    # Initialize NCBI Taxonomy object early for subspecies checking
+    ncbi = NCBITaxa()
+    
     # Read taxids from either taxid_file or config_file
     if args.taxid_file:
         print(f"Reading taxids from file: {args.taxid_file}")
-        taxids = set()
+        raw_taxids = set()
         with open(args.taxid_file, 'r') as f:
             for line in f:
                 line = line.strip()
                 if line.isdigit():
-                    taxids.add(int(line))  # ensure integers
-        print(f"Found {len(taxids)} taxids in file")
+                    raw_taxids.add(int(line))  # ensure integers
+        print(f"Found {len(raw_taxids)} taxids in file")
+        
+        # Convert subspecies to species-level
+        taxids = set()
+        subspecies_converted = 0
+        subspecies_details = []
+        for taxid in raw_taxids:
+            if is_subspecies_or_below(taxid, ncbi):
+                species_taxid = get_species_level_taxid(taxid, ncbi)
+                if species_taxid != taxid:
+                    subspecies_details.append((taxid, species_taxid))
+                    subspecies_converted += 1
+                taxids.add(species_taxid)
+            else:
+                taxids.add(taxid)
+        
+        if subspecies_converted > 0:
+            print(f"  Converted {subspecies_converted} subspecies/variety taxids to species-level")
+            print(f"  Result: {len(taxids)} unique species-level taxids")
+            
+            # Write detailed conversion report to file
+            report_file = "subspecies_to_species_conversions.tsv"
+            with open(report_file, 'w') as f:
+                f.write("original_taxid\toriginal_name\tspecies_taxid\tspecies_name\n")
+                for sub_id, sp_id in subspecies_details:
+                    sub_name = ncbi.get_taxid_translator([sub_id]).get(sub_id, f"taxid_{sub_id}")
+                    sp_name = ncbi.get_taxid_translator([sp_id]).get(sp_id, f"taxid_{sp_id}")
+                    f.write(f"{sub_id}\t{sub_name}\t{sp_id}\t{sp_name}\n")
+            print(f"  Wrote conversion report to: {report_file}")
     elif args.config_file:
         print(f"Reading taxids from config file: {args.config_file}")
         taxids = read_taxids_from_config(args.config_file)
@@ -484,9 +614,6 @@ def main():
 
     if len(taxids) < 2:
         raise ValueError("You need at least two unique taxids to construct a tree.")
-
-    # Initialize NCBI Taxonomy object
-    ncbi = NCBITaxa()
 
     # Optionally update the local database (slow!)
     # ncbi.update_taxonomy_database()
@@ -512,7 +639,8 @@ def main():
     for node in tree.traverse():
         if node.is_leaf:
             tid = int(node.name)
-            node.name = name_dict.get(tid, f"taxid_{tid}").replace(" ", "_")
+            species_name = name_dict.get(tid, f"taxid_{tid}").replace(" ", "_").replace("'", "")
+            node.name = f"{species_name}[{tid}]"  # Format: Homo_sapiens[9606]
             leaf_count += 1
     
     print(f"  Labeled {leaf_count} leaf nodes")
@@ -630,8 +758,12 @@ def main():
     print(f"\nNewick tree written to: {args.output_file}")
     print(f"  (Includes internal node labels)")
     
-    # Export TimeTree-compatible species list if requested
-    if args.timetree_list:
+    # Always export TimeTree-compatible species list to species_list.txt
+    species_list_file = "species_list.txt"
+    export_timetree_list(taxids, ncbi, species_list_file)
+    
+    # Also export to custom location if specified
+    if args.timetree_list and args.timetree_list != species_list_file:
         export_timetree_list(taxids, ncbi, args.timetree_list)
     
     if args.custom_phylogeny:

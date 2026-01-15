@@ -26,7 +26,140 @@ import pandas as pd
 import numpy as np
 import scipy
 from scipy.special import comb
+from scipy.stats import gaussian_kde
 import sys
+
+def panel_chromnum_vs_fusions_hexbin(ax, labels, chromnum, colocs, losses):
+    """
+    Hexbin plot of chromosome number vs fusion count to address overplotting
+    """
+    hb = ax.hexbin(chromnum, colocs, gridsize=40, cmap='Blues', 
+                   bins='log', mincnt=1, linewidths=0.2, edgecolors='lightgray')
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("Number of chromosomes")
+    ax.set_ylabel("Number of colocalizations (fusions)")
+    ax.set_title("Chromosome count vs Fusions (hexbin density)")
+    
+    # Add colorbar
+    cbar = plt.colorbar(hb, ax=ax)
+    cbar.set_label('log10(count)', rotation=270, labelpad=15)
+    
+    # Add correlation stats
+    spearman_corr, p_value = scipy.stats.spearmanr(chromnum, colocs)
+    kendall_tau, kp_value = scipy.stats.kendalltau(chromnum, colocs)
+    ax.text(0.02, 0.98, "Spearman: {:.3f} (p={:.2e})\nKendall: {:.3f} (p={:.2e})".format(
+        spearman_corr, p_value, kendall_tau, kp_value), 
+        transform=ax.transAxes, va='top', fontsize=9,
+        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    return ax
+
+def panel_chromnum_vs_losses_hexbin(ax, labels, chromnum, colocs, losses):
+    """
+    Hexbin plot of chromosome number vs loss count (absolute values)
+    """
+    losses_abs = [-1 * x for x in losses]  # Convert to positive
+    hb = ax.hexbin(chromnum, losses_abs, gridsize=40, cmap='Reds', 
+                   bins='log', mincnt=1, linewidths=0.2, edgecolors='lightgray')
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("Number of chromosomes")
+    ax.set_ylabel("Number of losses (absolute)")
+    ax.set_title("Chromosome count vs Losses (hexbin density)")
+    
+    # Add colorbar
+    cbar = plt.colorbar(hb, ax=ax)
+    cbar.set_label('log10(count)', rotation=270, labelpad=15)
+    
+    # Add correlation stats
+    spearman_corr, p_value = scipy.stats.spearmanr(chromnum, losses_abs)
+    kendall_tau, kp_value = scipy.stats.kendalltau(chromnum, losses_abs)
+    ax.text(0.02, 0.98, "Spearman: {:.3f} (p={:.2e})\nKendall: {:.3f} (p={:.2e})".format(
+        spearman_corr, p_value, kendall_tau, kp_value), 
+        transform=ax.transAxes, va='top', fontsize=9,
+        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    return ax
+
+def panel_coloc_vs_losses_hexbin(ax, labels, chromnum, colocs, losses):
+    """
+    Hexbin plot of colocalizations vs losses to show correlation density
+    """
+    losses_abs = [-1 * x for x in losses]  # Convert to positive
+    hb = ax.hexbin(colocs, losses_abs, gridsize=35, cmap='Greys', 
+                   bins='log', mincnt=1, linewidths=0.2, edgecolors='lightgray')
+    ax.set_xlabel("Number of colocalizations")
+    ax.set_ylabel("Number of losses (absolute)")
+    ax.set_title("Fusions vs Losses (hexbin density)")
+    
+    # Add colorbar
+    cbar = plt.colorbar(hb, ax=ax)
+    cbar.set_label('log10(count)', rotation=270, labelpad=15)
+    
+    # Add correlation stats
+    spearman_corr, p_value = scipy.stats.spearmanr(colocs, losses_abs)
+    kendall_tau, kp_value = scipy.stats.kendalltau(colocs, losses_abs)
+    ax.text(0.5, 0.2, "Spearman: {:.3f} (p={:.2e})\nKendall: {:.3f} (p={:.2e})".format(
+        spearman_corr, p_value, kendall_tau, kp_value), 
+        transform=ax.transAxes, fontsize=9,
+        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    return ax
+
+def panel_fraction_fusions_and_loss_counts(ax, labels, chromnum, colocs, losses, num_ALGs=29):
+    """
+    Stacked panel: fraction of possible fusions (top) and absolute loss counts (bottom)
+    """
+    # Calculate fraction of possible fusions
+    fraction_coloc = []
+    chromnum_frac = []
+    for i in range(len(chromnum)):
+        num_combinations = comb(num_ALGs + losses[i], 2)
+        if num_combinations > 0:
+            fraction_coloc.append(colocs[i] / num_combinations)
+            chromnum_frac.append(chromnum[i])
+    
+    # Get absolute loss values
+    losses_abs = [-1 * x for x in losses]
+    
+    # Plot fraction of fusions in top half (positive y)
+    ax.scatter(chromnum_frac, fraction_coloc, color='blue', 
+               alpha=0.15, s=20, edgecolors='none', label='Fraction fusions')
+    
+    # Plot absolute loss counts in bottom half (negative y for visual separation)
+    losses_neg = [-1 * x for x in losses_abs]  # Make negative for bottom half
+    ax.scatter(chromnum, losses_neg, color='red', 
+               alpha=0.15, s=20, edgecolors='none', label='Loss counts')
+    
+    # Add horizontal line at y=0
+    ax.axhline(0, color='black', linewidth=1.5, alpha=0.7)
+    
+    # Add reference line at 29 chromosomes
+    ymin = min(losses_neg) if losses_neg else -30
+    ymax = max(fraction_coloc) if fraction_coloc else 0.5
+    ax.plot([29, 29], [ymin, ymax], color='gray', linewidth=1, 
+            alpha=0.5, linestyle='--')
+    ax.text(29, ymax * 0.95, '29 BCnS ALGs', rotation=90, 
+            va='top', ha='right', fontsize=9, alpha=0.7)
+    
+    ax.set_xlim(0, 100)
+    ax.set_xlabel('Number of chromosomes')
+    ax.set_ylabel('Fraction fusions (top) | Loss counts (bottom, negative)')
+    ax.set_title('Fusion fraction vs Loss counts')
+    ax.legend(loc='upper right', fontsize=9)
+    
+    # Add correlation stats for each half
+    if len(chromnum_frac) > 0:
+        sp_frac, pv_frac = scipy.stats.spearmanr(chromnum_frac, fraction_coloc)
+        ax.text(0.02, 0.98, 'Fusions: ρ={:.3f}'.format(sp_frac),
+                transform=ax.transAxes, va='top', fontsize=8,
+                bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7))
+    
+    sp_loss, pv_loss = scipy.stats.spearmanr(chromnum, losses_abs)
+    ax.text(0.02, 0.02, 'Losses: ρ={:.3f}'.format(sp_loss),
+            transform=ax.transAxes, va='bottom', fontsize=8,
+            bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.7))
+    
+    return ax
 
 def panel_chromsize_vs_changes_bins(ax, labels, chromnum, colocs, losses):
     """
@@ -396,8 +529,8 @@ def plot_chrom_number_vs_changes(changesfilename, chromsizefilename, outfilename
             if y2val == 0:
                 print(sample, " has 0 losses")
 
-    fw = 20
-    fh = 32
+    fw = 26  # Increased width for 4th column
+    fh = 38  # Increased height for additional row
     fig = plt.figure(figsize=(fw, fh))
     axes = []
 
@@ -478,6 +611,66 @@ def plot_chrom_number_vs_changes(changesfilename, chromsizefilename, outfilename
                    paneldim/fh] # height
     axes.append(fig.add_axes(plot_params))
     axes[-1] = panel_chromosomes_vs_fractionloss(axes[-1], labels, chromnum, colocs, losses)
+
+    # NEW PANELS - Using 4th column and additional row for density visualizations
+    
+    # Row 1, Column 4: Hexbin for chromosome vs fusions
+    plot_params = [left4   /fw, # left offset
+                   bottom1 /fh, # bottom offset
+                   paneldim/fw, # width
+                   paneldim/fh] # height
+    axes.append(fig.add_axes(plot_params))
+    axes[-1] = panel_chromnum_vs_fusions_hexbin(axes[-1], labels, chromnum, colocs, losses)
+
+    # Row 2, Column 4: Hexbin for chromosome vs losses
+    plot_params = [left4   /fw, # left offset
+                   bottom2 /fh, # bottom offset
+                   paneldim/fw, # width
+                   paneldim/fh] # height
+    axes.append(fig.add_axes(plot_params))
+    axes[-1] = panel_chromnum_vs_losses_hexbin(axes[-1], labels, chromnum, colocs, losses)
+
+    # Row 3, Column 4: Hexbin for colocalizations vs losses
+    plot_params = [left4   /fw, # left offset
+                   bottom3 /fh, # bottom offset
+                   paneldim/fw, # width
+                   paneldim/fh] # height
+    axes.append(fig.add_axes(plot_params))
+    axes[-1] = panel_coloc_vs_losses_hexbin(axes[-1], labels, chromnum, colocs, losses)
+
+    # Row 4: New row for the stacked fraction fusions (top) and loss counts (bottom)
+    bottom4 = 18.0
+    plot_params = [left1   /fw, # left offset
+                   bottom4 /fh, # bottom offset
+                   paneldim/fw, # width
+                   paneldim/fh] # height
+    axes.append(fig.add_axes(plot_params))
+    axes[-1] = panel_fraction_fusions_and_loss_counts(axes[-1], labels, chromnum, colocs, losses)
+
+    # Row 4, Column 2: Another view - 2D histogram version of fraction fusions
+    plot_params = [left2   /fw, # left offset
+                   bottom4 /fh, # bottom offset
+                   paneldim/fw, # width
+                   paneldim/fh] # height
+    axes.append(fig.add_axes(plot_params))
+    # Create 2D histogram of fraction fusions
+    fraction_coloc_all = []
+    chromnum_all = []
+    for i in range(len(chromnum)):
+        num_combinations = comb(29 + losses[i], 2)
+        if num_combinations > 0:
+            fraction_coloc_all.append(colocs[i] / num_combinations)
+            chromnum_all.append(chromnum[i])
+    
+    if len(chromnum_all) > 0:
+        h = axes[-1].hist2d(chromnum_all, fraction_coloc_all, bins=[50, 40], 
+                           cmap='Blues', cmin=1)
+        axes[-1].set_xlabel('Number of chromosomes')
+        axes[-1].set_ylabel('Fraction of possible fusions')
+        axes[-1].set_title('Fusion fraction density (2D histogram)')
+        axes[-1].set_xlim(0, 100)
+        cbar = plt.colorbar(h[3], ax=axes[-1])
+        cbar.set_label('Count', rotation=270, labelpad=15)
 
     fig.savefig(outfilename, bbox_inches="tight")
 

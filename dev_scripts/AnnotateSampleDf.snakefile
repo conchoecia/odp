@@ -663,7 +663,7 @@ rule pdf:
         prefix = lambda wildcards, output: output.pdf.replace('.features.pdf', '')
     shell:
         """
-        python {input.plotdfs} --plot_features -f {input.df} -p {params.prefix} --threecolor --genome-min-bp 100000000 --genome-max-bp 5000000000
+        python {input.plotdfs} --plot_features -f {input.df} -p {params.prefix} --threecolor --genome-min-bp 100000000 --genome-max-bp 5000000000 --num-cols 7
         """
 
 rule dispersion_plot:
