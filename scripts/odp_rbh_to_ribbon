@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 from matplotlib.path import Path
 import matplotlib.path as mpath
 import matplotlib.patches as patches
+from matplotlib.backends.backend_pdf import PdfPages
 import pandas as pd
 
 
@@ -75,9 +76,29 @@ else:
 if "chromorder" not in config:
     config["chromorder"] = {}
 
+# Parse loci_of_interest from config
+# Collect all unique locus labels across all species
+locus_labels = set()
+sp_to_locus_to_file = {}
+if "species" in config:
+    for sp in config["species"]:
+        if "loci_of_interest" in config["species"][sp]:
+            sp_to_locus_to_file[sp] = config["species"][sp]["loci_of_interest"]
+            for locus_label in config["species"][sp]["loci_of_interest"]:
+                locus_labels.add(locus_label)
+
+# Generate output files for base plot and each locus label
+output_files = ["output.pdf"]
+if len(locus_labels) > 0:
+    output_files.extend(["output_{}.pdf".format(label) for label in sorted(locus_labels)])
+
+# Add color_map to config if not present
+if "color_map" not in config:
+    config["color_map"] = {}
+
 rule all:
     input:
-        "output.pdf"
+        output_files
 
 def _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size, sp_to_gene_order, sp_min_chr_size):
     """
@@ -132,6 +153,243 @@ def _optimize_spA_based_on_rbh(sp, prevsp, rbhdf, sp_to_chromorder, sp_to_gene_o
     rbhdf.sort_values(by=["sort_index", "whole_FET"], ascending=[True, True], inplace=True)
     rbhdf.reset_index(drop=True, inplace=True)
     return rbhdf["{}_scaf".format(sp)].tolist()
+
+def _get_locus_color(gene_name, color_map):
+    """
+    Perform case-insensitive substring matching to find the best color match.
+    Returns the hex color of the longest matching substring, or "#000000" if no match.
+    """
+    if not color_map:
+        return "#000000"
+    
+    best_match = None
+    best_match_len = 0
+    gene_name_lower = gene_name.lower()
+    
+    for keyword, color in color_map.items():
+        keyword_lower = keyword.lower()
+        if keyword_lower in gene_name_lower:
+            if len(keyword_lower) > best_match_len:
+                best_match = color
+                best_match_len = len(keyword_lower)
+    
+    return best_match if best_match else "#000000"
+
+def _load_loci_data(locus_label, sp_to_locus_to_file, species_order):
+    """
+    Load loci of interest data for a specific locus label.
+    Returns a dict mapping species -> list of (gene, scaffold, strand, start, end) tuples
+    """
+    sp_to_loci = {}
+    for sp in species_order:
+        if sp in sp_to_locus_to_file and locus_label in sp_to_locus_to_file[sp]:
+            chrom_file = sp_to_locus_to_file[sp][locus_label]
+            sp_to_loci[sp] = []
+            with open(chrom_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        fields = line.split()
+                        if len(fields) >= 5:
+                            gene, scaffold, strand, start, end = fields[0], fields[1], fields[2], int(fields[3]), int(fields[4])
+                            sp_to_loci[sp].append((gene, scaffold, strand, start, end))
+    return sp_to_loci
+
+def _calculate_annotation_box_positions(gene_positions):
+    """
+    Calculate non-overlapping box positions for gene annotations.
+    Returns: (box_positions, box_width) where box_positions is list of x-centers.
+    """
+    import numpy as np
+    
+    if not gene_positions:
+        return [], 0.008
+    
+    # Sort by x position (genomic order)
+    gene_positions = sorted(gene_positions, key=lambda x: x[0])
+    genomic_positions = [pos for pos, _, _ in gene_positions]
+    
+    # Parameters
+    box_width = 0.008
+    min_spacing = box_width / 20.0
+    cluster_gap_threshold = 0.05
+    
+    # Identify clusters
+    clusters = []
+    current_cluster = [0]
+    for i in range(1, len(gene_positions)):
+        gap = genomic_positions[i] - genomic_positions[i-1]
+        if gap > cluster_gap_threshold:
+            clusters.append(current_cluster)
+            current_cluster = [i]
+        else:
+            current_cluster.append(i)
+    clusters.append(current_cluster)
+    
+    # Process each cluster
+    box_positions = [0.0] * len(gene_positions)
+    
+    for cluster_indices in clusters:
+        cluster_genomic = [genomic_positions[i] for i in cluster_indices]
+        cluster_centroid = np.mean(cluster_genomic)
+        cluster_box_pos = list(cluster_genomic)
+        
+        for iteration in range(50):
+            changed = False
+            for j in range(1, len(cluster_box_pos)):
+                min_allowed_pos = cluster_box_pos[j-1] + box_width + min_spacing
+                if cluster_box_pos[j] < min_allowed_pos:
+                    cluster_box_pos[j] = min_allowed_pos
+                    changed = True
+            
+            box_centroid = np.mean(cluster_box_pos)
+            offset = cluster_centroid - box_centroid
+            cluster_box_pos = [pos + offset for pos in cluster_box_pos]
+            
+            needs_adjustment = False
+            for j in range(1, len(cluster_box_pos)):
+                if cluster_box_pos[j] < cluster_box_pos[j-1] + box_width + min_spacing:
+                    needs_adjustment = True
+                    break
+            if not needs_adjustment and not changed:
+                break
+        
+        for j, idx in enumerate(cluster_indices):
+            box_positions[idx] = cluster_box_pos[j]
+    
+    # Check for inter-cluster overlaps and merge
+    # Only merge if boxes overlap AND genomic distance is reasonable
+    merged = True
+    while merged:
+        merged = False
+        i = 0
+        while i < len(clusters) - 1:
+            right_idx = clusters[i][-1]
+            left_idx = clusters[i+1][0]
+            right_edge = box_positions[right_idx] + box_width/2
+            left_edge = box_positions[left_idx] - box_width/2
+            
+            # Check genomic distance between clusters
+            genomic_gap = genomic_positions[left_idx] - genomic_positions[right_idx]
+            
+            # Only merge if boxes overlap AND genomic distance is less than threshold
+            if right_edge + min_spacing > left_edge and genomic_gap < cluster_gap_threshold:
+                clusters[i].extend(clusters[i+1])
+                clusters.pop(i+1)
+                
+                cluster_indices = clusters[i]
+                cluster_genomic = [genomic_positions[idx] for idx in cluster_indices]
+                cluster_centroid = np.mean(cluster_genomic)
+                cluster_box_pos = [box_positions[idx] for idx in cluster_indices]
+                
+                for iteration in range(50):
+                    changed = False
+                    for j in range(1, len(cluster_box_pos)):
+                        min_allowed_pos = cluster_box_pos[j-1] + box_width + min_spacing
+                        if cluster_box_pos[j] < min_allowed_pos:
+                            cluster_box_pos[j] = min_allowed_pos
+                            changed = True
+                    
+                    box_centroid = np.mean(cluster_box_pos)
+                    offset = cluster_centroid - box_centroid
+                    cluster_box_pos = [pos + offset for pos in cluster_box_pos]
+                    
+                    needs_adjustment = False
+                    for j in range(1, len(cluster_box_pos)):
+                        if cluster_box_pos[j] < cluster_box_pos[j-1] + box_width + min_spacing:
+                            needs_adjustment = True
+                            break
+                    if not needs_adjustment and not changed:
+                        break
+                
+                for j, idx in enumerate(cluster_indices):
+                    box_positions[idx] = cluster_box_pos[j]
+                
+                merged = True
+                break
+            else:
+                i += 1
+    
+    return box_positions, box_width
+
+def _draw_gene_annotations(panel, gene_positions, species_y, species_order, precomputed_positions=None):
+    """
+    Draw gene annotation boxes with triangular pointers.
+    gene_positions is a list of (x_position, gene_name, color, strand) tuples.
+    precomputed_positions: optional pre-calculated box positions from _calculate_annotation_box_positions.
+    """
+    import numpy as np
+    
+    # Sort by x position (genomic order)
+    gene_positions = sorted(gene_positions, key=lambda x: x[0])
+    
+    if not gene_positions:
+        return
+    
+    # Parameters for square boxes
+    box_width = 0.008
+    box_height = 0.008 * 7.15 / 0.5  # ≈ 0.1144
+    y_offset = 0.20
+    
+    # Use precomputed positions if provided, otherwise calculate them
+    if precomputed_positions is None:
+        # Extract just position, name, color for calculation (ignore strand)
+        positions_for_calc = [(x, name, col) for x, name, col, strand in gene_positions]
+        box_positions, box_width = _calculate_annotation_box_positions(positions_for_calc)
+    else:
+        box_positions = precomputed_positions
+    
+    # Draw annotations at calculated positions
+    for i, (genomic_x_pos, gene_name, color, strand) in enumerate(gene_positions):
+        box_x_center = box_positions[i]
+        box_x_left = box_x_center - box_width / 2
+        box_x_right = box_x_center + box_width / 2
+        box_x_mid = box_x_center
+        box_bottom_y = species_y - y_offset - box_height
+        box_top_y = species_y - y_offset
+        box_mid_y = species_y - y_offset - box_height / 2
+        
+        # Draw polygon with clipped corner based on strand
+        if strand == '+':
+            # Clip bottom-right corner for + strand
+            box_vertices = [
+                [box_x_left, box_top_y],      # top-left
+                [box_x_right, box_top_y],     # top-right
+                [box_x_right, box_mid_y],     # right-middle (50% down)
+                [box_x_mid, box_bottom_y],    # bottom-middle (50% across)
+                [box_x_left, box_bottom_y]    # bottom-left
+            ]
+        else:  # strand == '-'
+            # Clip bottom-left corner for - strand
+            box_vertices = [
+                [box_x_left, box_top_y],      # top-left
+                [box_x_right, box_top_y],     # top-right
+                [box_x_right, box_bottom_y],  # bottom-right
+                [box_x_mid, box_bottom_y],    # bottom-middle (50% across)
+                [box_x_left, box_mid_y]       # left-middle (50% down)
+            ]
+        
+        box = patches.Polygon(box_vertices, closed=True,
+                             linewidth=0, facecolor=color,
+                             zorder=200)
+        panel.add_patch(box)
+        
+        # Draw triangular pointer from top of box pointing down to genomic position
+        triangle_vertices = [
+            [box_x_left, box_top_y],
+            [box_x_left + box_width, box_top_y],
+            [genomic_x_pos, species_y]  # Points to actual genomic position
+        ]
+        triangle = patches.Polygon(triangle_vertices, closed=True,
+                                  linewidth=0, facecolor=color,
+                                  zorder=199)
+        panel.add_patch(triangle)
+        
+        # Add gene name above the box, rotated
+        text_y = box_bottom_y - 0.01
+        panel.text(box_x_left, text_y, gene_name,
+                  ha='left', va='bottom', fontsize=3,
+                  rotation=45, zorder=201)
 
 def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy, plot_unassigned=True):
     """
@@ -188,7 +446,9 @@ def subway_plot(species_order, rbh_filelist,
                 sp_to_gene_order = None,
                 chr_sort_order   = "custom",
                 plot_all = False,
-                plot_unassigned_rbh = True):
+                plot_unassigned_rbh = True,
+                loci_data = None,
+                color_map = None):
     """
     Takes in a list of species as the plotting order,
      a list of rbh files, and a dict of species_to_chr_to_sizes
@@ -602,6 +862,72 @@ def subway_plot(species_order, rbh_filelist,
             pIx.plot([x1,x2],[i,i],'k-')
             pIx.text(x1, i-0.03, row["chrom"], ha="left", va = "bottom", fontsize = 4)
 
+    # Plot loci of interest overlays
+    if loci_data and color_map is not None:
+        for i in range(len(species_order)):
+            sp = species_order[i]
+            if sp not in loci_data:
+                continue
+                
+            # Calculate line extent (1/5 of distance to next species)
+            if i < len(species_order) - 1:
+                line_extent = 0.2
+            else:
+                line_extent = 0.2
+            
+            for gene, scaffold, strand, start, end in loci_data[sp]:
+                if scaffold not in sp_to_chromorder[sp]:
+                    continue
+                
+                # Get color for this gene
+                locus_color = _get_locus_color(gene, color_map)
+                
+                # Calculate position in chromosome coordinates
+                thisspChrom = sp_to_chromdf[sp]
+                chrom_row = thisspChrom[thisspChrom["chrom"] == scaffold]
+                if len(chrom_row) > 0:
+                    chrom_row = chrom_row.iloc[0]
+                    # Use midpoint of start and end
+                    midpoint = (start + end) / 2
+                    chrom_size = chrom_row["chrsize"]
+                    chrom_percent = chrom_row["chrPlotPercent"]
+                    chrom_offset = chrom_row["chrPlotOffset"]
+                    locus_x_chr = chrom_offset + (midpoint / chrom_size) * chrom_percent
+                    
+                    # Plot vertical line on chromosome coordinates panel
+                    pChr.plot([locus_x_chr, locus_x_chr], 
+                             [i - line_extent, i + line_extent],
+                             color=locus_color, linewidth=1, zorder=100, alpha=0.8)
+                
+                # Calculate position in gene index coordinates
+                if sp in sp_to_genesdfs:
+                    thisspGenes = sp_to_genesdfs[sp]
+                    # Find genes on this scaffold near this position
+                    genes_on_scaf = thisspGenes[thisspGenes["{}_scaf".format(sp)] == scaffold]
+                    if len(genes_on_scaf) > 0:
+                        # Find closest gene by position
+                        genes_on_scaf = genes_on_scaf.copy()
+                        genes_on_scaf["dist"] = abs(genes_on_scaf["{}_pos".format(sp)] - midpoint)
+                        closest_gene = genes_on_scaf.nsmallest(1, "dist").iloc[0]
+                        gene_ix = closest_gene["{}_chromIx".format(sp)]
+                        
+                        # Calculate plot position
+                        ix_size = chrom_row["ixSize"]
+                        ix_percent = chrom_row["ixPlotPercent"]
+                        ix_offset = chrom_row["ixPlotOffset"]
+                        locus_x_ix = ix_offset + (gene_ix / ix_size) * ix_percent
+                        
+                        # Plot vertical line on gene index panel
+                        pIx.plot([locus_x_ix, locus_x_ix], 
+                                [i - line_extent, i + line_extent],
+                                color=locus_color, linewidth=1, zorder=100, alpha=0.8)
+        
+        # Add legend for color_map keywords on gene index panel
+        loci_legend_elements = [patches.Patch(facecolor=color, edgecolor='none', label=keyword) 
+                               for keyword, color in sorted(color_map.items())]
+        pIx.legend(handles=loci_legend_elements, loc='upper left', bbox_to_anchor=(1.01, 1), 
+                   fontsize=6, title='Loci of Interest', title_fontsize=7, frameon=True)
+
     # flip the y axes
     for p in [pChr, pIx]:
         # remove some spines
@@ -609,14 +935,185 @@ def subway_plot(species_order, rbh_filelist,
             p.spines[side].set_visible(False)
         # set the limits
         p.set_xlim([-0.02,1.02])
-        p.set_ylim([-0.03,len(species_order)-1+0.03])
+        p.set_ylim([-0.35,len(species_order)-1+0.35])  # Extra space for annotation boxes
         # flip the axes
         p.set_ylim(p.get_ylim()[::-1])
         # set the axis labels
         p.set_yticks(list(range(len(species_order))))
         p.set_yticklabels(species_order)
 
-    plt.savefig(outfile)
+    # Save figure(s) - if loci_data exists, create multi-page PDF with annotation page
+    if loci_data and color_map is not None:
+        # Pre-calculate all annotation box positions to determine required x-limits
+        import numpy as np
+        all_box_positions = []
+        box_width = 0.008
+        
+        for i in range(len(species_order)):
+            sp = species_order[i]
+            if sp not in loci_data:
+                continue
+            
+            # Collect gene positions for chr coords
+            gene_positions_chr = []
+            for gene, scaffold, strand, start, end in loci_data[sp]:
+                if scaffold not in sp_to_chromorder[sp]:
+                    continue
+                locus_color = _get_locus_color(gene, color_map)
+                thisspChrom = sp_to_chromdf[sp]
+                chrom_row = thisspChrom[thisspChrom["chrom"] == scaffold]
+                if len(chrom_row) > 0:
+                    chrom_row = chrom_row.iloc[0]
+                    midpoint = (start + end) / 2
+                    chrom_size = chrom_row["chrsize"]
+                    chrom_percent = chrom_row["chrPlotPercent"]
+                    chrom_offset = chrom_row["chrPlotOffset"]
+                    locus_x_chr = chrom_offset + (midpoint / chrom_size) * chrom_percent
+                    gene_positions_chr.append((locus_x_chr, gene, locus_color, strand))
+            
+            if gene_positions_chr:
+                positions_for_calc = [(x, name, col) for x, name, col, strand in gene_positions_chr]
+                positions, _ = _calculate_annotation_box_positions(positions_for_calc)
+                all_box_positions.extend(positions)
+        
+        # Calculate x-limits with padding for labels
+        if all_box_positions:
+            min_box = min(all_box_positions) - box_width / 2
+            max_box = max(all_box_positions) + box_width / 2
+            # Add extra space for rotated text labels (approximately)
+            label_overhang = 0.05
+            xlim_min = min(min_box - label_overhang, -0.02)
+            xlim_max = max(max_box + label_overhang, 1.02)
+        else:
+            xlim_min, xlim_max = -0.02, 1.02
+        
+        with PdfPages(outfile) as pdf:
+            # Create annotation page as page 1 (first)
+            fig2 = plt.figure(figsize=(figWidth, figHeight))
+            
+            # Create two panels for chr coords and gene index coords (similar layout)
+            pChr2 = plt.axes([leftStart/figWidth,
+                             bottomMargin/figHeight,
+                             panelWidth/figWidth,
+                             panelHeight/figHeight])
+            pChr2.tick_params(axis='both',which='both',
+                             bottom=False, labelbottom=False,
+                             left=False, labelleft=True,
+                             right=False, labelright=False,
+                             top=False, labeltop=False)
+            
+            plt.gcf().text((leftStart + (figWidth/2))/figWidth,
+                          (bottomMargin+panelHeight+0.25)/figHeight,
+                          "Loci of Interest - Annotated (Chr-coords)",
+                          fontsize = 12, ha = "center", va = "bottom")
+            
+            pIx2 = plt.axes([leftStart/figWidth,
+                            ((bottomMargin*2)+panelHeight)/figHeight,
+                            panelWidth/figWidth,
+                            panelHeight/figHeight])
+            pIx2.tick_params(axis='both',which='both',
+                            bottom=False, labelbottom=False,
+                            left=False, labelleft=True,
+                            right=False, labelright=False,
+                            top=False, labeltop=False)
+            
+            plt.gcf().text((leftStart + (figWidth/2))/figWidth,
+                          ((bottomMargin*2)+(panelHeight*2)+0.25)/figHeight,
+                          "Loci of Interest - Annotated (Gene-coords)",
+                          fontsize = 12, ha = "center", va = "bottom")
+            
+            # Plot chromosomes only (no bezier curves)
+            for i in range(len(species_order)):
+                sp = species_order[i]
+                for index, row in sp_to_chromdf[sp].iterrows():
+                    # Chr coords
+                    x1 = row["chrPlotOffset"]
+                    x2 = row["chrPlotOffset"] + row["chrPlotPercent"]
+                    pChr2.plot([x1,x2],[i,i],'k-', linewidth=2)
+                    
+                    # Gene index coords
+                    x1 = row["ixPlotOffset"]
+                    x2 = row["ixPlotOffset"] + row["ixPlotPercent"]
+                    pIx2.plot([x1,x2],[i,i],'k-', linewidth=2)
+            
+            # Add gene annotations with boxes and pointers
+            for i in range(len(species_order)):
+                sp = species_order[i]
+                if sp not in loci_data:
+                    continue
+                
+                # Collect all gene positions for this species for overlap detection
+                gene_positions_chr = []
+                gene_positions_ix = []
+                
+                for gene, scaffold, strand, start, end in loci_data[sp]:
+                    if scaffold not in sp_to_chromorder[sp]:
+                        continue
+                    
+                    locus_color = _get_locus_color(gene, color_map)
+                    thisspChrom = sp_to_chromdf[sp]
+                    chrom_row = thisspChrom[thisspChrom["chrom"] == scaffold]
+                    
+                    if len(chrom_row) > 0:
+                        chrom_row = chrom_row.iloc[0]
+                        midpoint = (start + end) / 2
+                        
+                        # Calculate chr position
+                        chrom_size = chrom_row["chrsize"]
+                        chrom_percent = chrom_row["chrPlotPercent"]
+                        chrom_offset = chrom_row["chrPlotOffset"]
+                        locus_x_chr = chrom_offset + (midpoint / chrom_size) * chrom_percent
+                        gene_positions_chr.append((locus_x_chr, gene, locus_color, strand))
+                        
+                        # Calculate gene index position
+                        if sp in sp_to_genesdfs:
+                            thisspGenes = sp_to_genesdfs[sp]
+                            genes_on_scaf = thisspGenes[thisspGenes["{}_scaf".format(sp)] == scaffold]
+                            if len(genes_on_scaf) > 0:
+                                genes_on_scaf = genes_on_scaf.copy()
+                                genes_on_scaf["dist"] = abs(genes_on_scaf["{}_pos".format(sp)] - midpoint)
+                                closest_gene = genes_on_scaf.nsmallest(1, "dist").iloc[0]
+                                gene_ix = closest_gene["{}_chromIx".format(sp)]
+                                
+                                ix_size = chrom_row["ixSize"]
+                                ix_percent = chrom_row["ixPlotPercent"]
+                                ix_offset = chrom_row["ixPlotOffset"]
+                                locus_x_ix = ix_offset + (gene_ix / ix_size) * ix_percent
+                                gene_positions_ix.append((locus_x_ix, gene, locus_color, strand))
+                
+                # Draw annotations for chr coords panel
+                if gene_positions_chr:
+                    _draw_gene_annotations(pChr2, gene_positions_chr, i, species_order)
+                
+                # Draw annotations for gene index panel
+                if gene_positions_ix:
+                    _draw_gene_annotations(pIx2, gene_positions_ix, i, species_order)
+            
+            # Format the annotation panels with calculated x-limits
+            for p in [pChr2, pIx2]:
+                for side in ["top", "right", "bottom", "left"]:
+                    p.spines[side].set_visible(False)
+                p.set_xlim([xlim_min, xlim_max])
+                p.set_ylim([-0.35,len(species_order)-1+0.35])  # Extra space for annotation boxes
+                p.set_ylim(p.get_ylim()[::-1])
+                p.set_yticks(list(range(len(species_order))))
+                p.set_yticklabels(species_order)
+            
+            # Save the annotation page (page 1)
+            pdf.savefig(fig2)
+            plt.close(fig2)
+            
+            # Now apply the same x-limits to the main ribbon plot and save as page 2
+            for p in [pChr, pIx]:
+                p.set_xlim([xlim_min, xlim_max])
+            
+            # Save the main ribbon plot as page 2
+            pdf.savefig(fig)
+    else:
+        # No loci data, just save single page
+        plt.savefig(outfile)
+    
+    plt.close(fig)
     return sp_to_chromorder
 
 rule sp_to_chr_to_len:
@@ -636,7 +1133,7 @@ rule sp_to_chr_to_len:
                     print("{}\t{}\t{}".format(thissp, record.id, len(record.seq)), file = outfile)
         outfile.close()
 
-rule make_plot:
+rule make_plot_base:
     input:
         rbh_filelist = config["rbh_files_in_order"],
         tsv = "sp_to_chr_to_size.tsv"
@@ -672,4 +1169,51 @@ rule make_plot:
                     config["chromorder"],
                     config["chr_sort_order"],
                     config["plot_all"],
-                    plot_unassigned_rbh = config.get("plot_unassigned_rbh", True))
+                    plot_unassigned_rbh = config.get("plot_unassigned_rbh", True),
+                    loci_data = None,
+                    color_map = None)
+
+rule make_plot_loci:
+    input:
+        rbh_filelist = config["rbh_files_in_order"],
+        tsv = "sp_to_chr_to_size.tsv"
+    output:
+        pdf = "output_{locus_label}.pdf"
+    params:
+        sp_order = config["species_order"],
+        locus_label = "{locus_label}"
+    threads: 1
+    run:
+        sp_to_chr_to_size = {}
+        # read in the TSV that we already made since it is faster
+        with open(input.tsv, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    fields = line.split("\t")
+                    sp     = fields[0]
+                    chrom  = fields[1]
+                    chrlen = fields[2]
+                    if sp not in sp_to_chr_to_size:
+                        sp_to_chr_to_size[sp] = {}
+                    if chrom not in sp_to_chr_to_size[sp]:
+                        sp_to_chr_to_size[sp][chrom] = int(chrlen)
+
+        min_chr_size = {}
+        for sp in params.sp_order:
+            if "minscafsize" in config["species"][sp]:
+                min_chr_size[sp] = config["species"][sp]["minscafsize"]
+            else:
+                min_chr_size[sp] = 0
+        
+        # Load loci data for this specific label
+        loci_data = _load_loci_data(params.locus_label, sp_to_locus_to_file, params.sp_order)
+        
+        subway_plot(params.sp_order, input.rbh_filelist,
+                    sp_to_chr_to_size, min_chr_size, output.pdf,
+                    config["chromorder"],
+                    config["chr_sort_order"],
+                    config["plot_all"],
+                    plot_unassigned_rbh = config.get("plot_unassigned_rbh", True),
+                    loci_data = loci_data,
+                    color_map = config["color_map"])
