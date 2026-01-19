@@ -299,6 +299,11 @@ def subway_plot(species_order, rbh_filelist,
                 if sp in sp_to_gene_order:
                     first_optimized = i
                     break
+            # Check if we found a matching species
+            if first_optimized == 99999999:
+                chromorder_species = list(sp_to_gene_order.keys())
+                raise IOError("ERROR: You set chr_sort_order to 'optimal-chr-or' and have species defined in 'chromorder' ({}), but none of those species are in your 'species_order' list ({}). Please either add one of the chromorder species to species_order, or remove them from chromorder, or change chr_sort_order to a different option.".format(
+                    ", ".join(chromorder_species), ", ".join(species_order)))
             while first_optimized != 0:
                 sp = species_order[first_optimized - 1]
                 prevsp = species_order[first_optimized]

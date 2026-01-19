@@ -269,12 +269,14 @@ class LG_db:
             # self._gen_sp_to_gene_to_color(self) above to deal with this.
             # If this crashes after this function, then it must be a rare case
             else:
+                # Sort species by count (descending)
+                species_count_sorted_keys = sorted(species_count.items(), key=lambda x: x[1], reverse=True)
                 # get the largest
                 # if the first is at least 10 times larger than the second, return it
-                if species_count_sorted_keys[0][1] >= (species_count_sorted_keys[0][2] * 10):
+                if species_count_sorted_keys[0][1] >= (species_count_sorted_keys[1][1] * 10):
                     return species_count_sorted_keys[0][0]
                 # or if the top two are the same, return either
-                if species_count_sorted_keys[0][1] == species_count_sorted_keys[0][2]:
+                if species_count_sorted_keys[0][1] == species_count_sorted_keys[1][1]:
                     print("There are two species with the same number of matches: {} and {}. Count: {}".format(
                           species_count_sorted_keys[0][0], species_count_sorted_keys[1][0],
                           species_count_sorted_keys[0][1]), file = sys.stderr) 
