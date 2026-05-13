@@ -469,6 +469,20 @@ def disambiguate_multicopy(
                         key = (sp, other_sp)
                         weight = anchor_graph.edge.get(key, {}).get((chrom, other_chr), 0)
                         chrom_score += weight
+                    # Fallback: when no within-OG partners are resolved yet
+                    # (e.g. the OG is multi-copy in every species), score
+                    # this candidate by its chromosome's total backbone
+                    # weight to every other species. Without this, the
+                    # first multi-copy species in any all-multi-copy OG
+                    # always scores 0 and the OG gets dropped.
+                    if not other_sp_genes:
+                        for other_sp in species:
+                            if other_sp == sp:
+                                continue
+                            key = (sp, other_sp)
+                            for (a, _b), w in anchor_graph.edge.get(key, {}).items():
+                                if a == chrom:
+                                    chrom_score += w
 
                     if strategy == "synteny":
                         anchor_positions = anchor_graph.positions.get(sp, {}).get(chrom, [])
