@@ -1,0 +1,476 @@
+"""
+Program  : odp_filechecker
+Language : snakemake
+Date     : 2025-09-04
+Author   : Darrin T. Schultz
+Email    : darrin.schultz@univie.ac.at
+Github   : https://github.com/conchoecia/odp
+License  : GNU GENERAL PUBLIC LICENSE, Version 3, 29 June 2007. See the LICENSE file.
+
+Description:
+  The purpose of this script is to check the input files for an odp
+  run with common issues that would cause problems later in the pipeline.
+
+  This was split off of the main pipeline, largely because it previously added a
+  computational bottleneck. The checks were run in a single rule that was resource-hungry
+  and often failed. Splitting that rule into multiple smaller rules took snakemake overhead
+  out of the main odp pipeline.
+
+Usage instructions:
+  - Run it with the same config file as the main pipeline, in the same directory.
+"""
+
+# This block imports fasta-parser as fasta
+import os
+import sys
+import itertools
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+sys.path.insert(1, dependencies_path)
+import fasta
+import hashlib
+import math
+from pathlib import Path
+GiB = 1024**3
+
+def size_gib(p: str) -> float:
+    return max(0.001, Path(p).stat().st_size / GiB)  # float GiB, tiny floor
+
+import gzip
+
+# ODP-specific imports
+scripts_path = os.path.join(snakefile_path, "../scripts")
+sys.path.insert(1, scripts_path)
+import odp_functions as odpf
+
+configfile: "config.yaml"
+# Perform a general check on the run since there are some common errors that
+#  should be caught regardless of which program is run.
+odpf.general_legal_run() # checks that the program isn't being run in the install directory
+
+# check for legal config entries. Useful for finding misspelled entries
+legal = ["proteins",      "chrom",    "genome",    "gff",     "minscafsize",
+         "manual_breaks", "note",     "plotorder", "sort_by_x_coord_blast",
+         "noylines",      "noxlines", "genus",     "species", "taxid",
+         "assembly_accession"]
+
+config["tool"] = "odp_prechecks"
+
+# check if species in the snakefile
+if "species" not in config:
+    raise IOError("You must have a 'species' fields in the config file.")
+
+# make sure none of the sample names have underscores
+for thissample in config["species"]:
+    if "_" in thissample:
+        raise IOError("Sample names can't have '_' char: {}".format(thissample))
+
+# check if we have specified how to handle duplicate protein sequences
+if "duplicate_proteins" not in config:
+    config["duplicate_proteins"] = "fail"
+#else:
+#    options_list = ["fail", "best"]
+#    outstring = ", ".join(options_list)
+#    if config["duplicate_proteins"] not in options_list:
+#        raise IOError("duplicate_proteins must be set to one of the following: {}".format(outstring))
+
+# Check if we have specified a LG_db directory, if not, use the installed one.
+# This allows us to specify directories for testing, for example.
+if "LG_db" not in config:
+    config["LG_db"] = os.path.join(os.path.dirname(os.path.realpath(workflow.snakefile)), "../LG_db/")
+else:
+    # if it is specified, make sure it is a directory and exists
+    if not os.path.isdir(config["LG_db"]):
+        raise IOError("The LG_db directory does not exist: {}".format(config["LG_db"]))
+
+# see if we have included any illegal arguments
+illegal = set()
+for this_sample in config["species"]:
+    # this bit of code allows for users to also use the term minscaflen instead of minscafsize
+    if "minscaflen" in config["species"][this_sample]:
+        config["species"][this_sample]["minscafsize"] = config["species"][this_sample]["minscaflen"]
+        del config["species"][this_sample]["minscaflen"]
+    for key in config["species"][this_sample]:
+        if key not in legal:
+            illegal.add(key)
+
+if len(illegal) > 0:
+    print("We found some fields in your config file that are not used by this program.")
+    print("The only fields allowed for individual samples are:")
+    for key in legal:
+        print("  - {}".format(key))
+    print("The keys that we found that are not allowed/in the list above are:")
+    for key in illegal:
+        print("  - {}".format(key))
+
+def check_genome_file_legality(fastapath):
+    """
+    1. Check that the genome fasta file exists.
+    2. Check that the genome fasta file has unique sequence headers.
+    3. Check that each sequence contains only valid DNA characters.
+    """
+    odpf.check_file_exists(fastapath)
+    genome_iter = fasta.parse(fastapath)
+    try:
+        first_record = next(genome_iter)
+    except StopIteration:
+        raise IOError(f"The genome fasta file has no records: {fastapath}")
+    genome_headers = set()
+    duplicates = set()
+    illegal_sequences = {}
+    allowed = set("ACGTNRYKMSWBDHV")
+    for record in itertools.chain([first_record], genome_iter):
+        seq = str(record.seq).upper()
+        if record.id not in genome_headers:
+            genome_headers.add(record.id)
+        else:
+            duplicates.add(record.id)
+        illegal = set(seq) - allowed
+        if illegal:
+            illegal_sequences[record.id] = illegal
+    if len(duplicates) > 0:
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicates)[:3]])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  There is a genome assembly with duplicate sequence headers.\n"
+        outmessage += "*  Each sequence in the genome assembly must have a unique ID.\n"
+        outmessage += "*\n"
+        outmessage += "*  The assembly with the problem is: " + fastapath + "\n"
+        outmessage += "*  There are " + str(len(duplicates)) + " duplicate sequence headers.\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that we cannot distinguish\n"
+        outmessage += "*   between two separate sequences with the same header.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please remove the duplicate sequence headers from the fasta file,\n"
+        outmessage += "*   regenerate the protein fasta and chrom files, and try again.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+    if len(illegal_sequences) > 0:
+        illstring = "".join([
+            "*    - {}: {}\n".format(rec, "".join(sorted(chars)))
+            for rec, chars in sorted(illegal_sequences.items())[:3]
+        ])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  Some genome sequences contain invalid characters.\n"
+        outmessage += "*  Only IUPAC DNA characters are allowed.\n"
+        outmessage += "*\n"
+        outmessage += "*  The assembly with the problem is: " + fastapath + "\n"
+        outmessage += "*  There are " + str(len(illegal_sequences)) + " sequences with invalid characters.\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += illstring
+        outmessage += "*\n"
+        outmessage += "*  Please clean the fasta file and try again.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+    return True
+
+
+def check_protein_file_legality(peppath, duplicate_handling="fail"):
+    """
+    1. Check that a protein fasta file exists.
+    2. Checkt that each sequence ID only exists once.
+    3. Check that there are no duplicate protein sequences.
+    4. Check that each sequence contains only valid amino-acid characters.
+    """
+    odpf.check_file_exists(peppath)
+    protein_iter = fasta.parse(peppath)
+    try:
+        first_record = next(protein_iter)
+    except StopIteration:
+        raise IOError(f"The protein fasta file has no records: {peppath}")
+    protein_headers = set()
+    duplicate_headers = set()
+    sequence_hashes = set()
+    duplicate_sequences = set()
+    illegal_sequences = {}
+    allowed = set("ACDEFGHIKLMNPQRSTVWYBXZJUO*")
+    for record in itertools.chain([first_record], protein_iter):
+        seq = str(record.seq).upper()
+        if record.id not in protein_headers:
+            protein_headers.add(record.id)
+        else:
+            duplicate_headers.add(record.id)
+        seq_hash = hashlib.sha256(seq.encode()).digest()
+        if seq_hash not in sequence_hashes:
+            sequence_hashes.add(seq_hash)
+        else:
+            duplicate_sequences.add(record.id)
+        illegal = set(seq) - allowed
+        if illegal:
+            illegal_sequences[record.id] = illegal
+    if len(duplicate_headers) > 0:
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicate_headers)[:3]])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  There is a protein fasta with duplicate sequence headers.\n"
+        outmessage += "*  Each sequence in the protein fasta must have a unique ID.\n"
+        outmessage += "*\n"
+        outmessage += "*  The protein pep with the problem is: " + peppath + "\n"
+        outmessage += "*  There are " + str(len(duplicate_headers)) + " duplicate sequence headers.\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that we cannot distinguish\n"
+        outmessage += "*   between two separate sequences with the same header.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please remove the duplicate sequence headers from the protein fasta\n"
+        outmessage += "*   file, regenerate the chrom files, and try again.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+    if len(duplicate_sequences) > 0 and duplicate_handling == "fail":
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(duplicate_sequences)[:3]])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  Some protein sequences in your file are identical.\n"
+        outmessage += "*  Each protein sequence must be unique.\n"
+        outmessage += "*\n"
+        outmessage += "*  The protein fasta with the problem is: " + peppath + "\n"
+        outmessage += "*  There are " + str(len(duplicate_sequences)) + " duplicate sequences.\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that duplicate protein seqs\n"
+        outmessage += "*   may interfere with proper reciprocal blastp match detection.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please remove the identical sequences from the protein fasta\n"
+        outmessage += "*   file, regenerate the chrom files, and try again.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+    if len(illegal_sequences) > 0:
+        illstring = "".join([
+            "*    - {}: {}\n".format(rec, "".join(sorted(chars)))
+            for rec, chars in sorted(illegal_sequences.items())[:3]
+        ])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  Some protein sequences contain invalid characters.\n"
+        outmessage += "*  Only IUPAC amino-acid characters are allowed.\n"
+        outmessage += "*\n"
+        outmessage += "*  The protein fasta with the problem is: " + peppath + "\n"
+        outmessage += "*  There are " + str(len(illegal_sequences)) + " sequences with invalid characters.\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += illstring
+        outmessage += "*\n"
+        outmessage += "*  Please clean the fasta file and try again.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+    return True
+
+def check_chrom_file_legality(chrompath, fastapath, peppath):
+    """
+    Checks that the chrom file is legally formatted. Looks for common issues.
+
+    1. Check that the chrom file exists
+    2. Check that the proteins seen in column 1 were seen in the protein fasta file.
+    3. Check that the scaffolds were seen in the genome assembly fasta file.
+    """
+    odpf.check_file_exists(chrompath)
+    if not odpf.chrom_file_is_legal(chrompath):
+        raise IOError("The chrom file is not legal: {}".format(chrompath))
+
+    genome_headers = set(record.id for record in fasta.parse(fastapath))
+    protein_headers = set(record.id for record in fasta.parse(peppath))
+
+    proteins_not_in_pep = set()
+    scaffolds_not_in_fasta = set()
+
+    has_line = False
+    with odpf.open_text_maybe_gzip(chrompath) as chromhandle:  # support gzipped chrom files
+        for line in chromhandle:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            has_line = True
+            fields = line.split("\t")
+            if len(fields) < 2:
+                raise IOError(f"Malformed .chrom line (need ≥2 tab-separated cols): {line!r}")
+            protid, scaffold = fields[0], fields[1]
+            if protid not in protein_headers:
+                proteins_not_in_pep.add(protid)
+            if scaffold not in genome_headers:
+                scaffolds_not_in_fasta.add(scaffold)
+
+    if not has_line:
+        raise IOError(f"The chrom file has no lines: {chrompath}")
+
+    if len(proteins_not_in_pep) > 0:
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(proteins_not_in_pep)[:3]])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  Some proteins in the .chrom file were not seen in the protein\n"
+        outmessage += "*   .fasta file.\n"
+        outmessage += "*\n"
+        outmessage += "*  The chrom file with the problem is: " + chrompath + "\n"
+        outmessage += "*  There are " + str(len(proteins_not_in_pep)) + " proteins in the .chrom not seen in the protein .fasta\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that we need to access every\n"
+        outmessage += "*   protein specified in the .chrom file, but it is unavailable.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please investigate whether there are too many entries in the .chrom\n"
+        outmessage += "*   file, or if something is missing from the protein .fasta file.\n"
+        outmessage += "*   Then, fix your files and re-run this pipeline.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+
+    if len(scaffolds_not_in_fasta) > 0:
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(scaffolds_not_in_fasta)[:3]])
+        outmessage =  "*********************************************************************\n"
+        outmessage += "* ERROR:\n"
+        outmessage += "*  Some scaffolds in the .chrom file were not seen in the genome\n"
+        outmessage += "*   .fasta file.\n"
+        outmessage += "*\n"
+        outmessage += "*  The chrom file with the problem is: " + chrompath + "\n"
+        outmessage += "*  There are " + str(len(scaffolds_not_in_fasta)) + " scaffolds in the .chrom not seen in the genome .fasta\n"
+        outmessage += "*  Here are the first 1 to 3:\n"
+        outmessage += dupstring
+        outmessage += "*\n"
+        outmessage += "*  The reason this is problematic is that we need to access every\n"
+        outmessage += "*   scaffold specified in the .chrom file, but it is unavailable.\n"
+        outmessage += "*\n"
+        outmessage += "*  Please investigate whether there are too many entries in the .chrom\n"
+        outmessage += "*   file, or if something is missing from the genome .fasta file.\n"
+        outmessage += "*   Then, fix your files and re-run this pipeline.\n"
+        outmessage += "*********************************************************************\n"
+        raise IOError(outmessage)
+
+    return True
+
+rule all:
+    input:
+        expand(config["tool"] + "/db/input_check/{sample}_genome_pass.txt",
+            sample = config["species"].keys()),
+        expand(config["tool"] + "/db/input_check/{sample}_proteins_pass.txt",
+            sample = config["species"].keys()),
+        expand(config["tool"] + "/db/input_check/{sample}_chrom_pass.txt",
+            sample = config["species"].keys()),
+        # config legality
+        expand(config["tool"] + "/db/input_check/{sample}_config_pass.txt",
+            sample = config["species"].keys())
+
+def legality_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed could change.
+    """
+    attemptdict = {1: 4000,
+                   2: 8000,
+                   3: 16000,
+                   4: 64000,
+                   5: 256000,
+                   6: 512000}
+    return attemptdict.get(attempt, attemptdict[max(attemptdict)])
+
+rule config_legality:
+    """
+    Check that the input config file is legal.
+    There are some specific issues we can check for.
+
+    1. Make sure that in the config file, there is only one top-level species field.
+       If there are more than one, this was probably from an error in concatenating two
+       smaller config files together.
+    """
+    input:
+        configfile = "config.yaml"
+    output:
+        sample_pass = config["tool"] + "/db/input_check/{sample}_config_pass.txt"
+    resources:
+        mem_mb = 1000,
+        runtime = 5
+    threads: 1
+    run:
+        # Process the config file and check that there is only one top-level species field
+        toplevel_species = 0
+        with open(input.configfile, "r") as inf:
+            for line in inf:
+                line = line.strip()
+                if line.startswith("species:"):
+                    toplevel_species += 1
+        if not toplevel_species == 1:
+            raise IOError("Your config file must have exactly one top-level 'species:' field. We found {}.".format(toplevel_species))
+
+        # write a pass file
+        with open(output.sample_pass, "w") as outf:
+            outf.write("pass")
+
+#rule check_sample_legality:
+#    """
+#    Check that the config entry of this file is legal.
+#    Mostly use this to check if there are string formatting issues that will interfere
+#
+#    """
+#    output:
+#        sample_pass = config["tool"] + "/db/input_check/{sample}_sample_pass.txt"
+#    resources:
+#        mem_mb = 1000,
+#        runtime = 5
+#    threads: 1
+#    run:
+#        # check that
+
+rule check_genome_legality:
+    """Check that genome fasta files are legal."""
+    input:
+        fasta = lambda wildcards: config["species"][wildcards.sample]["genome"]
+    output:
+        genome_pass = config["tool"] + "/db/input_check/{sample}_genome_pass.txt"
+    benchmark: "benchmarks/check_genome_legality/{sample}.check_genome_legality.benchmark.txt"
+    resources:
+        io_slots = 1,
+        mem_mb = legality_get_mem_mb,
+        runtime  = lambda wildcards, input: int(math.ceil(
+            5 + 20 * max(0.001, Path(input.fasta).stat().st_size / GiB) # switched to 20 minutes per GiB on disk
+            ))
+    threads: 1
+    retries: 6
+    run:
+        if check_genome_file_legality(input.fasta):
+            with open(output.genome_pass, "w") as outf:
+                outf.write("pass")
+
+rule check_protein_legality:
+    """Check that protein fasta files are legal."""
+    input:
+        pep = lambda wildcards: config["species"][wildcards.sample]["proteins"]
+    output:
+        pep_pass = config["tool"] + "/db/input_check/{sample}_proteins_pass.txt"
+    params:
+        duplicate_handling = config["duplicate_proteins"]
+    benchmark: "benchmarks/check_protein_legality/{sample}.check_protein_legality.benchmark.txt"
+    resources:
+        io_slots = 1,
+        mem_mb = legality_get_mem_mb,
+        runtime  = lambda wildcards, input: int(math.ceil(
+            5 + 8 * max(0.001, Path(input.pep).stat().st_size / GiB)
+            ))
+    threads: 1
+    retries: 6
+    run:
+        if check_protein_file_legality(input.pep, params.duplicate_handling):
+            with open(output.pep_pass, "w") as outf:
+                outf.write("pass")
+
+rule check_chrom_legality:
+    """Check that chrom files are legal and consistent with genome and proteins."""
+    input:
+        fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
+        pep   = lambda wildcards: config["species"][wildcards.sample]["proteins"],
+        chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"]
+    output:
+        chrom_pass = config["tool"] + "/db/input_check/{sample}_chrom_pass.txt"
+    benchmark: "benchmarks/check_chrom_legality/{sample}.check_chrom_legality.benchmark.txt"
+    resources:
+        io_slots = 1,
+        mem_mb = legality_get_mem_mb,
+        runtime  = lambda wildcards, input: int(math.ceil(
+            5 + 13 * max(0.001, Path(input.fasta).stat().st_size / GiB) # uses the base size of the genome to estimate runtime, plus a little more
+            ))
+    threads: 1
+    retries: 6
+    run:
+        if check_chrom_file_legality(input.chrom, input.fasta, input.pep):
+            with open(output.chrom_pass, "w") as outf:
+                outf.write("pass")

@@ -17,9 +17,11 @@ import odp_plotting_functions as odp_plot
 # other standard python libraries
 from itertools import combinations
 from itertools import product
+import hashlib
 
 # non-standard dependencies
 import pandas as pd
+import numpy as np
 
 # TODO implement this function soon after release
 #def gff_or_chrom(filepath):
@@ -28,6 +30,223 @@ import pandas as pd
 #    Returns "gff" or "chrom", or throws an error if the software can't decide.
 #    """
 #    # First check what the file extension is
+
+def hmmsearch_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 2000,
+                   2: 4000,
+                   3: 8000,
+                   4: 16000,
+                   5: 32000,
+                   6: 64000,
+                   7: 128000,
+                   8: 256000}
+    return attemptdict[attempt]
+
+
+def filthmm_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 1000,
+                   2: 2000,
+                   3: 4000,
+                   4: 8000,
+                   5: 16000,
+                   6: 320000,
+                   7: 640000}
+    return attemptdict[attempt]
+
+
+def gzhmm_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 1000,
+                   2: 2000,
+                   3: 4000,
+                   4: 8000,
+                   5: 16000,
+                   6: 320000,
+                   7: 640000}
+    return attemptdict.get(attempt, attemptdict[max(attemptdict)])
+
+
+
+def hmm_against_prots_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for filtering prots could change.
+    """
+    attemptdict = {1: 5000,
+                   2: 16000,
+                   3: 64000,
+                   4: 256000}
+    return attemptdict[attempt]
+
+def tmp_unzip_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for miniprot is highly variable.
+    """
+    attemptdict = {1: 2000,
+                   2: 4000,
+                   3: 8000,
+                   4: 16000}
+    return attemptdict[attempt]
+
+
+def chromsize_to_s2c2s(chromsize_path):
+    """
+    this reads in a chromsize file and returns a dictionary of species to scaffold to scaflen
+    """
+    s2c2s = {}
+    with open(chromsize_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                thissp, thisscaf, thislen = line.split("\t")
+                if thissp not in s2c2s:
+                    s2c2s[thissp] = {}
+                s2c2s[thissp][thisscaf] = int(thislen)
+    return s2c2s
+
+def calc_D_for_y_and_x(
+    df,
+    xsample=None,
+    ysample=None,
+    x_offset=None,
+    y_offset=None,
+    x_scaf_to_len=None,
+    y_scaf_to_len=None,
+    **kwargs,
+):
+    """Calculate D for both the x and y axes.
+
+    This function supports two different dataframe structures:
+
+    1. Break-based mode where ``xsample`` and ``ysample`` are provided and the
+       dataframe contains ``*_breakchrom`` and ``*_break_ix`` columns.
+    2. Scaffold-based mode where offset dictionaries and scaffold length
+       mappings are supplied for both axes.
+    """
+
+    # Break-based mode
+    if (
+        xsample is not None
+        and ysample is not None
+        and f"{xsample}_breakchrom" in df.columns
+        and f"{ysample}_breakchrom" in df.columns
+    ):
+        for thisdir, oppositexy in [(xsample, ysample), (ysample, xsample)]:
+            df = df.sort_values(
+                by=[f"{thisdir}_breakchrom", f"{thisdir}_break_ix"], ascending=True
+            ).reset_index(drop=True)
+            breaks = df[f"{thisdir}_breakchrom"].unique()
+            thisdir_dfs = []
+            for thisx in breaks:
+                xdf = (
+                    df.loc[df[f"{thisdir}_breakchrom"] == thisx,].copy().reset_index(drop=True)
+                )
+                df2 = pd.get_dummies(xdf[f"{oppositexy}_breakchrom"])
+                df2_xiL = df2.apply(lambda x: x.rolling(20).mean(), axis=0)
+                df2_xiR = (
+                    df2.apply(lambda x: x.iloc[::-1].rolling(20).mean(), axis=0)
+                    .iloc[::-1]
+                    .set_index(df2.index - 1)
+                    .iloc[1:]
+                )
+                subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
+                xdf[f"{thisdir}_D"] = subtractdf.apply(
+                    lambda x: np.sqrt(np.square(x).sum()), axis=1
+                )
+                thisdir_dfs.append(xdf)
+            df = pd.concat(thisdir_dfs)
+        df.reset_index(drop=True, inplace=True)
+        return df
+
+    # Scaffold-based mode
+    elif (
+        x_offset is not None
+        and y_offset is not None
+        and x_scaf_to_len is not None
+        and y_scaf_to_len is not None
+    ):
+        df = df.dropna()
+        for thisdir in ["x", "y"]:
+            df = df.sort_values(by=[f"{thisdir}middle"])
+            df.reset_index(drop=True, inplace=True)
+
+            unique_x = df[f"{thisdir}scaf"].unique()
+            thisdir_dfs = []
+            for thisx in unique_x:
+                xdf = df.loc[df[f"{thisdir}scaf"] == thisx,].copy().reset_index(drop=True)
+                oppositexy = "y" if thisdir == "x" else "x"
+                this_offset = x_offset if thisdir == "x" else y_offset
+                this_scaf_to_len = (
+                    x_scaf_to_len if thisdir == "x" else y_scaf_to_len
+                )
+                df2 = pd.get_dummies(xdf[f"{oppositexy}scaf"])
+                df2_xiL = df2.apply(lambda x: x.rolling(20).mean(), axis=0)
+                df2_xiR = (
+                    df2.apply(lambda x: x.iloc[::-1].rolling(20).mean(), axis=0)
+                    .iloc[::-1]
+                    .set_index(df2.index - 1)
+                    .iloc[1:]
+                )
+                subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
+                D = subtractdf.apply(lambda x: np.sqrt(np.square(x).sum()), axis=1)
+                xdf[f"D{thisdir}"] = D
+                xdf[f"D{thisdir}_barleft"] = 0
+                xdf[f"D{thisdir}_barmiddle"] = 0
+                xdf[f"D{thisdir}_barright"] = 0
+                xdf[f"D{thisdir}_barwidth"] = 0
+                for i, row in xdf.iterrows():
+                    barleft = -1
+                    barright = -1
+                    if len(xdf) > 1:
+                        if i == 0:
+                            thisend = row[f"{thisdir}stop"]
+                            nextstart = xdf.loc[i + 1, f"{thisdir}start"]
+                            barleft = this_offset[thisx]
+                            barright = thisend + ((nextstart - thisend) / 2)
+                        elif i == (len(xdf) - 1):
+                            prevend = xdf.loc[i - 1, f"{thisdir}stop"]
+                            thisstart = row[f"{thisdir}start"]
+                            barleft = prevend + ((thisstart - prevend) / 2)
+                            barright = this_scaf_to_len[thisx]
+                        else:
+                            prevend = xdf.loc[i - 1, f"{thisdir}stop"]
+                            thisstart = row[f"{thisdir}start"]
+                            thisend = row[f"{thisdir}stop"]
+                            nextstart = xdf.loc[i + 1, f"{thisdir}start"]
+                            barleft = prevend + ((thisstart - prevend) / 2)
+                            barright = thisend + ((nextstart - thisend) / 2)
+                    xdf.loc[i, f"D{thisdir}_barleft"] = barleft
+                    xdf.loc[i, f"D{thisdir}_barright"] = barright
+                    xdf.loc[i, f"D{thisdir}_barmiddle"] = barleft + ((barright - barleft) / 2)
+                    xdf.loc[i, f"D{thisdir}_barwidth"] = barright - barleft + 1
+                thisdir_dfs.append(xdf)
+            df = pd.concat(thisdir_dfs)
+        df = df.sort_values(by=["xmiddle"])
+        df.reset_index(drop=True, inplace=True)
+        return df
+
+    else:
+        raise ValueError("Insufficient arguments to calculate D for x and y")
+
+
+def filtprot_get_mem_mb(wildcards, attempt):
+    """
+    The amount of RAM needed for filtering prots could change.
+    """
+    attemptdict = {1: 2000,
+                   2: 4000,
+                   3: 16000,
+                   4: 64000,
+                   5: 256000,
+                   6: 512000}
+    return attemptdict.get(attempt, max(attemptdict.values()))
 
 def general_legal_run():
     """
@@ -375,6 +594,7 @@ def check_species_input_legality(fastapath, peppath, chrompath, dup_proteins_all
       1. Check that the file exists
       2. Check that the proteins in column 1 were seen in the protein fasta file
       3. Check that the scaffolds were seen in the genome assembly fasta file
+
     """
     # we need to check that dup_proteins_allowed is type bool
     if not isinstance(dup_proteins_allowed, bool):
@@ -400,7 +620,7 @@ def check_species_input_legality(fastapath, peppath, chrompath, dup_proteins_all
         outmessage += "*  Each sequence in the genome assembly must have a unique ID.\n"
         outmessage += "*\n"
         outmessage += "*  The assembly with the problem is: " + fastapath + "\n"
-        outmessage += "*  There are " + str(len(duplicate)) + " duplicate sequence headers.\n"
+        outmessage += "*  There are " + str(len(duplicates)) + " duplicate sequence headers.\n"
         outmessage += "*  Here are the first 1 to 3:\n"
         outmessage += dupstring
         outmessage += "*\n"
@@ -416,17 +636,18 @@ def check_species_input_legality(fastapath, peppath, chrompath, dup_proteins_all
     # 1. check that the file exists
     check_file_exists(peppath)
     # 2. check that each sequence ID exists only once
-    protein_headers     = set()
-    duplicate_headers   = set()
-    protein_sequences   = set()
-    duplicate_sequences = set()
+    protein_headers      = set()
+    duplicate_headers    = set()
+    sequence_hashes      = set()
+    duplicate_sequences  = set()
     for record in fasta.parse(peppath):
         if record.id not in protein_headers:
             protein_headers.add(record.id)
         else:
             duplicate_headers.add(record.id)
-        if str(record.seq) not in protein_sequences:
-            protein_sequences.add(str(record.seq))
+        seq_hash = hashlib.sha256(str(record.seq).encode()).digest()
+        if seq_hash not in sequence_hashes:
+            sequence_hashes.add(seq_hash)
         else:
             duplicate_sequences.add(record.id)
 
@@ -607,9 +828,9 @@ def check_legality(config):
     # The following strings are illegal and may have been used in previous versions of the program
     #  - "prot_to_loc"
     #  - "prot_to_loc"
-    legal = ["proteins", "chrom", "genome", "genus",
+    legal = ["assembly_accession", "proteins", "chrom", "genome", "genus",
              "minscafsize", "manual_breaks", "chrom_to_color",
-             "plotorder", "species", "prot_to_group"]
+             "plotorder", "prot_to_group", "species", "taxid" ]
     illegal = set()
 
     for this_axis in ["species"]:
@@ -749,47 +970,48 @@ def generate_coord_structs_from_chrom_to_loc(chrom_file):
              "prot_to_stop":   prot_to_stop,
              "prot_to_middle": prot_to_middle }
 
+def open_text_maybe_gzip(path, encoding="utf-8"):
+    with open(path, "rb") as fh:
+        head = fh.read(2)
+    if head == b"\x1f\x8b":
+        return gzip.open(path, "rt", encoding=encoding)
+    return open(path, "rt", encoding=encoding)
+
 def filter_fasta_chrom(chrom_file, input_fasta, output_fasta):
     """
-    Takes a chrom file, gzipped or not, only keeps proteins in input_fasta from chrom file,
-     saves those prots to output_fasta.
+    Keep only proteins whose IDs appear in chrom_file; write to output_fasta (gz or plain).
+    RAM: O(#unique IDs in chrom) and that set shrinks as we write matches.
     """
+    # 1) Collect unique IDs to keep (first TAB-delimited field)
     keep_these = set()
-    printed_already = set()
-    chromhandle = fasta.get_open_func(chrom_file)
-    for line in chromhandle:
-        line = line.strip()
-        if line:
-            splitd = line.split()
-            keep_these.add(splitd[0])
-    chromhandle.close()
-    # If the output_fasta file name has a .gz, then we need to write a gzip file.
-    # Otherwise, just write to a regular file.
-    output_gz = False
-    for thisending in [".gz", ".gzip"]:
-        if output_fasta.endswith(thisending):
-            output_gz = True
-    outhandle = None
-    if output_gz:
-        outhandle = gzip.open(output_fasta, "wt")
-    else:
-        outhandle = open(output_fasta, "w")
+    with open_text_maybe_gzip(chrom_file) as chromhandle:
+        for line in chromhandle:
+            line = line.strip()
+            if not line:
+                continue
+            keep_these.add(line.split("\t", 1)[0])
 
-    # now that we have handled the output, filter the fasta file
-    for record in fasta.parse(input_fasta):
-        if record.id in keep_these and record.id not in printed_already:
-            # The record object has the properties
-            #  - Record.id
-            #  - Record.seq
-            #  - Record.desc
-            # get rid of the description to avoid parsing errors later
-            record.desc=""
-            if output_gz:
-                outhandle.write(record.format(wrap=80))
-            else:
-                print(record.format(wrap=80), file = outhandle, end="")
-            printed_already.add(record.id)
-    outhandle.close()
+    # 1) Open output (gz or plain)
+    out_is_gz = output_fasta.endswith((".gz", ".gzip"))
+    out = gzip.open(output_fasta, "wt") if out_is_gz else open(output_fasta, "w")
+    write = out.write
+
+    try:
+        # 3) Stream over input FASTA using your parser; write matches and shrink the set
+        for record in fasta.parse(input_fasta):
+            pid = record.id
+            if pid in keep_these:
+                keep_these.discard(pid)     # let the set shrink to free RAM
+                # Drop description to avoid later parsing issues; write directly (no format())
+                write(f">{pid}\n")
+                seq = record.seq            # parser already made this string
+                # Write in chunks to avoid creating one giant formatted string
+                for i in range(0, len(seq), 80):
+                    write(seq[i:i+80] + "\n")
+                if not keep_these:          # optional early exit if all found
+                    break
+    finally:
+        out.close()
 
 ###### THESE ARE THE FUNCTIONS FOR ODP and ODP_SANDWICH
 def genome_coords_to_plotstart_dict(path_to_genocoords_file, **kwargs):
@@ -1001,79 +1223,6 @@ def parse_coords(coords_file, sample, xory,
     return (offset, scaf_to_len, lines_at, max_coord, tick_labels, tick_pos, list(df["scaf"]))
 
 
-def calc_D_for_y_and_x(df, x_offset, y_offset, x_scaf_to_len, y_scaf_to_len, **kwargs):
-    """
-    This calculates D for both the x and y axes.
-    Defined in the 2020 vertebrate synteny paper.
-    """
-    df = df.dropna()
-    # some variable names in this for loop are "x" but it doesn't matter.
-    #  everything important is variable between x and y
-    for thisdir in ["x", "y"]:
-        df = df.sort_values(by=["{}middle".format(thisdir)])
-        df.reset_index(drop=True, inplace = True)
-
-        unique_x = df["{}scaf".format(thisdir)].unique()
-        thisdir_dfs = []
-        # this just calculates Dx
-        for thisx in unique_x:
-            xdf = df.loc[df["{}scaf".format(thisdir)] == thisx, ].copy()
-            xdf = xdf.reset_index(drop=True)
-            oppositexy = "d"
-            this_offset = {}
-            this_scaf_to_len = {}
-            if thisdir == "x":
-                oppositexy = "y"
-                this_offset = x_offset
-                this_scaf_to_len = x_scaf_to_len
-            elif thisdir == "y":
-                oppositexy = "x"
-                this_offset = y_offset
-                this_scaf_to_len = y_scaf_to_len
-            df2 = pd.get_dummies(xdf["{}scaf".format(oppositexy)])
-            df2_xiL = df2.apply(lambda x: x.rolling(20).mean(), axis = 0)
-            df2_xiR = df2.apply(lambda x: x.iloc[::-1].rolling(20).mean(), axis = 0).iloc[::-1]
-            df2_xiR = df2_xiR.set_index(df2_xiR.index - 1)
-            df2_xiR = df2_xiR.iloc[1:]
-            subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
-            D = subtractdf.apply(lambda x: np.sqrt(np.square(x).sum()), axis = 1)
-            xdf["D{}".format(thisdir)] = D
-            xdf["D{}_barleft".format(thisdir)] = 0
-            xdf["D{}_barmiddle".format(thisdir)] = 0
-            xdf["D{}_barright".format(thisdir)] = 0
-            xdf["D{}_barwidth".format(thisdir)] = 0
-            for i, row in xdf.iterrows():
-                barleft   = -1
-                barright  = -1
-                barmiddle = -1
-                barwidth  = -1
-                if len(xdf) > 1:
-                    if i == 0:
-                        thisend   = row["{}stop".format(thisdir)]
-                        nextstart = xdf.loc[i+1, "{}start".format(thisdir)]
-                        barleft   = this_offset[thisx]
-                        barright  = thisend + ((nextstart-thisend)/2)
-                    elif i == (len(xdf) - 1):
-                        prevend   = xdf.loc[i-1, "{}stop".format(thisdir)]
-                        thisstart = row["{}start".format(thisdir)]
-                        barleft   = prevend + ((thisstart-prevend)/2)
-                        barright  = this_scaf_to_len[thisx]
-                    else:
-                        prevend   = xdf.loc[i-1, "{}stop".format(thisdir)]
-                        thisstart = row["{}start".format(thisdir)]
-                        thisend   = row["{}stop".format(thisdir)]
-                        nextstart = xdf.loc[i+1, "{}start".format(thisdir)]
-                        barleft   = prevend + ((thisstart-prevend)/2)
-                        barright  = thisend + ((nextstart-thisend)/2)
-                xdf.loc[i, "D{}_barleft".format(thisdir)]   = barleft
-                xdf.loc[i, "D{}_barright".format(thisdir)]  = barright
-                xdf.loc[i, "D{}_barmiddle".format(thisdir)] = barleft + ((barright - barleft)/2)
-                xdf.loc[i, "D{}_barwidth".format(thisdir)]  = barright - barleft + 1
-            thisdir_dfs.append(xdf)
-        df = pd.concat(thisdir_dfs)
-    df = df.sort_values(by=["xmiddle"])
-    df.reset_index(drop=True, inplace = True)
-    return df
 
 def determine_breaks(df, scaf_to_breaks_set, scaf_to_offset_dict,
                      sort_direction, auto_breaks, **kwargs):
@@ -1359,7 +1508,13 @@ def gen_plotting_df(ycoords_file, xcoords_file,
     df.reset_index(drop=True, inplace = True)
 
     # Now calculate D and Dw for both X and Y axes
-    df = calc_D_for_y_and_x(df, x_offset, y_offset, x_scaf_to_len, y_scaf_to_len)
+    df = calc_D_for_y_and_x(
+        df,
+        x_offset=x_offset,
+        y_offset=y_offset,
+        x_scaf_to_len=x_scaf_to_len,
+        y_scaf_to_len=y_scaf_to_len,
+    )
     if outtable:
         df.to_csv(outtable, sep="\t")
 

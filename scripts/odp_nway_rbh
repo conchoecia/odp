@@ -33,13 +33,18 @@ import pandas as pd
 import numpy as np
 import statistics
 import sys
-import odp_functions as odpf
 
 # fasta importer to get the chrom lengths
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
 dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
 import fasta
+
+# ODP-specific imports - add source directory to path
+source_path = os.path.join(snakefile_path, "../source")
+sys.path.insert(1, source_path)
+
+import odp_functions as odpf
 
 # we need a way to handle the colors
 from odp_color_manager import generate_random_color as grc
@@ -84,22 +89,34 @@ if not "nways" in config:
 if config["nways"] < 2:
     raise IOError("nways must be at least 2")
 
-# randomizations
+# check num_permutations
 if not "num_permutations" in config:
     raise IOError("you must specify num_permutations in the config to help calculate the false discovery rate")
 num_permutations_per_round=10000
 num_permutation_rounds = int(config["num_permutations"]/num_permutations_per_round)
-#print("number of randomization rounds is : {}".format(num_rand_rounds))
 
-# make sure that num species is gteq nways
-if not len(config["species"]) >= config["nways"]:
-    raise IOError("The number of species must be greater than or equal to nways")
-
-# come up with all of the analyses
+# make sure all analyses contain at least 2 species
 analyses_list = [list(sorted(x)) for x in config["analyses"]]
+for entry in analyses_list:
+    if len(entry) < 2:
+        raise IOError(f"An analysis entry {entry} contains fewer than 2 species. Each analysis must have at least 2 species.")
+
+# Flatten species used in analyses
 all_species = list(set([x for x in odpf.flatten(analyses_list)]))
 print("Here is an example of the first few analyses: {}".format(analyses_list[0:3]))
 print("There are {} possible combinations.".format(len(analyses_list)))
+
+# Validate species names
+# Make sure the sample names are legal, in that they only have this character set:
+# "[A-Za-z0-9-.]+",
+for thissample in config["species"]:
+    for char in thissample:
+        illegal_chars = set()
+        if char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._":
+            illegal_chars.add(char)
+        if len(illegal_chars) > 0:
+            raise IOError("The sample name {} is not legal. It must only contain these characters: [A-Za-z0-9-.]. It containts the illegal characters: {}".format(
+                thissample, list(illegal_chars)))
 
 # make sure all of the species in the analyses are in the config
 for entry in analyses_list:
@@ -107,8 +124,9 @@ for entry in analyses_list:
         if thisspecies not in config["species"]:
             raise IOError ("You specified {} in the analyses, but it isn't defined in species".format(thisspecies))
 
-# come up with a list of blast/diamond jobs
-# we must have every combination that is in the analyses_list
+# Generate blastjobs and pairs
+# Come up with a list of blast/diamond jobs
+# We must have every combination that is in the analyses_list
 config["blastjobs"] = {}
 config["analysisspecies"] = set()
 config["analysispairs"] = {}
@@ -123,27 +141,31 @@ for thisanalysis in analyses_list:
         t = list(sorted(tup))
         config["analysispairs"]["{}_{}".format(t[0], t[1])] = t
 
-#print(config["blastjobs"])
-#print(config["analysisspecies"])
-#print(config["analysispairs"])
-#print(        [config["tool"] + "/step1-rbh/{}_reciprocal_best_hits.rbh".format(
-#            "_".join(thisanalysis)) for thisanalysis in analyses_list])
-#print([config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(
-#            config["blastjobs"][x][0], config["blastjobs"][x][1])
-#            for x in config["blastjobs"]])
+# Undocumented loophole to avoid duplicate proteins
+if "duplicate_proteins" not in config:
+    config["duplicate_proteins"] = "fail"
+
+print(config["blastjobs"])
+print("analyseslist: {}".format(analyses_list))
+
+nways_jobs = expand(
+    config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh",
+    analysis=["_".join(thisanalysis) for thisanalysis in analyses_list]
+)
+print("nways_jobs: ", nways_jobs)
 
 wildcard_constraints:
-    analysis="[A-Za-z0-9_]+",
+    sample1 = "[A-Za-z0-9-.]+",
+    sample2 = "[A-Za-z0-9-.]+",
+    analysis= "[A-Za-z0-9-._]+", #this must have dashes and underscores
 
 rule all:
     input:
-        # the reciprocal blast results
+        ## The reciprocal blast results
         [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(
             config["blastjobs"][this][0], config["blastjobs"][this][1])
          for this in config["blastjobs"]],
-        # find the reciprocal best hits
-        [config["tool"] + "/step1-rbh/{}_reciprocal_best_hits.rbh".format(
-            "_".join(thisanalysis)) for thisanalysis in analyses_list],
+        nways_jobs, # find the reciprocal best hits
         # the alpha file
         [config["tool"] + "/step2-groupby/FDR/{}.FDR.tsv".format(
             "_".join(thisanalysis)) for thisanalysis in analyses_list],
@@ -168,11 +190,17 @@ rule all:
 
 rule check_input_legality:
     """
+    The very first thing that we must do is to check the input files.
     Determine whether the input files are formatted correctly.
     We call a function that checks these files:
       - The genome .fasta file
       - The .chrom file
       - The protein .fasta file
+
+    Notes:
+    202140106 - This job appears to request too much RAM, causing OOM errors even
+        when the input files are small. I'm not sure why this is happening.
+        As a result, I am now adding a resources to limit the number of simultaneous jobs.
     """
     input:
         fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
@@ -184,6 +212,9 @@ rule check_input_legality:
         duplicate_handling = config["duplicate_proteins"]
     threads: 1
     run:
+        # We always check to see if the chrom file is legal, regardless of whether we're ignoring duplicate prots.
+        if not odpf.chrom_file_is_legal(input.chrom):
+            raise IOError("The chrom file is not legal: {}".format(input.chrom))
         if params.duplicate_handling == "fail":
             # We want to enforce that the input files are legal
             # See the odpf.check_species_input_legality function for more details
@@ -295,27 +326,14 @@ def get_component_size_dict(G):
     print(component_size)
 
 rule n_ways_reciprocal_best:
-    """
-    Gets reciprocal best hits from 3 or more samples
-    For a protein to be retained, it must be a reciprocal-best hit in three samples.
-
-              A      B
-             / \    /|\
-            B___C  A-+-C , et cetera
-                    \|/
-                     D
-
-    The output of this rule is a yaml file with admissible proteins from each sample
-    """
     input:
-        # just require all the blast jobs to be done because it is easier
-        #xtoyblastp = [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(x[0], x[1])
-        #    for x in permutations("_".split(wildcards.analysis), 2)],
-        xtoyblastp = [config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(
-            config["blastjobs"][this][0], config["blastjobs"][this][1])
-         for this in config["blastjobs"]],
-        chrom = lambda wildcards: [config["species"][x]["chrom"]
-                    for x in config["analysisspecies"]]
+        xtoyblastp = lambda wildcards: [
+            config["tool"] + "/step0-blastp_results/reciprocal_best/{}_and_{}_recip.temp.blastp".format(pair[0], pair[1])
+            for pair in permutations(wildcards.analysis.split("_"), 2)
+            ],
+        chrom = lambda wildcards: [
+            config["species"][species]["chrom"] for species in wildcards.analysis.split("_")
+            ]
     output:
         acceptable_prots = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_acceptable_prots.txt",
         blast_network    = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_edges.txt",
@@ -620,7 +638,7 @@ rule groupby_rbh_results:
         cols1 = ['rbh', 'gene_group', 'color', 'count', 'alpha', 'alpha_type']
         cols2 = cols1 + [x for x in grouped_multiple.columns if x not in cols1]
         grouped_multiple = grouped_multiple[cols2]
-    
+
         # Now we add an Ersatz gene group name since we don't have one yet
         # reset the indices
         grouped_multiple = grouped_multiple.reset_index(drop = True)
@@ -677,7 +695,7 @@ def unwrap_groupby_to_rbh(groupby_filepath, outprefix, outdir = "./"):
 
     The input parameters are:
       groupby_filepath  - the path to the .groupby file
-      outprefix         - the prefix for the output file 
+      outprefix         - the prefix for the output file
       outdir (optional) - the directory to write the output file to
     """
     # check that the input file exists
@@ -817,9 +835,20 @@ rule unfiltered_ribbon_diagram:
     output:
         pdf = config["tool"] + "/step4-ribbon_diagram/{analysis}.ribbon.pdf"
     params:
-        sp_order = lambda wildcards: wildcards.analysis.split("_")
+        sp_order = lambda wildcards: next(
+                    list(x) for x in config["analyses"]
+                    if "_".join(list(sorted(x))) == wildcards.analysis
+                    )
     threads: 1
     run:
+        # chromosome order
+        chromosome_order_config = config.get("chromosome_order", {})
+        this_chromosome_order = chromosome_order_config.get(wildcards.analysis, {})
+        print("this analysis: {}".format(wildcards.analysis))
+        print(chromosome_order_config)
+        print(this_chromosome_order)
+
+
         sp_to_chr_to_size = {}
         # read in the TSV that we already made since it is faster
         with open(input.tsv, "r") as f:
@@ -847,9 +876,17 @@ rule unfiltered_ribbon_diagram:
         sp_min_chr_size = min_chr_size
         outfile = output.pdf
 
-        ribbon_plot(species_order, rbh_filelist,
-                    sp_to_chr_to_size,
-                    sp_min_chr_size, outfile,
-                    sp_to_gene_order = None,
-                    chr_sort_order   = "custom",
-                    plot_all = False)
+        if this_chromosome_order == {}:
+            ribbon_plot(species_order, rbh_filelist,
+                        sp_to_chr_to_size,
+                        sp_min_chr_size, outfile,
+                        sp_to_gene_order = None,
+                        chr_sort_order   = "custom",
+                        plot_all = False)
+        else:
+            ribbon_plot(species_order, rbh_filelist,
+                        sp_to_chr_to_size,
+                        sp_min_chr_size, outfile,
+                        sp_to_gene_order = this_chromosome_order,
+                        chr_sort_order   = "custom",
+                        plot_all = False)

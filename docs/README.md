@@ -69,12 +69,14 @@ diagrams of conserved linkages between genomes.
 - [Quick Start](#quickstart)
 - [Users' Guide](#uguide)
   - [Installation](#install)
+    - [Operating System Requirements](#osreq)
     - [Python Requirements](#python)
     - [Other Requirements](#otherreq)
   - [General usage](#general)
     - [Input File Requirements](#inputspec)
     - [`.chrom` file specifications](#chromspec)
     - [Help generating `.chrom` files](#chromhelp)
+    - [Typical runtime](#runtime)
   - [Use cases](#cases)
     - [If you want to analyze chordate linkage groups](#clgsection)
     - [Make macrosynteny plots between two or more genomes](#macrosynuse)
@@ -131,6 +133,16 @@ git clone https://github.com/conchoecia/odp.git
 cd odp && make
 ```
 
+The installation launches a snakemake job that uses all available cores to compile the hidden markov models (HMMs) for the ALG orthologs. This process typically takes 2-4 hours when allowed 8 cores.
+
+### <a name="osreq"></a>Operating System Requirements
+
+This software is developed for a Linux environments only. It has been tested on Oracle Linux 9.4, and Ubuntu Linux 22.04.4 LTS. It is likely to work on other Linux distributions, but has not been tested on them. It is not likely to work on Windows or Mac OS X.
+
+Complete functionality benefits from, but is not required to have, jobs submitted to a SLURM cluster.
+
+We have no plans to support errors that come from running this software on Windows or Mac OS X.
+
 ### <a name="python"></a>Python Requirements
 
 Your active python environment must be python 3. This software is implemented in
@@ -160,6 +172,10 @@ these requirements.
 - [diamond](https://github.com/bbuchfink/diamond)
 - [blastp](https://blast.ncbi.nlm.nih.gov/Blast.cgi?CMD=Web&PAGE_TYPE=BlastDocs&DOC_TYPE=Download)
 - awk
+
+### <a name="runtime"></a>Runtime
+
+Typically running time for one HMM-species analysis takes 1 hour with 4 cores, and occupies approximately 1 Gb of RAM. Species-species analyses take approximately 2 minutes per pairwise comparison, and approximately 3 Gb of RAM. These processes scale linearly with the number of comparisons. Performing species-species analyses are all-versus-all, so the time complexity is exponential for every additional species added to the analysis.
 
 ## <a name="general"></a>General Usage
 
@@ -560,7 +576,7 @@ The notation we use to refer to an `.rbh` file created by merging other `.rbh` f
 
 #### <a name="gbtohmm"></a>ALGs part 6 - Find orthologs in more species
 
-Steps 1-4 of finding ALGs relies on using only a few species (perhaps 3-5) to avoid loss of orthologs due to the stringent ortholog selection process. [Step 5 - Merge `.groupby`/`.rbh` files, discussed above,](#groupbymerge) enables the inclusion of more genes by allowing for missing data in select groups. Then, by constructing hidden Markov models of the orthologs, we can search for orthologs in more species.
+Steps 1-4 of finding ALGs relies on using only a few species (perhaps 3-5) to avoid loss of orthologs due to the stringent ortholog selection process. [Step 5 - Merge `.groupby`/`.rbh` files, discussed above,](#gbmerge) enables the inclusion of more genes by allowing for missing data in select groups. Then, by constructing hidden Markov models of the orthologs, we can search for orthologs in more species.
 
 The script `odp_rbh_to_hmm` reads in a `.rbh` file and constructs one HMM model per ortholog (row). The models are then searched against the proteins of every additional species that is included in the `config.yaml` file. The best protein for each HMM is selected, and only proteins with a significant match are kept. Missing data are permissible in this step, so it is not guaranteed that every ortholog will have an identifiable protein in every species added in this step.
 
@@ -593,6 +609,12 @@ The output of this program is histograms showing the different measured paramete
 
 ## <a name="cite"></a>Citing odp
 
-If you use `odp` in your work, please cite the following paper:
+If you use `odp` in your work, please cite the following papers:
 
-[Schultz, D.T., Haddock, S.H.D., Bredeson, J.V., Green, R.E., Simakov, O & Rokhsar, D.S. Ancient gene linkages support ctenophores as sister to other animals. Nature (2023). https://doi.org/10.1038/s41586-023-05936-6](https://www.nature.com/articles/s41586-023-05936-6)
+> Schultz, D.T., Haddock, S.H.D., Bredeson, J.V., Green, R.E., Simakov, O & Rokhsar, D.S. (2023)
+> Ancient gene linkages support ctenophores as sister to other animals.
+> *Nature*, **618** (7963):110-117. [https://doi.org/10.1038/s41586-023-05936-6](https://www.nature.com/articles/s41586-023-05936-6)
+
+> Schultz, D.T., Blümel, A., Destanović, D., Sarigol, F., & Simakov, O. (2024).
+> Topological mixing and irreversibility in animal chromosome evolution.
+> *bioRxiv*, 2024.07.29.605683. [https://doi.org/10.1101/2024.07.29.605683](https://doi.org/10.1101/2024.07.29.605683)

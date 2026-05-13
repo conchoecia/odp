@@ -23,6 +23,14 @@ chr_sort_order: optimal-chr-or
 #   - the significant lines will be 0.8, the faint lines will be 0.15
 plot_all: True
 
+# - If you want to plot everything, BUT, you don't want to plot the
+#    black lines on the significant relationships, set to False
+# - The black lines are the orthologous relationships that are on
+#    chromosomes with significant homologous relationships, but have
+#    not been assigned to a linkage group. This will make the resulting
+#    figures easier to work with.
+plot_unassigned_rbh: True
+
 # - First type in the list of species to plot
 # - In this example we plot the relationships between
 #   three species with the codes "EMU", "RES", and "HCA".
@@ -67,6 +75,24 @@ rbh_files_in_order:
 #  path to the
 rbh_directory: /path/to/odp/step2-figures/synteny_coloredby_BCnS_LGs/
 
+# - Optional: Define colors for gene name patterns in loci_of_interest
+# - Uses case-insensitive substring matching for gene names
+# - Genes matching longer keywords take precedence
+# - Format: keyword: "#HEXCOLOR"
+# - Box shapes have clipped corners indicating strand: + clips bottom-right, - clips bottom-left
+color_map:
+  Lab:   "#ff0000"
+  Pb:    "#ff6602"
+  Hox3:  "#ffcc02"
+  Dfd:   "#03ff00"
+  Scr:   "#008002"
+  Lox5:  "#00ccff"
+  Antp:  "#0000ff"
+  Lox4:  "#00007f"
+  Lox2:  "#cd87de"
+  Post2: "#ff00ff"
+  Post1: "#800280"
+
 # - All of the species that are in "species_order" above should be here
 # - This information is important for calculating some stats that are used
 #   for plotting.
@@ -102,3 +128,9 @@ species:
     chrom:     "/path/to/EMU.chrom"
     genome:    "/path/to/EMU.fasta"
     minscafsize: 1000000
+    # Optional: Specify loci of interest for this species
+    # Creates annotation page with colored boxes showing gene locations
+    # File format: tab-separated with columns: gene_name scaffold strand start end
+    loci_of_interest:
+      Hox: /path/to/EMU_hox_genes.chrom
+      OtherGenes: /path/to/EMU_other_genes.chrom
