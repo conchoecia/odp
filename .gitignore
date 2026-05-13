@@ -75,3 +75,6 @@ dev_scripts/PhyloTreeUMAP_subsampling.preedit.README.md
 dev_scripts/RESOURCE_ANALYSIS_QUICKREF.md
 dev_scripts/SIZENAN_REFACTORING_QUICK_REF.md
 dev_scripts/TEMPORAL_INTEGRATION_SUMMARY.md
+
+bin/seqtk
+.coverage

@@ -5,7 +5,7 @@ Date     : 2025-09-04
 Author   : Darrin T. Schultz
 Email    : darrin.schultz@univie.ac.at
 Github   : https://github.com/conchoecia/odp
-License  : GNU GENERAL PUBLIC LICENSE, Version 3, 29 June 2007. See the LICENSE file.
+License  : See the LICENSE file at the root of this project.
 
 Description:
   The purpose of this script is to check the input files for an odp
@@ -20,14 +20,14 @@ Usage instructions:
   - Run it with the same config file as the main pipeline, in the same directory.
 """
 
-# This block imports fasta-parser as fasta
+# This block imports afp (the dependency-free fastx parser) as fasta
 import os
 import sys
 import itertools
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
-dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+dependencies_path = os.path.join(snakefile_path, "../dependencies")
 sys.path.insert(1, dependencies_path)
-import fasta
+import afp as fasta
 import hashlib
 import math
 from pathlib import Path

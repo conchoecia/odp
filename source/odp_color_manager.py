@@ -20,9 +20,9 @@ import random
 import sys
 
 snakefile_path = os.path.dirname(os.path.abspath(__file__))
-dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+dependencies_path = os.path.join(snakefile_path, "../dependencies")
 sys.path.insert(1, dependencies_path)
-import fasta
+import afp as fasta
 
 def h2r(h):
     """
@@ -108,13 +108,14 @@ class LG_db:
         # Open the hmm file and parse it to check that each ortholog has a HMM.
         rbh_orthologs = set(list(self.rbhdf["rbh"]))
         hmm_orthologs = set()
-        # if the file is gzipped, then we must use gzip.open
-        filehandle = fasta.get_open_func(self.hmmfile)
-        for line in filehandle:
-            line = line.strip()
-            if line and line.startswith("NAME "):
-                hmm_orthologs.add(line.replace("NAME ", "").strip())
-        filehandle.close()
+        # afp.get_open_func returns a callable (e.g. gzip.open / open) — call
+        # it to actually open the file.
+        opener = fasta.get_open_func(self.hmmfile)
+        with opener(self.hmmfile, "rt") as filehandle:
+            for line in filehandle:
+                line = line.strip()
+                if line and line.startswith("NAME "):
+                    hmm_orthologs.add(line.replace("NAME ", "").strip())
 
         # if any of these fail, the rbh and hmm files don't match completely
         if len(rbh_orthologs - hmm_orthologs) != 0:

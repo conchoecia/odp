@@ -8,7 +8,7 @@ Email    : darrin.schultz@univie.ac.at
 Github   : https://github.com/conchoecia/odp
 Support  : For issues or questions, please search if the topic has been discussed already
            on github and open a new issue if not: https://github.com/conchoecia/odp/issues
-License  : GNU GENERAL PUBLIC LICENSE, Version 3, 29 June 2007. See the LICENSE file.
+License  : See the LICENSE file at the root of this project.
 Citation : If you use this software for your scientific publication, please cite:
            Schultz, DT; Haddock, SHD; Bredeson, JV; Green, RE; Simakov, O & Rokhsar, DS
            Ancient gene linkages support ctenophores as sister to other animals. Nature (2023).

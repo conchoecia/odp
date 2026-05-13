@@ -13,7 +13,7 @@ import itertools
 # (source_dir, scripts_dir, fasta_parser_dir) before we resolve any imports.
 @pytest.fixture(scope="module")
 def loaded_legality_funcs(scripts_dir, fasta_parser_dir, repo_root):
-    import fasta  # noqa: E402
+    import afp as fasta  # noqa: E402
 
     class _ODPFunctions:
         @staticmethod
