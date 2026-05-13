@@ -235,3 +235,12 @@ def test_cli_version_via_subprocess(cli):
     )
     assert result.returncode == 0
     assert "odp checkout" in result.stdout
+    # `odp: ...` line carries the project version (git-describe output or
+    # "unknown" if .git is absent / git is not on PATH).
+    assert "odp:" in result.stdout
+
+
+def test_odp_version_helper_returns_string(cli):
+    v = cli.odp_version()
+    assert isinstance(v, str)
+    assert v != ""

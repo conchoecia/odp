@@ -156,7 +156,27 @@ def run_subcommand(subcommand: str, args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def odp_version() -> str:
+    """Resolve odp's version. Prefers `git describe` against the checkout
+    (so dev builds show e.g. ``v0.4.0-3-gabc1234``); falls back to the last
+    tag name; falls back to ``unknown``."""
+    root = repo_root()
+    try:
+        out = subprocess.check_output(
+            ["git", "describe", "--tags", "--dirty", "--always"],
+            cwd=root,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        if out:
+            return out
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return "unknown"
+
+
 def cmd_version(args: argparse.Namespace) -> int:
+    sys.stdout.write(f"odp: {odp_version()}\n")
     sys.stdout.write(f"odp checkout: {repo_root()}\n")
     snakemake = shutil.which("snakemake")
     if not snakemake:
