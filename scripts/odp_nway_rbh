@@ -48,6 +48,7 @@ import odp_functions as odpf
 
 # we need a way to handle the colors
 from odp_color_manager import generate_random_color as grc
+from odp_color_manager import yield_color
 
 configfile: "config.yaml"
 
@@ -630,9 +631,14 @@ rule groupby_rbh_results:
         # We should automatically assign some colors to the groups
         # This feature was part of some requests from Grisha Zolotarov
         # - request documented here: https://github.com/conchoecia/odp/issues/31
-        # Generate a random color for each row by running the grc() command once per row.
-        #  If alpha of the same row is greater than 0.05, then leave the color black
-        grouped_multiple["color"] = grouped_multiple.apply(lambda x: grc()
+        # Sequential palette gives stable, repeatable colors across runs;
+        # falls back to random if config["random_colors"] is truthy.
+        if config.get("random_colors", False):
+            color_fn = grc
+        else:
+            yc = yield_color(config.get("color_palette", "mypals25"))
+            color_fn = lambda: next(yc)
+        grouped_multiple["color"] = grouped_multiple.apply(lambda x: color_fn()
                     if x["alpha"] <= 0.05 else "#000000", axis = 1)
         # move the color column to right after the gene_group column
         cols1 = ['rbh', 'gene_group', 'color', 'count', 'alpha', 'alpha_type']
