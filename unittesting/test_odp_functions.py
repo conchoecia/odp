@@ -280,6 +280,73 @@ def test_calc_D_for_y_and_x_insufficient_args_raises(of):
         of.calc_D_for_y_and_x(df)
 
 
+def test_determine_breaks_auto_basic(of):
+    """determine_breaks (line ~1193) end-to-end on a small synthetic df.
+    Builds a df with all required columns and runs auto-breaks; the
+    function returns a DataFrame of breakpoint rows."""
+    import numpy as np
+    import pandas as pd
+    n = 50
+    df = pd.DataFrame({
+        "xscaf": ["chr1"] * 25 + ["chr2"] * 25,
+        "yscaf": ["scafA"] * 50,
+        "xstart": list(range(n)),
+        "xstop": [x + 1 for x in range(n)],
+        "xmiddle": [x + 0.5 for x in range(n)],
+        "ystart": list(range(n)),
+        "ystop": [y + 1 for y in range(n)],
+        "ymiddle": [y + 0.5 for y in range(n)],
+        "xgene": [f"gx{i}" for i in range(n)],
+        "ygene": [f"gy{i}" for i in range(n)],
+        # Dx has two peaks: one in each scaffold
+        "Dx": [
+            1.0 if i in (12, 38) else (0.1 if i < 25 else 0.2)
+            for i in range(n)
+        ],
+        "Dy": [0.5] * n,
+    })
+    out = of.determine_breaks(
+        df,
+        scaf_to_breaks_set={},  # no manual breaks
+        scaf_to_offset_dict={"chr1": 0, "chr2": 25},
+        sort_direction="x",
+        auto_breaks=True,
+    )
+    assert isinstance(out, pd.DataFrame)
+    # Output is a subset of input rows.
+    assert len(out) <= len(df)
+
+
+def test_determine_breaks_manual_only(of):
+    """When auto_breaks=False, only manual breakpoints are returned."""
+    import pandas as pd
+    n = 20
+    df = pd.DataFrame({
+        "xscaf": ["chr1"] * n,
+        "yscaf": ["scafA"] * n,
+        "xstart": list(range(n)),
+        "xstop": [x + 1 for x in range(n)],
+        "xmiddle": [x + 0.5 for x in range(n)],
+        "ystart": list(range(n)),
+        "ystop": [y + 1 for y in range(n)],
+        "ymiddle": [y + 0.5 for y in range(n)],
+        "xgene": [f"gx{i}" for i in range(n)],
+        "ygene": [f"gy{i}" for i in range(n)],
+        "Dx": [0.1] * n,
+        "Dy": [0.1] * n,
+    })
+    out = of.determine_breaks(
+        df,
+        scaf_to_breaks_set={"chr1": [10]},
+        scaf_to_offset_dict={"chr1": 0},
+        sort_direction="x",
+        auto_breaks=False,
+    )
+    assert isinstance(out, pd.DataFrame)
+    # One manual break gives one row in the output.
+    assert len(out) == 1
+
+
 def test_parse_coords_basic(of, tmp_path):
     """parse_coords reads a space-separated genome-coords file and
     returns (offset, scaf_to_len, lines_at, max_coord, tick_labels,
