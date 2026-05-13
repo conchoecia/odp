@@ -19,6 +19,7 @@ env:
 jobs:
   # Job A: pure-python unit tests + coverage. Fast matrix.
   unit:
+    name: unit / ${{ matrix.os }} / py${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
@@ -63,6 +64,7 @@ jobs:
   # Job B: end-to-end snakemake smoke test against the mini fixtures.
   # Catches breakage of Snakefile rule bodies that pytest can't reach.
   smoke:
+    name: smoke / ubuntu / snakemake e2e
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
