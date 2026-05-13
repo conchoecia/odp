@@ -292,7 +292,7 @@ rule filter_prots:
         seqtk = os.path.join(bin_path, "seqtk/seqtk"),
         fainfo = os.path.join(bin_path, "fainfo"),
         sample = lambda wildcards: wildcards.sample,
-    retries: 6
+    retries: int(config.get("retries", 0))  # was 6; override via config.yaml `retries:` for HPC
     benchmark: "benchmarks/filter_prots/{sample}.filter_prots.benchmark.txt"
     resources:
         io_slots = 1,
@@ -307,7 +307,7 @@ rule filter_prots:
           exit 1
         fi
         # 1) IDs from col1 of .chrom (uniq)
-        if [[ "{input.chrom}" == *.gz ]]; then zcat "{input.chrom}"; else cat "{input.chrom}"; fi \
+        if [[ "{input.chrom}" == *.gz ]]; then gunzip -c "{input.chrom}"; else cat "{input.chrom}"; fi \
           | cut -f1 | awk 'NF' | sort -u > "{output.ids}"
 
         # 2) Filter FASTA by those IDs
@@ -352,7 +352,7 @@ rule make_diamond_and_blast_db:
         mkdir -p {params.outprefix2}
         mkdir -p {params.outdir}
         diamond makedb --in {input.pep} --db {output.dmnd}
-        zcat {input.pep} | makeblastdb -in - -out {input.pep} -title {params.title} -dbtype prot
+        gunzip -c {input.pep} | makeblastdb -in - -out {input.pep} -title {params.title} -dbtype prot
         """
 
 rule diamond_blast:
@@ -380,7 +380,7 @@ rule diamond_blast:
     shell:
         """
         if [ "{params.search_method}" = "blastp" ]; then
-            zcat {input.pep1} | blastp -db {input.pep2} -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
+            gunzip -c {input.pep1} | blastp -db {input.pep2} -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
         elif [ "{params.search_method}" = "diamond" ]; then
             diamond blastp --query {input.pep1} --db {input.dmnd2} --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
         fi
@@ -848,14 +848,14 @@ rule temp_unzip_protein:
         protein = temp(config["tool"] + "/db/{sample}_prots.pep")
     threads: 1
     benchmark: "benchmarks/temp_unzip_protein/{sample}.temp_unzip_protein.benchmark.txt"
-    retries: 4
+    retries: int(config.get("retries", 0))  # was 4; override via config.yaml `retries:` for HPC
     resources:
         io_slots = 1,
         mem_mb = odpf.tmp_unzip_get_mem_mb, # Some example consumption for single cores: 500M, 120M, 288M
         runtime   = 5
     shell:
         """
-        zcat {input.proteins} > {output.protein}
+        gunzip -c {input.proteins} > {output.protein}
         """
 
 rule hmm_1_against_prots:
@@ -898,7 +898,7 @@ rule hmm_1_against_prots:
         mem_mb = odpf.hmm_against_prots_get_mem_mb, # Some example consumption for single cores: 500M, 120M, 288M
         runtime   = 480  # 20231211 - 3 hours in minutes. 2 hours was too short with 3 threads. Now trying with 8 threads.
     threads: 8 # 20231211 - 3 threads was very slow and used only around 500MB of RAM at peak. Trying 8 threads.
-    retries: 4
+    retries: int(config.get("retries", 0))  # was 4; override via config.yaml `retries:` for HPC
     run:
         # helper: stream fasta headers only (no sequence allocation)
         def fasta_header_ids(path):
@@ -1026,7 +1026,7 @@ rule hmm_2_gzip_hmm_results:
     output:
         hmmgz = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.gz"
     threads: 1
-    retries: 7
+    retries: int(config.get("retries", 0))  # was 7; override via config.yaml `retries:` for HPC
     benchmark: "benchmarks/hmm_2_gzip_hmm_results/{coloredby}_against_{sample}.hmm_2_gzip_hmm_results.benchmark.txt"
     resources:
         mem_mb    = odpf.gzhmm_get_mem_mb, # should be relatively small
@@ -1052,7 +1052,7 @@ rule hmm_3_filter_hmm_result:
     output:
         hmm = config["tool"] + "/step0-blastp_results/{coloredby}_against_{sample}.hmmsearch.filt.blastp.gz"
     threads: 1
-    retries: 7
+    retries: int(config.get("retries", 0))  # was 7; override via config.yaml `retries:` for HPC
     benchmark: "benchmarks/hmm_3_filter_hmm_result/{coloredby}_against_{sample}.hmm_3_filter_hmm_result.benchmark.txt"
     resources:
         mem_mb = odpf.filthmm_get_mem_mb, # usually uses 0.2-0.3 GB of RAM
@@ -1104,7 +1104,7 @@ rule hmm_4_hmm_to_rbh:
         coloredby_rbh = lambda wildcards: config["prot_to_color_rbh"][wildcards.coloredby]
     output:
         rbh = config["tool"] + "/step1-rbh/{coloredby}_{sample}_reciprocal_best_hits.hmm.rbh"
-    retries: 8
+    retries: int(config.get("retries", 0))  # was 8; override via config.yaml `retries:` for HPC
     benchmark: "benchmarks/hmm_4_hmm_to_rbh/{coloredby}_{sample}.hmm_4_hmm_to_rbh.benchmark.txt"
     resources:
         mem_mb = odpf.hmmsearch_get_mem_mb, # should be relatively small

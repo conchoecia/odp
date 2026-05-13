@@ -1,8 +1,16 @@
 """
-These are the plotting functions used by many ODP programs
+These are the plotting functions used by many ODP programs.
+
+Forces the non-interactive 'Agg' backend before any pyplot import.
+Snakemake invokes rule bodies from worker threads, and matplotlib's
+default macOS backend ('MacOSX') requires the main thread plus a Cocoa
+run loop. Importing matplotlib.pyplot from a worker thread with the
+MacOSX backend selected raises an NSException that takes the whole
+Python process down with `Abort trap: 6`.
 """
 
 import matplotlib
+matplotlib.use("Agg")
 
 def format_matplotlib():
     """format the fonts and print options for the plots"""

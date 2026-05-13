@@ -112,6 +112,7 @@ def build_snakemake_cmd(
     dry_run: bool,
     rerun_incomplete: bool,
     printshellcmds: bool,
+    retries: int,
     extra: list[str],
 ) -> list[str]:
     """Build the snakemake CLI argv as a list (no shell)."""
@@ -133,6 +134,11 @@ def build_snakemake_cmd(
         cmd += ["--rerun-incomplete"]
     if printshellcmds:
         cmd += ["--printshellcmds"]
+    # `--config retries=N` overrides the Snakefile's rule-level
+    # `retries: config.get("retries", 0)`. Skipped if N == 0 (the default
+    # at both layers) to keep the snakemake invocation minimal.
+    if retries:
+        cmd += ["--config", f"retries={retries}"]
     cmd += extra
     return cmd
 
@@ -150,6 +156,16 @@ def run_subcommand(subcommand: str, args: argparse.Namespace) -> int:
 
     workdir = Path(args.workdir).resolve() if args.workdir else None
     configfile = Path(args.config).resolve() if args.config else None
+
+    # If the user supplied --config but not --workdir, fall back to the
+    # config file's parent directory. Configs commonly contain paths
+    # relative to themselves; running snakemake from anywhere else makes
+    # zcat / seqtk / etc. fail with file-not-found in a way that's hard to
+    # diagnose. Better to default-do-what-you-mean and announce it.
+    if configfile is not None and workdir is None:
+        workdir = configfile.parent
+        if args.verbose:
+            sys.stderr.write(f"odp: auto-set --workdir to {workdir}\n")
 
     # Warn (don't fail) if --cores exceeds the machine. Heavy snakemake
     # invocations on shared infra sometimes deliberately oversubscribe, so
@@ -174,6 +190,7 @@ def run_subcommand(subcommand: str, args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         rerun_incomplete=args.rerun_incomplete,
         printshellcmds=args.printshellcmds,
+        retries=getattr(args, "retries", 0),
         extra=args.snakemake_arg or [],
     )
 
@@ -328,6 +345,18 @@ def add_common_run_args(p: argparse.ArgumentParser) -> None:
         "--printshellcmds", "-p",
         action="store_true",
         help="print the shell commands snakemake runs",
+    )
+    p.add_argument(
+        "--retries", "-r",
+        type=int,
+        default=0,
+        help=(
+            "Number of times to retry failed jobs (default: 0). Sets "
+            "`retries` in snakemake's config dict, which the rules read "
+            "via config.get('retries', 0). Useful for HPC where transient "
+            "scheduler/IO failures benefit from a retry, but on local "
+            "runs 0 keeps the terminal quiet."
+        ),
     )
     p.add_argument(
         "--snakemake-arg",

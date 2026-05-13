@@ -428,7 +428,7 @@ rule check_genome_legality:
             5 + 20 * max(0.001, Path(input.fasta).stat().st_size / GiB) # switched to 20 minutes per GiB on disk
             ))
     threads: 1
-    retries: 6
+    retries: int(config.get("retries", 0))  # was 6; override via config.yaml `retries:` for HPC
     run:
         if check_genome_file_legality(input.fasta):
             with open(output.genome_pass, "w") as outf:
@@ -450,7 +450,7 @@ rule check_protein_legality:
             5 + 8 * max(0.001, Path(input.pep).stat().st_size / GiB)
             ))
     threads: 1
-    retries: 6
+    retries: int(config.get("retries", 0))  # was 6; override via config.yaml `retries:` for HPC
     run:
         if check_protein_file_legality(input.pep, params.duplicate_handling):
             with open(output.pep_pass, "w") as outf:
@@ -472,7 +472,7 @@ rule check_chrom_legality:
             5 + 13 * max(0.001, Path(input.fasta).stat().st_size / GiB) # uses the base size of the genome to estimate runtime, plus a little more
             ))
     threads: 1
-    retries: 6
+    retries: int(config.get("retries", 0))  # was 6; override via config.yaml `retries:` for HPC
     run:
         if check_chrom_file_legality(input.chrom, input.fasta, input.pep):
             with open(output.chrom_pass, "w") as outf:

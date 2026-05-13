@@ -143,6 +143,7 @@ def test_build_cmd_minimal(cli):
         dry_run=False,
         rerun_incomplete=False,
         printshellcmds=False,
+        retries=0,
         extra=[],
     )
     assert cmd[0].endswith("snakemake")
@@ -163,6 +164,7 @@ def test_build_cmd_all_flags(cli, tmp_path):
         dry_run=True,
         rerun_incomplete=True,
         printshellcmds=True,
+        retries=0,
         extra=["--quiet"],
     )
     assert "--directory" in cmd
@@ -391,3 +393,102 @@ def test_cli_has_argcomplete_marker(cli):
     for argcomplete's `register-python-argcomplete` to opt the file in."""
     head = CLI_PATH.read_text()[:1024]
     assert "PYTHON_ARGCOMPLETE_OK" in head
+
+
+# ---- Auto-workdir from config -------------------------------------------
+
+
+def test_auto_workdir_from_config(cli, tmp_path, monkeypatch):
+    """If --config is given and --workdir is omitted, the CLI should run
+    snakemake with --directory set to the config's parent directory.
+    Configs frequently contain relative paths, so this is the
+    do-what-you-mean default."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("species: {}\n")
+
+    parser = cli.build_parser()
+    args = parser.parse_args(["run", "--config", str(cfg), "--dry-run"])
+
+    seen = {}
+    def fake_call(c):
+        seen["cmd"] = c
+        return 0
+    monkeypatch.setattr(cli.subprocess, "call", fake_call)
+    rc = cli.run_subcommand("run", args)
+    assert rc == 0
+    cmd = seen["cmd"]
+    assert "--directory" in cmd
+    idx = cmd.index("--directory")
+    assert cmd[idx + 1] == str(tmp_path.resolve())
+
+
+def test_explicit_workdir_wins_over_auto(cli, tmp_path, monkeypatch):
+    """If --workdir is explicit, the auto-set must not clobber it."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("species: {}\n")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+
+    parser = cli.build_parser()
+    args = parser.parse_args([
+        "run", "--config", str(cfg),
+        "--workdir", str(other),
+        "--dry-run",
+    ])
+
+    seen = {}
+    def fake_call(c):
+        seen["cmd"] = c
+        return 0
+    monkeypatch.setattr(cli.subprocess, "call", fake_call)
+    cli.run_subcommand("run", args)
+    idx = seen["cmd"].index("--directory")
+    assert seen["cmd"][idx + 1] == str(other.resolve())
+
+
+# ---- --retries flag -----------------------------------------------------
+
+
+def test_retries_default_zero_no_config_kwarg(cli):
+    """With --retries 0 (the default) no '--config retries=...' is added."""
+    cmd = cli.build_snakemake_cmd(
+        snakefile=cli.snakefile_for("run"),
+        cores=2,
+        workdir=None,
+        configfile=None,
+        dry_run=False,
+        rerun_incomplete=False,
+        printshellcmds=False,
+        retries=0,
+        extra=[],
+    )
+    joined = " ".join(cmd)
+    assert "retries=" not in joined
+
+
+def test_retries_nonzero_injects_config_kwarg(cli):
+    cmd = cli.build_snakemake_cmd(
+        snakefile=cli.snakefile_for("run"),
+        cores=2,
+        workdir=None,
+        configfile=None,
+        dry_run=False,
+        rerun_incomplete=False,
+        printshellcmds=False,
+        retries=3,
+        extra=[],
+    )
+    assert "--config" in cmd
+    assert "retries=3" in cmd
+
+
+def test_retries_flag_parsed(cli):
+    parser = cli.build_parser()
+    args = parser.parse_args(["run", "--retries", "5"])
+    assert args.retries == 5
+
+
+def test_retries_default_is_zero(cli):
+    parser = cli.build_parser()
+    args = parser.parse_args(["run"])
+    assert args.retries == 0
