@@ -197,10 +197,12 @@ def calc_D_for_y_and_x(
                 subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
                 D = subtractdf.apply(lambda x: np.sqrt(np.square(x).sum()), axis=1)
                 xdf[f"D{thisdir}"] = D
-                xdf[f"D{thisdir}_barleft"] = 0
-                xdf[f"D{thisdir}_barmiddle"] = 0
-                xdf[f"D{thisdir}_barright"] = 0
-                xdf[f"D{thisdir}_barwidth"] = 0
+                # Float dtype: barmiddle is start + width/2 which can be
+                # non-integer; pandas 3.x makes the implicit cast an error.
+                xdf[f"D{thisdir}_barleft"] = 0.0
+                xdf[f"D{thisdir}_barmiddle"] = 0.0
+                xdf[f"D{thisdir}_barright"] = 0.0
+                xdf[f"D{thisdir}_barwidth"] = 0.0
                 for i, row in xdf.iterrows():
                     barleft = -1
                     barright = -1
@@ -309,19 +311,20 @@ def reciprocal_best_permissive_blastp_or_diamond_blastp(
     f_raw.columns = ["qseqid", "sseqid", "pident", "length",
                    "mismatch", "gapopen", "qstart", "qend",
                    "sstart", "send", "evalue", "bitscore"]
-    fdf = (f_raw.groupby("qseqid")
-             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
-             .reset_index(drop=True)
-          )
+    # Keep every row whose evalue equals the per-qseqid minimum.
+    # Vectorised transform avoids the groupby-apply pattern that pandas
+    # 3.x drops grouping columns from.
+    fdf = f_raw.loc[
+        f_raw.groupby("qseqid")["evalue"].transform("min") == f_raw["evalue"]
+    ].reset_index(drop=True)
 
     r_raw = pd.read_csv(y_to_x_blastp_results, sep="\t")
     r_raw.columns = ["qseqid", "sseqid", "pident", "length",
                    "mismatch", "gapopen", "qstart", "qend",
                    "sstart", "send", "evalue", "bitscore"]
-    rdf = (r_raw.groupby("qseqid")
-             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
-             .reset_index(drop=True)
-          )
+    rdf = r_raw.loc[
+        r_raw.groupby("qseqid")["evalue"].transform("min") == r_raw["evalue"]
+    ].reset_index(drop=True)
     rdf.columns = ["sseqid", "qseqid", "pident", "length",
                    "mismatch", "gapopen", "qstart", "qend",
                    "sstart", "send", "evalue", "bitscore"]

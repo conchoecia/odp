@@ -153,6 +153,167 @@ def test_chrom_file_is_legal_raises_on_missing_file(of, tmp_path):
         of.chrom_file_is_legal(str(tmp_path / "no.chrom"))
 
 
+def test_chrom_file_is_legal_rejects_leading_whitespace_in_field(of, tmp_path):
+    """Lines 557-560: per-field strip mismatch is caught. After splitting
+    on \\t, an embedded space inside a field is still whitespace."""
+    p = tmp_path / "ws.chrom"
+    p.write_text("prot1\t chrA\t+\t100\t200\n")  # space before chrA
+    assert of.chrom_file_is_legal(str(p)) is False
+
+
+# ---------------------------------------------------------------------------
+# check_legality — config sanity for the snakemake config dict
+# ---------------------------------------------------------------------------
+
+
+def test_check_legality_accepts_minimal_config(of):
+    """Empty `species` dict is legal (no illegal keys, no underscores)."""
+    of.check_legality({})
+    of.check_legality({"species": {}})
+
+
+def test_check_legality_rejects_unknown_per_sample_key(of, capsys):
+    """Unknown per-sample keys trigger sys.exit() with a print listing
+    legal + illegal keys (lines 845-853)."""
+    cfg = {"species": {"speciesA": {"this_key_is_not_legal": 1}}}
+    with pytest.raises(SystemExit):
+        of.check_legality(cfg)
+    out = capsys.readouterr().out
+    assert "this_key_is_not_legal" in out
+
+
+def test_check_legality_rejects_underscore_in_sample_name(of):
+    """Lines 854-857: sample names with '_' are rejected — many internal
+    string-splits would break on them."""
+    cfg = {"species": {"has_underscore": {"genome": "x.fa"}}}
+    with pytest.raises(IOError, match="can't have '_' char"):
+        of.check_legality(cfg)
+
+
+# ---------------------------------------------------------------------------
+# expand_avoid_matching_x_and_y_third — the 3-axis variant
+# ---------------------------------------------------------------------------
+
+
+def test_expand_avoid_matching_x_and_y_third_basic(of, capsys):
+    """Function exists for the color-by-third-species path (lines 887-892).
+    Drops files where xsample == ysample; cross-products over `third`."""
+    out = of.expand_avoid_matching_x_and_y_third(
+        "{}_vs_{}_by_{}.txt",
+        ["a", "b"], ["a", "b"], ["alg1", "alg2"],
+    )
+    # 2x2 grid minus diagonal = 2 cross pairs; each x 2 third = 4 files.
+    assert sorted(out) == sorted([
+        "a_vs_b_by_alg1.txt", "a_vs_b_by_alg2.txt",
+        "b_vs_a_by_alg1.txt", "b_vs_a_by_alg2.txt",
+    ])
+
+
+def test_expand_avoid_matching_x_and_y_third_empty_third(of):
+    """Empty third gives no files."""
+    out = of.expand_avoid_matching_x_and_y_third(
+        "{}_{}_{}.txt", ["a", "b"], ["a", "b"], [],
+    )
+    assert out == []
+
+
+# ---------------------------------------------------------------------------
+# calc_D_for_y_and_x — scaffold-based mode
+# ---------------------------------------------------------------------------
+
+
+def _make_scaf_df():
+    """Build a DataFrame matching the scaffold-mode shape: xscaf/yscaf
+    columns plus start/stop/middle for each axis. Coordinates are in
+    global concat space (matches the convention the function's offset
+    arithmetic expects)."""
+    import pandas as pd
+    rows = []
+    # chrX1 occupies concat positions 0..1500; chrX2 occupies 1500..4500.
+    for i in range(25):
+        on_x1 = i < 12
+        xstart = (i * 100) if on_x1 else (1500 + (i - 12) * 200)
+        ystart = (i * 200) if (i % 2 == 0) else (6000 + i * 200)
+        rows.append({
+            "xscaf": "chrX1" if on_x1 else "chrX2",
+            "yscaf": "chrY1" if (i % 2 == 0) else "chrY2",
+            "xstart": xstart,
+            "xstop": xstart + 50,
+            "xmiddle": xstart + 25,
+            "ystart": ystart,
+            "ystop": ystart + 100,
+            "ymiddle": ystart + 50,
+        })
+    return pd.DataFrame(rows)
+
+
+def test_calc_D_for_y_and_x_scaffold_mode_returns_df_with_D_columns(of):
+    """Scaffold-mode end-to-end (lines 169-233). Verifies the function
+    accepts a coordinate-rich df + offset/length dicts and returns a
+    DataFrame with Dx/Dy + bar columns populated."""
+    import pandas as pd
+    df = _make_scaf_df()
+    x_offset = {"chrX1": 0, "chrX2": 1500}
+    y_offset = {"chrY1": 0, "chrY2": 6000}
+    x_scaf_to_len = {"chrX1": 1500, "chrX2": 3000}
+    y_scaf_to_len = {"chrY1": 6000, "chrY2": 12000}
+    out = of.calc_D_for_y_and_x(
+        df,
+        x_offset=x_offset, y_offset=y_offset,
+        x_scaf_to_len=x_scaf_to_len, y_scaf_to_len=y_scaf_to_len,
+    )
+    assert isinstance(out, pd.DataFrame)
+    for col in ("Dx", "Dy",
+                "Dx_barleft", "Dx_barmiddle", "Dx_barright", "Dx_barwidth",
+                "Dy_barleft", "Dy_barmiddle", "Dy_barright", "Dy_barwidth"):
+        assert col in out.columns, f"missing column {col}"
+    # Bar columns are float (not int) — confirms the dtype fix for
+    # pandas 3.x compatibility.
+    assert out["Dx_barmiddle"].dtype == float
+
+
+def test_calc_D_for_y_and_x_insufficient_args_raises(of):
+    """Without break-mode OR scaffold-mode signals, function raises."""
+    import pandas as pd
+    df = pd.DataFrame({"xscaf": ["a"], "yscaf": ["b"]})
+    with pytest.raises(ValueError, match="Insufficient arguments"):
+        of.calc_D_for_y_and_x(df)
+
+
+def test_calc_D_for_y_and_x_single_marker_scaffold(of):
+    """Edge case: a scaffold with only one marker hits neither the
+    `i == 0` nor `i == len-1` branch — bar coords stay at -1."""
+    import pandas as pd
+    rows = [
+        {"xscaf": "chrX1", "yscaf": "chrY1",
+         "xstart": 100, "xstop": 150, "xmiddle": 125,
+         "ystart": 200, "ystop": 300, "ymiddle": 250},
+    ]
+    # Add several more rows on a different x-scaffold so the function
+    # has data to bucket — the single row on chrX1 exercises the
+    # `len(xdf) <= 1` branch (lines 207, `if len(xdf) > 1` False).
+    for i in range(1, 25):
+        rows.append({
+            "xscaf": "chrX2", "yscaf": "chrY1" if i % 2 else "chrY2",
+            "xstart": 1500 + i * 100, "xstop": 1500 + i * 100 + 50,
+            "xmiddle": 1500 + i * 100 + 25,
+            "ystart": 200 + i * 100, "ystop": 200 + i * 100 + 50,
+            "ymiddle": 200 + i * 100 + 25,
+        })
+    df = pd.DataFrame(rows)
+    out = of.calc_D_for_y_and_x(
+        df,
+        x_offset={"chrX1": 0, "chrX2": 1500},
+        y_offset={"chrY1": 0, "chrY2": 6000},
+        x_scaf_to_len={"chrX1": 1500, "chrX2": 3000},
+        y_scaf_to_len={"chrY1": 6000, "chrY2": 12000},
+    )
+    # Singleton scaffold rows keep barleft/barright at -1 (uninitialised).
+    chrX1_row = out[out["xscaf"] == "chrX1"].iloc[0]
+    assert chrX1_row["Dx_barleft"] == -1
+    assert chrX1_row["Dx_barright"] == -1
+
+
 # ---------------------------------------------------------------------------
 # flatten
 # ---------------------------------------------------------------------------

@@ -452,6 +452,81 @@ def test_LG_db_sp_matches_returns_none_when_no_match(cm, tmp_path):
     assert obj._sp_matches_which_db_species(["totally_unrelated"]) is None
 
 
+def _two_sp_lg_db(tmp_path, n_rows=20):
+    """Helper: build an LG_db whose .rbh has TWO db species so the
+    multi-match codepath in `_sp_matches_which_db_species` (lines 279-291)
+    is exercisable."""
+    header = (
+        "rbh\tgene_group\tcolor\t"
+        "spA_gene\tspA_scaf\tspA_pos\t"
+        "spB_gene\tspB_scaf\tspB_pos\n"
+    )
+    rows = [
+        f"rbh{i}\tG\t#FF0000\tprotA{i}\tchrA\t{i}\tprotB{i}\tchrB\t{i}"
+        for i in range(n_rows)
+    ]
+    rbh = header + "\n".join(rows) + "\n"
+    hmm = "\n".join(f"NAME  rbh{i}" for i in range(n_rows)) + "\n"
+    return _write_min_lg_db(tmp_path, rbh, hmm)
+
+
+def test_LG_db_sp_matches_ten_to_one_majority_wins(cm, tmp_path):
+    """Lines 282-283: if the top species hit count is at least 10x the
+    second, return the top species."""
+    d = _two_sp_lg_db(tmp_path, n_rows=20)
+    obj = cm.LG_db("twoLG", str(d), [])
+    # 10 spA hits, 1 spB hit → ratio 10x → spA wins.
+    inputs = [f"protA{i}" for i in range(10)] + ["protB0"]
+    assert obj._sp_matches_which_db_species(inputs) == "spA"
+
+
+def test_LG_db_sp_matches_tie_returns_first_with_warning(cm, capsys, tmp_path):
+    """Lines 285-289: tied top counts return one of them and warn."""
+    d = _two_sp_lg_db(tmp_path, n_rows=20)
+    obj = cm.LG_db("twoLG", str(d), [])
+    inputs = [f"protA{i}" for i in range(5)] + [f"protB{i}" for i in range(5)]
+    result = obj._sp_matches_which_db_species(inputs)
+    assert result in ("spA", "spB")
+    err = capsys.readouterr().err
+    assert "two species with the same number of matches" in err
+
+
+def test_LG_db_sp_matches_ambiguous_returns_none(cm, tmp_path):
+    """Lines 290-291: when top species is below 10:1 ratio AND not tied,
+    return None."""
+    d = _two_sp_lg_db(tmp_path, n_rows=20)
+    obj = cm.LG_db("twoLG", str(d), [])
+    # 5 spA, 3 spB — 5/3 ≈ 1.67, not 10:1, not equal.
+    inputs = [f"protA{i}" for i in range(5)] + [f"protB{i}" for i in range(3)]
+    assert obj._sp_matches_which_db_species(inputs) is None
+
+
+def test_LG_db_rejects_hmm_orthologs_not_in_rbh(cm, tmp_path):
+    """Lines 124-126: hmm file contains an ortholog that's not in the
+    rbh file — should raise."""
+    rbh = (
+        "rbh\tgene_group\tcolor\tdbsp_gene\tdbsp_scaf\tdbsp_pos\n"
+        "rbh1\tA1\t#FF0000\tprot1\tchrA\t1\n"
+    )
+    hmm = "NAME  rbh1\nNAME  PHANTOM_NOT_IN_RBH\n"
+    d = _write_min_lg_db(tmp_path, rbh, hmm)
+    with pytest.raises(IOError, match="hmm file contains some orthologs"):
+        cm.LG_db("minLG", str(d), [])
+
+
+def test_LG_db_gen_hmm_prot_to_rbh_missing_file_raises(cm, tmp_path):
+    """Line 197: missing hmm-results file is rejected."""
+    rbh = (
+        "rbh\tgene_group\tcolor\tdbsp_gene\tdbsp_scaf\tdbsp_pos\n"
+        "rbh1\tA1\t#FF0000\tprot1\tchrA\t1\n"
+    )
+    hmm = "NAME  rbh1\n"
+    d = _write_min_lg_db(tmp_path, rbh, hmm)
+    bogus = str(tmp_path / "nonexistent.tsv")
+    with pytest.raises(IOError, match="does not exist"):
+        cm.LG_db("minLG", str(d), [bogus])
+
+
 # ---------------------------------------------------------------------------
 # LG_db.color_dataframe via the HMM-results path
 # ---------------------------------------------------------------------------

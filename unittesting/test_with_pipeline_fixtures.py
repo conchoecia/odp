@@ -129,6 +129,20 @@ def rbh_with_color():
 # ---------------------------------------------------------------------------
 
 
+def test_reciprocal_best_permissive_blastp_real_pair(
+    of, hydra_blastp, urchin_blastp, tmp_path
+):
+    """Permissive variant — outputs every row whose evalue ties the
+    per-qseqid minimum, not just the single best. Smoke test."""
+    out_path = tmp_path / "permissive.tsv"
+    of.reciprocal_best_permissive_blastp_or_diamond_blastp(
+        str(hydra_blastp), str(urchin_blastp), str(out_path),
+    )
+    assert out_path.is_file()
+    body = out_path.read_text()
+    assert len(body.splitlines()) >= 1
+
+
 def test_reciprocal_best_hits_real_blastp_pair(
     of, hydra_blastp, urchin_blastp, tmp_path
 ):

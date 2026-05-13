@@ -303,6 +303,78 @@ def test_rbhdf_to_alglocdf_rejects_more_than_one_other_sample(rt, tmp_path):
         rt.rbhdf_to_alglocdf(df, 0.05, "ALG")
 
 
+def test_rbhdf_to_alglocdf_missing_gene_group_raises(rt, tmp_path):
+    """If the rbh DataFrame is missing the gene_group column, error."""
+    df = pd.DataFrame({
+        "rbh": ["r1"],
+        "ALG_scaf": ["chr1"],
+        "sp_scaf": ["scafA"],
+    })
+    with pytest.raises(IOError, match="does not have a column named 'gene_group'"):
+        rt.rbhdf_to_alglocdf(df, 0.05, "ALG")  # noqa: E501
+
+
+def test_rbhdf_to_alglocdf_happy_path(rt, tmp_path):
+    """End-to-end with a fully-formed rbh DataFrame: returns
+    (splitsdf, samplename) where splitsdf has rows per
+    (gene_group, scaf, pvalue) group filtered by whole_FET."""
+    p = tmp_path / "alg.rbh"
+    p.write_text(dedent("""\
+        rbh\tgene_group\twhole_FET\tALG_gene\tALG_scaf\tALG_pos\tsp_gene\tsp_scaf\tsp_pos
+        r1\tA\t0.001\tg1\tchr1\t1\ts1\tscafX\t10
+        r2\tA\t0.001\tg2\tchr1\t2\ts2\tscafX\t20
+        r3\tA\t0.001\tg3\tchr1\t3\ts3\tscafX\t30
+        r4\tB\t0.0001\tg4\tchr2\t4\ts4\tscafY\t40
+        r5\tB\t0.0001\tg5\tchr2\t5\ts5\tscafY\t50
+        r6\tA\t0.5\tg6\tchr1\t6\ts6\tscafZ\t60
+    """))
+    df = rt.parse_rbh(p)
+    splitsdf, samplename = rt.rbhdf_to_alglocdf(df, 0.05, "ALG")
+    assert samplename == "sp"
+    # Only A/scafX and B/scafY survive the whole_FET <= 0.05 filter.
+    assert len(splitsdf) == 2
+    assert set(splitsdf["gene_group"]) == {"A", "B"}
+    assert set(splitsdf["scaffold"]) == {"scafX", "scafY"}
+    # frac_of_this_ALG_on_this_scaffold for A: 3/4 (3 on scafX of 4 A-rows total).
+    a_row = splitsdf[splitsdf["gene_group"] == "A"].iloc[0]
+    assert a_row["frac_of_this_ALG_on_this_scaffold"] == pytest.approx(0.75)
+
+
+def test_rbhdf_to_alglocdf_inconsistent_FET_raises(rt, tmp_path):
+    """Same (gene_group, samplescaf) pair with different whole_FET values
+    indicates upstream FET ran incorrectly — function detects and
+    rejects."""
+    df = pd.DataFrame({
+        "rbh": ["r1", "r2"],
+        "gene_group": ["A", "A"],
+        "whole_FET": [0.001, 0.002],  # different on same group/scaf
+        "ALG_scaf": ["chr1", "chr1"],
+        "sp_scaf": ["scafX", "scafX"],
+    })
+    with pytest.raises(IOError, match="same value for all rows"):
+        rt.rbhdf_to_alglocdf(df, 0.05, "ALG")
+
+
+def test_combine_rbh_error_paths_do_not_crash_in_format_string(rt, tmp_path):
+    """Regression: the error path for `df1_unique_list != 1` previously
+    referenced the unbound name `df1_unique`. We can't directly trigger
+    that branch through `combine_rbh` because the surrounding shared-sample
+    check fires first, but the fix makes sure the f-string is well-formed."""
+    a = tmp_path / "a.rbh"
+    a.write_text(dedent("""\
+        rbh\tgene_group\tsp1_gene\tsp1_scaf\tsp1_pos
+        r1\tNone\tg1\tchr1\t1
+    """))
+    b = tmp_path / "b.rbh"
+    b.write_text(dedent("""\
+        rbh\tgene_group\tsp1_gene\tsp1_scaf\tsp1_pos
+        r2\tNone\tg2\tchr1\t2
+    """))
+    # No non-shared sample at all — fails on shared check, not on _unique check.
+    with pytest.raises(IOError):
+        rt.combine_rbh(a, b)
+
+
 # ---------------------------------------------------------------------------
 # parse_ALG_rbh_to_colordf — ALG-color/size summary
 # ---------------------------------------------------------------------------
