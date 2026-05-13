@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import gzip
 from pathlib import Path
 import pytest
 import hashlib
@@ -23,6 +24,14 @@ class _ODPFunctions:
     @staticmethod
     def chrom_file_is_legal(path):
         return True
+
+    @staticmethod
+    def open_text_maybe_gzip(path, encoding="utf-8"):
+        with open(path, "rb") as fh:
+            head = fh.read(2)
+        if head == b"\x1f\x8b":
+            return gzip.open(path, "rt", encoding=encoding)
+        return open(path, "rt", encoding=encoding)
 
 odpf = _ODPFunctions()
 
