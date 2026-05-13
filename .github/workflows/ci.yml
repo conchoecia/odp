@@ -1,0 +1,116 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  # Job A: pure-python unit tests + coverage. Fast matrix.
+  unit:
+    name: unit / ${{ matrix.os }} / py${{ matrix.python-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, python-version: "3.10"}
+          - {os: ubuntu-latest, python-version: "3.11"}
+          - {os: ubuntu-latest, python-version: "3.12"}
+          - {os: macos-latest,  python-version: "3.10"}
+          - {os: macos-latest,  python-version: "3.11"}
+          - {os: macos-latest,  python-version: "3.12"}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dev deps
+        run: pip install -r requirements-dev.txt
+
+      - name: Syntax check
+        run: python -m compileall -q source
+
+      - name: Run pytest with coverage
+        run: pytest unittesting/ --cov=source --cov-report=xml:coverage.xml --cov-report=term
+
+      - name: Generate coverage badge
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          pip install "genbadge[coverage]"
+          genbadge coverage -i coverage.xml -o docs/coverage-badge.svg
+
+      - name: Commit coverage badge
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update coverage badge [skip ci]"
+          file_pattern: docs/coverage-badge.svg
+
+  # Job B: end-to-end snakemake smoke test against the mini fixtures.
+  # Catches breakage of Snakefile rule bodies that pytest can't reach.
+  smoke:
+    name: smoke / ubuntu / snakemake e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install apt deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            hmmer \
+            diamond-aligner \
+            ncbi-blast+ \
+            samtools \
+            build-essential \
+            zlib1g-dev
+
+      - name: Install python deps
+        run: pip install -r requirements-dev.txt
+
+      - name: Cache bin/ + extracted LG_db + mini fixture
+        uses: actions/cache@v4
+        with:
+          path: |
+            bin/
+            LG_db/BCnSSimakov2022/
+            tests/testdb/mini_LG_db/
+          key: ${{ runner.os }}-odp-fixtures-${{ hashFiles('Makefile', 'source/fainfo.c', 'LG_db/BCnSSimakov2022.tar.gz', 'tests/testdb/generate_mini_BCnSSimakov2022.snakefile') }}
+
+      - name: Build seqtk + fainfo
+        run: make seqtk fainfo
+
+      - name: Build full BCnSSimakov2022 LG db (cached)
+        run: make BCnSSimakov2022 CORES=2
+
+      - name: Build mini BCnSSimakov2022 fixture (cached)
+        working-directory: tests/testdb
+        run: snakemake -s generate_mini_BCnSSimakov2022.snakefile --cores 2 -p
+
+      - name: Run odp basic snakemake smoke test
+        working-directory: tests/test_odp_basic
+        run: snakemake --cores 2 -p --snakefile ../../scripts/odp --rerun-incomplete
+
+      - name: Run odp onlyDB snakemake smoke test
+        working-directory: tests/test_odp_basic
+        run: snakemake --cores 2 -p --snakefile ../../scripts/odp_onlyDB --rerun-incomplete

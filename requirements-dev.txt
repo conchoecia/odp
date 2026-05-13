@@ -1,0 +1,15 @@
+pytest>=7.0
+pytest-cov
+snakemake>=7,<9
+pyyaml
+# pandas pinned to <3 because source/odp_functions.py uses the
+# `df.groupby(col).apply(...).reset_index(drop=True)` idiom which silently
+# drops the group key in pandas 3.x. Surfaced by the smoke test's
+# rule reciprocal_best_hits with `KeyError: 'qseqid'`. Followup: audit
+# the ~85 groupby sites and migrate to a forward-compatible form.
+pandas<3
+numpy
+matplotlib
+networkx
+biopython
+scipy
