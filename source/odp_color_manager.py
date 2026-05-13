@@ -358,6 +358,34 @@ def generate_random_color():
             if saturation > 0.3 and saturation < 0.8:
                 return "#{:06x}".format(color)
 
+# Default sequential palettes used by yield_color(). mypals25 is a
+# 25-color qualitative palette; mytableau20 mirrors Tableau 20.
+_YIELD_COLOR_PALETTES = {
+    "mypals25": [
+        "#1F78C8", "#DD0000", "#33a02c", "#6A33C2", "#ff7f00",
+        "#565656", "#EEC600", "#a6cee3", "#FB6496", "#b2df8a",
+        "#CAB2D6", "#FDBF6F", "#999999", "#EEE685", "#C8308C",
+        "#FF83FA", "#C814FA", "#0000DD", "#36648B", "#00E2E5",
+        "#00FF00", "#778B00", "#BEBE00", "#8B3B00", "#A52A3C",
+    ],
+    "tableau20": [
+        "#1F77B4", "#AEC7E8", "#FF7F0E", "#FFBB78", "#2CA02C", "#98DF8A",
+        "#D62728", "#FF9896", "#9467BD", "#C5B0D5", "#8C564B", "#C49C94",
+        "#E377C2", "#F7B6D2", "#7F7F7F", "#C7C7C7", "#BCBD22", "#DBDB8D",
+        "#17BECF", "#9EDAE5",
+    ],
+}
+
+def yield_color(palette="mypals25"):
+    """Generator yielding colors from a fixed qualitative palette, looping
+    indefinitely. Used where deterministic, repeatable color assignment is
+    preferred over generate_random_color()."""
+    pal = _YIELD_COLOR_PALETTES[palette]
+    i = 0
+    while True:
+        yield pal[i % len(pal)]
+        i += 1
+
 def calculate_brightness(color):
     red = (color >> 16) & 0xFF
     green = (color >> 8) & 0xFF
