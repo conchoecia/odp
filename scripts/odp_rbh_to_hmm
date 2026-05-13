@@ -6,12 +6,15 @@ The output of this is an rbh .tsv file, with or without a group column,
  that has the rbhs and their orthologs. It is allowed for there to be missing
  reads.
 """
-# This block imports fasta-parser as fasta
+# This block imports fasta-parser as fasta and wires source/ onto sys.path
+# so that `import odp_functions` below resolves regardless of cwd.
 import os
 import sys
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
 dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
 sys.path.insert(1, dependencies_path)
+source_path = os.path.join(snakefile_path, "../source")
+sys.path.insert(1, source_path)
 import fasta
 
 import ast

@@ -38,9 +38,12 @@ def size_gib(p: str) -> float:
 
 import gzip
 
-# ODP-specific imports
+# ODP-specific imports. odp_functions and friends live under source/ since
+# the decay-branch modular split; older Snakefiles still pointed at scripts/.
 scripts_path = os.path.join(snakefile_path, "../scripts")
 sys.path.insert(1, scripts_path)
+source_path = os.path.join(snakefile_path, "../source")
+sys.path.insert(1, source_path)
 import odp_functions as odpf
 
 configfile: "config.yaml"

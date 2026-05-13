@@ -16,11 +16,18 @@ from itertools import groupby
 from itertools import product
 import math
 import numpy as np
-import odp_functions as odpf
 from operator import itemgetter
+import os
 import pandas as pd
 import statistics
 import sys
+
+# Wire source/ onto sys.path so odp_functions resolves regardless of cwd.
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+source_path = os.path.join(snakefile_path, "../source")
+sys.path.insert(1, source_path)
+
+import odp_functions as odpf
 
 configfile: "config.yaml"
 

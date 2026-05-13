@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
 """odp — orchestrator CLI for the odp pipeline.
 
 Wraps each of the Snakefiles under ``scripts/`` behind a single
@@ -73,12 +74,29 @@ def snakefile_for(subcommand: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def default_cores() -> int:
+def available_cores() -> int:
     """Best-effort logical core count. Falls back to 2 if probing fails."""
     try:
         return os.cpu_count() or 2
     except Exception:
         return 2
+
+
+def default_cores() -> int:
+    """Default cores for new invocations. Same as ``available_cores()``."""
+    return available_cores()
+
+
+def warn_if_over_provisioned(cores: int) -> None:
+    """If the user asks for more cores than the machine has, print a warning
+    but keep going. Snakemake itself doesn't complain about this; we just
+    surface it so a typo of ``--cores 800`` on a 16-core laptop is visible."""
+    avail = available_cores()
+    if cores > avail:
+        sys.stderr.write(
+            f"odp: warning: --cores {cores} exceeds detected logical cores "
+            f"({avail}). Snakemake will still try; expect contention.\n"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +150,12 @@ def run_subcommand(subcommand: str, args: argparse.Namespace) -> int:
 
     workdir = Path(args.workdir).resolve() if args.workdir else None
     configfile = Path(args.config).resolve() if args.config else None
+
+    # Warn (don't fail) if --cores exceeds the machine. Heavy snakemake
+    # invocations on shared infra sometimes deliberately oversubscribe, so
+    # cap-as-error would be too aggressive. Fires before the config check so
+    # a user with both a bad config and a wild --cores value sees both.
+    warn_if_over_provisioned(args.cores)
 
     # Pre-flight: catch a missing config before snakemake does, so the user
     # sees a one-line error instead of a six-frame traceback.
@@ -309,7 +333,11 @@ def add_common_run_args(p: argparse.ArgumentParser) -> None:
         "--snakemake-arg",
         action="append",
         metavar="ARG",
-        help="extra raw flag passed to snakemake; repeat for multiple",
+        help=(
+            "extra raw flag passed to snakemake; repeat for multiple. "
+            "Use '=' form for flags whose value starts with '--', "
+            "e.g. --snakemake-arg=--quiet"
+        ),
     )
     p.add_argument(
         "--verbose", "-v",
@@ -451,6 +479,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
+
+    # Shell completion via argcomplete if installed. Users opt in by adding
+    # `eval "$(register-python-argcomplete odp)"` to their shell rc. Without
+    # argcomplete this is a no-op — no extra runtime dependency.
+    try:
+        import argcomplete  # type: ignore
+        argcomplete.autocomplete(parser)
+    except ImportError:
+        pass
 
     # Friendlier typo error: argparse's default lists every choice flat. We
     # intercept the unknown subcommand and print a "did you mean ...?"

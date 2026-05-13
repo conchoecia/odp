@@ -63,9 +63,11 @@ from random import randrange
 import sys
 import time
 
-# ODP-specific imports
+# ODP-specific imports. odp_functions and friends live under source/.
 scripts_path = os.path.join(snakefile_path, "../scripts")
 sys.path.insert(1, scripts_path)
+source_path = os.path.join(snakefile_path, "../source")
+sys.path.insert(1, source_path)
 import odp_functions as odpf
 
 # non-standard dependencies

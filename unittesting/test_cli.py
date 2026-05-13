@@ -342,3 +342,52 @@ def test_validate_no_config_no_local_fails(cli, tmp_path, monkeypatch):
     args = parser.parse_args(["validate"])
     rc = cli.cmd_validate(args)
     assert rc == 2
+
+
+# ---- Cores over-provisioning warning ------------------------------------
+
+
+def test_warn_if_over_provisioned_emits_when_too_high(cli, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "available_cores", lambda: 8)
+    cli.warn_if_over_provisioned(9999)
+    captured = capsys.readouterr()
+    assert "exceeds detected logical cores" in captured.err
+    assert "8" in captured.err
+
+
+def test_warn_if_over_provisioned_silent_when_under(cli, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "available_cores", lambda: 8)
+    cli.warn_if_over_provisioned(4)
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
+def test_warn_if_over_provisioned_silent_at_exact_limit(cli, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "available_cores", lambda: 8)
+    cli.warn_if_over_provisioned(8)
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
+def test_run_with_wild_cores_still_proceeds_to_config_check(cli):
+    """--cores 9999 should warn but still continue to the config check."""
+    result = subprocess.run(
+        [sys.executable, str(CLI_PATH),
+         "run", "--cores", "9999", "--config", "/nonexistent.yaml"],
+        capture_output=True,
+        text=True,
+    )
+    # exit 2 from config not found, not from cores
+    assert result.returncode == 2
+    assert "exceeds detected logical cores" in result.stderr
+    assert "config file not found" in result.stderr
+
+
+# ---- argcomplete hook ---------------------------------------------------
+
+
+def test_cli_has_argcomplete_marker(cli):
+    """`# PYTHON_ARGCOMPLETE_OK` must be in the first 1024 bytes of bin/odp
+    for argcomplete's `register-python-argcomplete` to opt the file in."""
+    head = CLI_PATH.read_text()[:1024]
+    assert "PYTHON_ARGCOMPLETE_OK" in head
