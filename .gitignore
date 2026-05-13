@@ -32,6 +32,8 @@ LG_db/*/*.check
 LG_db/*/*.hmm
 LG_db/*/*.rbh
 LG_db/*/
+# HMM build artifacts (built by Makefile from alignments) — never commit
+**/*.hmm
 dev_scripts/deprecated/*
 ._*
 slurm-*
