@@ -154,6 +154,98 @@ def test_parse_bed_empty_file_errors(importer, tmp_path):
         importer.parse_bed(p)
 
 
+def test_detect_coord_format_chrom(importer, tmp_path):
+    p = tmp_path / "x.chrom"
+    p.write_text("g1\tchr1\t+\t100\t200\n")
+    assert importer.detect_coord_format(p) == "chrom"
+
+
+def test_detect_coord_format_bed(importer, tmp_path):
+    p = tmp_path / "x.bed"
+    p.write_text("chr1\t100\t200\tg1\n")
+    assert importer.detect_coord_format(p) == "bed"
+
+
+def test_detect_coord_format_skips_blank_then_chrom(importer, tmp_path):
+    """Detection should skip blank lines (line 67-68)."""
+    p = tmp_path / "x.chrom"
+    p.write_text("\n\ng1\tchr1\t+\t100\t200\n")
+    assert importer.detect_coord_format(p) == "chrom"
+
+
+def test_detect_coord_format_unrecognized_raises(importer, tmp_path):
+    """Lines that match neither format raise (line 85-89)."""
+    p = tmp_path / "junk"
+    p.write_text("not\ttab\tseparated\tcoordinates\there\n")
+    with pytest.raises(ValueError, match="cannot detect format"):
+        importer.detect_coord_format(p)
+
+
+def test_detect_coord_format_empty_file_raises(importer, tmp_path):
+    p = tmp_path / "empty"
+    p.write_text("")
+    with pytest.raises(ValueError, match="is empty"):
+        importer.detect_coord_format(p)
+
+
+def test_parse_chrom_basic(importer, tmp_path):
+    p = tmp_path / "x.chrom"
+    p.write_text("g1\tchr1\t+\t100\t200\ng2\tchr2\t-\t300\t450\n")
+    df = importer.parse_chrom(p)
+    assert len(df) == 2
+    assert df.loc[0, "gene_id"] == "g1"
+    assert df.loc[0, "strand"] == "+"
+    assert df.loc[0, "pos"] == 150
+
+
+def test_parse_chrom_blank_lines_skipped(importer, tmp_path):
+    """Line 107-108: blank lines inside chrom file are skipped."""
+    p = tmp_path / "x.chrom"
+    p.write_text("\n\ng1\tchr1\t+\t100\t200\n\n")
+    df = importer.parse_chrom(p)
+    assert len(df) == 1
+
+
+def test_parse_chrom_too_few_columns_raises(importer, tmp_path):
+    """Line 110-115: fewer than 5 columns is rejected."""
+    p = tmp_path / "bad.chrom"
+    p.write_text("g1\tchr1\t+\t100\n")
+    with pytest.raises(ValueError, match="needs at least 5 tab"):
+        importer.parse_chrom(p)
+
+
+def test_parse_chrom_bad_strand_raises(importer, tmp_path):
+    """Line 117-121: strand must be +, -, or '.'."""
+    p = tmp_path / "bad.chrom"
+    p.write_text("g1\tchr1\tX\t100\t200\n")
+    with pytest.raises(ValueError, match="strand must be"):
+        importer.parse_chrom(p)
+
+
+def test_parse_chrom_non_integer_coords_raises(importer, tmp_path):
+    """Line 125-129: start/stop must be ints."""
+    p = tmp_path / "bad.chrom"
+    p.write_text("g1\tchr1\t+\tNOT_AN_INT\t200\n")
+    with pytest.raises(ValueError, match="start/stop must be integers"):
+        importer.parse_chrom(p)
+
+
+def test_parse_chrom_empty_file_raises(importer, tmp_path):
+    """Line 138-139: empty after blank-stripping is rejected."""
+    p = tmp_path / "empty.chrom"
+    p.write_text("\n\n")
+    with pytest.raises(ValueError, match="is empty or has no parseable"):
+        importer.parse_chrom(p)
+
+
+def test_parse_coordinates_unsupported_format_raises(importer, tmp_path):
+    """Line 204: explicit fmt that's not 'auto'/'chrom'/'bed' is rejected."""
+    p = tmp_path / "x.chrom"
+    p.write_text("g1\tchr1\t+\t100\t200\n")
+    with pytest.raises(ValueError, match="unsupported coordinate format"):
+        importer.parse_coordinates(p, fmt="vcf")
+
+
 # ---------------------------------------------------------------------------
 # Orthologs-table parsing
 # ---------------------------------------------------------------------------
@@ -237,6 +329,83 @@ def test_parse_species_names_count_mismatch_errors(importer, two_col_orthologs):
         importer.parse_ortholog_table(
             two_col_orthologs, species_names=["a", "b", "c"],
         )
+
+
+def test_parse_empty_table_raises(importer, tmp_path):
+    """Line 263-264: empty file is rejected up front."""
+    p = tmp_path / "empty.tsv"
+    p.write_text("")
+    with pytest.raises(ValueError, match="is empty"):
+        importer.parse_ortholog_table(p)
+
+
+def test_parse_only_header_no_data_raises(importer, tmp_path):
+    """Line 273-274: header but no data rows."""
+    p = tmp_path / "header_only.tsv"
+    p.write_text("Orthogroup\tsp1\tsp2\n")
+    with pytest.raises(ValueError, match="has no data rows"):
+        importer.parse_ortholog_table(p, has_header=True)
+
+
+def test_parse_species_count_with_og_column_mismatch(importer, tmp_path):
+    """Line 301-309: species count doesn't match table cols even with OG."""
+    p = tmp_path / "x.tsv"
+    p.write_text("OG0000001\tg1\tx1\n")
+    with pytest.raises(ValueError, match="Expected either"):
+        importer.parse_ortholog_table(p, species_names=["only_one"])
+
+
+def test_parse_species_count_one_more_implies_og_column(importer, tmp_path):
+    """Line 300-301: cols == species + 1 → OG column inferred."""
+    p = tmp_path / "x.tsv"
+    p.write_text("OG0000001\tg1\tx1\nOG0000002\tg2\tx2\n")
+    names, df = importer.parse_ortholog_table(p, species_names=["a", "b"])
+    assert names == ["a", "b"]
+    assert df.iloc[0]["a"] == "g1"
+    assert df.iloc[0]["b"] == "x1"
+
+
+def test_parse_species_order_count_mismatch_with_og_column_forced(importer, tmp_path):
+    """Line 323-328: explicit has_orthogroup_id_column=True with wrong
+    species count is rejected by the post-OG-column check."""
+    p = tmp_path / "x.tsv"
+    p.write_text("OG0000001\tg1\tx1\tz1\n")  # 4 cols: OG + 3 species
+    with pytest.raises(ValueError, match="species columns"):
+        importer.parse_ortholog_table(
+            p, species_names=["only_one_name"],
+            has_orthogroup_id_column=True,
+        )
+
+
+def test_orthologs_to_rbh_warns_on_duplicate_bed_gene_ids(
+    importer, tmp_path, capsys
+):
+    """Line 422-430: duplicate gene_id in a coordinate file emits a warning
+    and the first occurrence is kept."""
+    sp1 = tmp_path / "sp1.bed"
+    sp1.write_text(dedent("""\
+        chr1\t100\t200\tg1
+        chr1\t300\t400\tg1
+        chr2\t500\t600\tg2
+    """))
+    sp2 = tmp_path / "sp2.bed"
+    sp2.write_text(dedent("""\
+        scafA\t10\t20\tx1
+        scafA\t30\t40\tx2
+    """))
+    orth = tmp_path / "pairs.tsv"
+    orth.write_text("g1\tx1\ng2\tx2\n")
+    df = importer.orthologs_to_rbh(
+        orthologs_path=orth,
+        bed_paths={"sp1": sp1, "sp2": sp2},
+        species_order=["sp1", "sp2"],
+    )
+    assert len(df) == 2
+    # First-occurrence wins for the duplicate gene id.
+    g1_row = df[df["sp1_gene"] == "g1"].iloc[0]
+    assert g1_row["sp1_pos"] == 150
+    err = capsys.readouterr().err
+    assert "duplicate gene_id entries" in err
 
 
 # ---------------------------------------------------------------------------

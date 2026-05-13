@@ -36,8 +36,13 @@ def calculate_FET(genesdf, scafdict):
         genesdf = genesdf.loc[genesdf[scafcol].isin(allowed_scaffolds)]
     #print("genesdf after filtering\n", genesdf)
 
-    genesdf["whole_FET"] = -1
-    genesdf["break_FET"] = -1
+    # Initialise as float (NaN sentinel) rather than int(-1). The FET
+    # results that overwrite these are float p-values; assigning a float
+    # into an int64 column raises a FutureWarning on pandas 2.x and will
+    # error on pandas 3.x.
+    import numpy as np
+    genesdf["whole_FET"] = np.nan
+    genesdf["break_FET"] = np.nan
     # now perform Fisher's Exact Test
     if len(all_species) == 2:
         sp1 = list(sorted(all_species))[0]

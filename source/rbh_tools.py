@@ -258,11 +258,11 @@ def combine_rbh(rbh_filepath1, rbh_filepath2) -> pd.DataFrame:
     df1_unique_list = [x for x in df1_samples if x != shared_sample]
     # This list should just be one element long
     if len(df1_unique_list) != 1:
-        raise IOError(f"The df1_unique list should only have one element. It has {len(df1_unique)} elements. Exiting.")
+        raise IOError(f"The df1_unique list should only have one element. It has {len(df1_unique_list)} elements. Exiting.")
     df2_unique_list = [x for x in df2_samples if x != shared_sample]
     # This list should just be one element long
     if len(df2_unique_list) != 1:
-        raise IOError(f"The df2_unique list should only have one element. It has {len(df2_unique)} elements. Exiting.")
+        raise IOError(f"The df2_unique list should only have one element. It has {len(df2_unique_list)} elements. Exiting.")
     df1_unique = df1_unique_list[0]
     df2_unique = df2_unique_list[0]
 
@@ -329,10 +329,12 @@ def rbhdf_to_alglocdf(df, minsig, ALGname) -> (pd.DataFrame, str):
 
     # make sure that the genegroup column is present
     if "gene_group" not in df.columns:
-        raise IOError(f"The rbh file, {rbhfilepath} does not have a column named 'gene_group'")
+        raise IOError("The rbh DataFrame does not have a column named 'gene_group'")
 
-    # we need to get the sample names
-    samples = [x.split("_")[0] for x in df.columns if "_scaf" in x]
+    # we need to get the sample names. Use the full `_scaf` suffix as the
+    # split point rather than the first `_` so sample names containing
+    # underscores (rare but theoretically possible) don't get truncated.
+    samples = [x[:-len("_scaf")] for x in df.columns if x.endswith("_scaf")]
     # We need to check that the ALGname is in the samples
     if not ALGname in samples:
         raise IOError(f"The ALGname, {ALGname} is not in the samples. Exiting.")

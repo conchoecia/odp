@@ -16,7 +16,9 @@ import odp_plotting_functions as odp_plot
 
 # other standard python libraries
 from itertools import combinations
+from itertools import groupby
 from itertools import product
+from operator import itemgetter
 import hashlib
 
 # non-standard dependencies
@@ -197,10 +199,12 @@ def calc_D_for_y_and_x(
                 subtractdf = df2_xiR.fillna(0) - df2_xiL.fillna(0)
                 D = subtractdf.apply(lambda x: np.sqrt(np.square(x).sum()), axis=1)
                 xdf[f"D{thisdir}"] = D
-                xdf[f"D{thisdir}_barleft"] = 0
-                xdf[f"D{thisdir}_barmiddle"] = 0
-                xdf[f"D{thisdir}_barright"] = 0
-                xdf[f"D{thisdir}_barwidth"] = 0
+                # Float dtype: barmiddle is start + width/2 which can be
+                # non-integer; pandas 3.x makes the implicit cast an error.
+                xdf[f"D{thisdir}_barleft"] = 0.0
+                xdf[f"D{thisdir}_barmiddle"] = 0.0
+                xdf[f"D{thisdir}_barright"] = 0.0
+                xdf[f"D{thisdir}_barwidth"] = 0.0
                 for i, row in xdf.iterrows():
                     barleft = -1
                     barright = -1
@@ -309,19 +313,20 @@ def reciprocal_best_permissive_blastp_or_diamond_blastp(
     f_raw.columns = ["qseqid", "sseqid", "pident", "length",
                    "mismatch", "gapopen", "qstart", "qend",
                    "sstart", "send", "evalue", "bitscore"]
-    fdf = (f_raw.groupby("qseqid")
-             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
-             .reset_index(drop=True)
-          )
+    # Keep every row whose evalue equals the per-qseqid minimum.
+    # Vectorised transform avoids the groupby-apply pattern that pandas
+    # 3.x drops grouping columns from.
+    fdf = f_raw.loc[
+        f_raw.groupby("qseqid")["evalue"].transform("min") == f_raw["evalue"]
+    ].reset_index(drop=True)
 
     r_raw = pd.read_csv(y_to_x_blastp_results, sep="\t")
     r_raw.columns = ["qseqid", "sseqid", "pident", "length",
                    "mismatch", "gapopen", "qstart", "qend",
                    "sstart", "send", "evalue", "bitscore"]
-    rdf = (r_raw.groupby("qseqid")
-             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
-             .reset_index(drop=True)
-          )
+    rdf = r_raw.loc[
+        r_raw.groupby("qseqid")["evalue"].transform("min") == r_raw["evalue"]
+    ].reset_index(drop=True)
     rdf.columns = ["sseqid", "qseqid", "pident", "length",
                    "mismatch", "gapopen", "qstart", "qend",
                    "sstart", "send", "evalue", "bitscore"]
@@ -375,16 +380,17 @@ def reciprocal_best_hits_blastp_or_diamond_blastp(
     # now filter
     f_seqs = new_df["qseqid"]
     r_seqs = new_df["sseqid"]
+    # Keep every row whose evalue equals the per-qseqid minimum. The
+    # vectorised `transform("min")` form is pandas-3 compatible (no
+    # groupby-apply deprecation) and avoids the column-drop ambiguity.
     fdf = f_raw.copy()
-    fdf = (fdf.groupby("qseqid")
-             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
-             .reset_index(drop=True)
-          )
+    fdf = fdf.loc[
+        fdf.groupby("qseqid")["evalue"].transform("min") == fdf["evalue"]
+    ].reset_index(drop=True)
     rdf = r_raw.copy()
-    rdf = (rdf.groupby("qseqid")
-             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
-             .reset_index(drop=True)
-          )
+    rdf = rdf.loc[
+        rdf.groupby("qseqid")["evalue"].transform("min") == rdf["evalue"]
+    ].reset_index(drop=True)
 
     # only get the things that we haven't seen yet
     fdf2 = fdf.loc[~fdf["qseqid"].isin(f_seqs)]
@@ -420,88 +426,6 @@ def reciprocal_best_hits_blastp_or_diamond_blastp(
         raise IOError("something happened in parsing that shouldn't have. These filtering steps should not have done anything")
     finaldf.to_csv(outfile, sep="\t", index = False, header = False)
 
-def reciprocal_best_hits_jackhmmer(
-        x_to_y_blastp_results, y_to_x_blastp_results, outfile):
-    """
-    This function finds reciprocal best jackhmmer hits between two samples.
-    The input is a blastp results file where x was jackhmmer'd against y,
-      and a blastp results file where y was jackhmmer'd against x.
-
-    The output format is just the rows of the blastp results from the x_to_y file.
-    Saves it as a df to outfile.
-
-    This algorithm is permissive in that it finds the best hits between the two
-      species even if the e-values for the "best hit" are equivalent. This fixes
-      one of the problems with blastp results. The results are still reciprocal
-      best, though.
-
-    Update 20230103: This function is not used anymore. It was used for jackhammer.
-      Jackhammer did not work well for this program, so ignoring it.
-    """
-    jackhmmercol = ["target_name", "accession",  "query_name",
-                    "accession",
-                    "evalue",  "score",          "bias",
-                    "dom_evalue2", "dom_score2", "bias2",
-                    "exp", "reg", "clu",
-                    "ov", "env", "dom", "rep", "inc",
-                    "description_of_target"]
-    f_raw = pd.read_csv(x_to_y_blastp_results,
-                        sep = "\\s+", comment = "#",
-                        usecols=range(len(jackhmmercol)))
-    f_raw.columns = jackhmmercol
-    fdf = f_raw.sort_values(["query_name", "score", "evalue" ], ascending=[True, False, True]).drop_duplicates(subset="query_name")
-
-
-    r_raw = pd.read_csv(y_to_x_blastp_results,
-                        sep="\\s+", comment = "#",
-                        usecols=range(len(jackhmmercol)))
-    r_raw.columns = jackhmmercol
-    rdf = r_raw.sort_values(["query_name", "score", "evalue"], ascending=[True, False, True]).drop_duplicates(subset="query_name")
-    #rdf = r_raw.sort_values(["query_name", "score", "evalue"], ascending=[True, False, True]).groupby("query_name").head(2)
-
-    rdf.columns = ["query_name", "accession",  "target_name",
-                    "accession",
-                    "evalue",  "score",          "bias",
-                    "dom_evalue2", "dom_score2", "bias2",
-                    "exp", "reg", "clu",
-                    "ov", "env", "dom", "rep", "inc",
-                    "description_of_target"]
-
-    rdf = rdf[["target_name","query_name"]]
-
-    #These are the singleton RBH
-    new_df = pd.merge(fdf, rdf,  how='inner',
-                      left_on  = ['query_name','target_name'],
-                      right_on = ['query_name','target_name'])
-    #these rows are a little pedantic and we don't really need to do them
-    new_df = new_df.sort_values(["query_name","score"],
-                                ascending=[True, False]).drop_duplicates(
-                                    subset="query_name")
-    new_df = new_df.sort_values(["target_name","score"],
-                                ascending=[True, False]).drop_duplicates(
-                                    subset="query_name")
-
-    new_df.columns = ["sseqid", "accession",  "qseqid",
-                      "accession",
-                      "evalue",  "bitscore",          "bias",
-                      "dom_evalue2", "dom_score2", "bias2",
-                      "exp", "reg", "clu",
-                      "ov", "env", "dom", "rep", "inc",
-                      "description_of_target"]
-    new_df["pident"]   = 0
-    new_df["length"]   = 0
-    new_df["mismatch"] = 0
-    new_df["gapopen"]  = 0
-    new_df["qstart"]   = 0
-    new_df["qend"]     = 0
-    new_df["sstart"]   = 0
-    new_df["send"]     = 0
-    new_df = new_df[["qseqid", "sseqid", "pident", "length",
-                   "mismatch", "gapopen", "qstart", "qend",
-                   "sstart", "send", "evalue", "bitscore"]]
-    print(new_df)
-    new_df.to_csv(outfile, sep="\t", index = False, header = False)
-
 def check_file_exists(filepath) -> bool:
     """
     checks if a file exists.
@@ -510,8 +434,8 @@ def check_file_exists(filepath) -> bool:
     if not os.path.isfile(filepath):
         outmessage =  "*********************************************************************\n"
         outmessage += "* ERROR:\n"
-        outmessage += "*  This file does not exist:" + filepath + "\n"
-        outmessage =  "*********************************************************************\n"
+        outmessage += "*  This file does not exist: " + str(filepath) + "\n"
+        outmessage += "*********************************************************************\n"
         raise IOError(outmessage)
     else:
         return True
@@ -750,12 +674,9 @@ def check_species_input_legality(fastapath, peppath, chrompath, dup_proteins_all
     # 2. Check that the proteins in column 1 were seen in the protein fasta file
     if len(proteins_not_in_pep) > 0:
         #   if there are any duplicates, print out a string of the first 3
-        proteins_not_in_pep   = list(proteins_not_in_pep)
-        dupstring = ""
-        for i in range(3):
-            dupstring += "*    - " + str(proteins_not_in_pep[i]) + "\n"
+        proteins_not_in_pep   = sorted(list(proteins_not_in_pep))
         # raise an error because the proteins should have been seen already
-        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(proteins_not_in_pep)[:3]])
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in proteins_not_in_pep[:3]])
         outmessage =  "*********************************************************************\n"
         outmessage += "* ERROR:\n"
         outmessage += "*  Some proteins in the .chrom file were not seen in the protein\n"
@@ -816,6 +737,9 @@ def check_species_input_legality(fastapath, peppath, chrompath, dup_proteins_all
         outmessage += "*   file, or if something is missing from the genome .fasta file.\n"
         outmessage += "*   Then, fix your files and re-run this pipeline.\n"
         outmessage += "*********************************************************************\n"
+        # The error message was previously built but never raised, so
+        # invalid configs slipped past undetected. Raise it now.
+        raise IOError(outmessage)
 
     # everything passed
     return True
@@ -931,45 +855,6 @@ def expand_avoid_matching_all_third(filestring, **kwargs):
             outlist.append(filestring.format(**temp_kwargs))
     return [x for x in outlist]
 
-
-def generate_coord_structs_from_chrom_to_loc(chrom_file):
-    """
-    This parses a .chrom file and outputs five data structures that are easily
-     used for mapping pandas dataframes.
-    The output is a dict of dicts. Not the most intuitive format but easy for
-     mapping to column values.
-     { "prot_to_scaf":   prot_to_scaf,
-       "prot_to_strand": prot_to_strand,
-       "prot_to_start":  prot_to_start,
-       "prot_to_stop":   prot_to_stop,
-       "prot_to_middle": prot_to_middle }
-    """
-    prot_to_scaf   = {}
-    prot_to_strand = {}
-    prot_to_start  = {}
-    prot_to_stop   = {}
-    prot_to_middle = {}
-    print("chrom_file", chrom_file)
-    with open(chrom_file, "r") as f:
-       for line in f:
-           line = line.strip()
-           if line:
-               splitd = line.split()
-               prot = splitd[0]
-               # add things now
-               prot_to_scaf[prot]   = splitd[1]
-               prot_to_strand[prot] = splitd[2]
-               start = int(splitd[3])
-               prot_to_start[prot]  = start
-               stop = int(splitd[4])
-               prot_to_stop[prot]   = stop
-               stop = int(splitd[4])
-               prot_to_middle[prot] = int(start + (stop - start)/2)
-    return { "prot_to_scaf":   prot_to_scaf,
-             "prot_to_strand": prot_to_strand,
-             "prot_to_start":  prot_to_start,
-             "prot_to_stop":   prot_to_stop,
-             "prot_to_middle": prot_to_middle }
 
 def open_text_maybe_gzip(path, encoding="utf-8"):
     with open(path, "rb") as fh:
@@ -1137,7 +1022,7 @@ def blast_plot_order_helper(coords, sample, xory, xprottoloc, yprottoloc, recip,
     df["ypos"] = df["ygene"].map(ycoords["prot_to_middle"])
 
     df["xscaf"] = df["xgene"].map(xcoords["prot_to_scaf"])
-    df["yscaf"] = df["ygene"].map(xcoords["prot_to_scaf"])
+    df["yscaf"] = df["ygene"].map(ycoords["prot_to_scaf"])
     df = df.dropna()
     df = df.sort_values(by=['xpos'])
     df = df.dropna()
@@ -1303,16 +1188,16 @@ def determine_breaks(df, scaf_to_breaks_set, scaf_to_offset_dict,
                 subdf = df.loc[df[sort_order[sort_direction]["chrom"]] == thischrom, ].copy()
                 # Dx2 is just the raw data that is above the median
                 subdf["Dx2"] = subdf[sort_order[sort_direction]["D"]]
-                subdf['Dx2'] = np.where((subdf[sort_order[sort_direction]["D"]] < subdf[sort_order[sort_direction]["D"]].median()),np.NaN,subdf["Dx2"])
+                subdf['Dx2'] = np.where((subdf[sort_order[sort_direction]["D"]] < subdf[sort_order[sort_direction]["D"]].median()),np.nan,subdf["Dx2"])
                 # MA is the moving average of the raw data
                 subdf["MA"] = subdf["Dx2"].rolling(window=3, center=True).mean()
                 subdf["MA2"] = subdf["Dx2"].rolling(window=19, center=True).mean()
                 # deltMA is the derivative of the moving average
                 subdf["deltMA"] = subdf["MA"].diff() / subdf["MA"].index.to_series().diff()
-                subdf['deltMA'] = np.where((subdf["MA"] < subdf["MA"].median()),np.NaN,subdf["deltMA"])
+                subdf['deltMA'] = np.where((subdf["MA"] < subdf["MA"].median()),np.nan,subdf["deltMA"])
                 # deltD is the derivative of the raw data
                 subdf["deltD"] = subdf["Dx2"].diff() / subdf["Dx2"].index.to_series().diff()
-                subdf['deltD'] = np.where((subdf.Dx2 < subdf["Dx2"].median()),np.NaN,subdf.deltD)
+                subdf['deltD'] = np.where((subdf.Dx2 < subdf["Dx2"].median()),np.nan,subdf.deltD)
 
                 # get the groups of consecutive values in each category
                 idxmaxes = set()
@@ -1433,7 +1318,7 @@ def gen_plotting_df(ycoords_file, xcoords_file,
 
     y_offset, y_scaf_to_len, horizontal_lines_at, ymax, yticklabel, ytickpos, yorder = parse_coords(
         ycoords_file, ysample, "y",
-        xprottoloc, yprottoloc, recip, xticklabel)
+        xprottoloc, yprottoloc, recip, xticklabel, **kwargs)
     print("found {} y chromosomes".format(len(y_offset)))
 
     # now save the plot order to a file
@@ -1572,7 +1457,7 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     print("found {} x chromosomes".format(len(x_offset)))
 
     y_offset, y_scaf_to_len, horizontal_lines_at, ymax, yticklabel, ytickpos, yorder = parse_coords(
-        ycoords_file, ysample, "y")
+        ycoords_file, ysample, "y", **kwargs)
     print("found {} y chromosomes".format(len(y_offset)))
 
     # first make a lookup table

@@ -202,12 +202,14 @@ def ribbon_plot(species_order, rbh_filelist,
         sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp][["{}_gene".format(thissp),
                                                          "{}_scaf".format(thissp),
                                                          "{}_pos".format(thissp)]]
-        sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp].groupby(
-                                   by=["{}_scaf".format(thissp)], as_index=False
-                                   ).apply(lambda x: x.reset_index(drop=True)
-                                   )
-        sp_to_genesdfs[thissp].index.names = ["{}_delete".format(thissp),"{}_chromIx".format(thissp)]
-        sp_to_genesdfs[thissp].reset_index(inplace =True)
+        # Assign each gene its position within its chromosome (0, 1, 2,
+        # ...). This used to be done via groupby().apply(reset_index)
+        # which pandas 2.2+ deprecates. `cumcount()` produces the same
+        # result without the groupby-apply pattern and is pandas-3
+        # compatible.
+        sp_to_genesdfs[thissp]["{}_chromIx".format(thissp)] = (
+            sp_to_genesdfs[thissp].groupby("{}_scaf".format(thissp)).cumcount()
+        )
         sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp][[x for x
                                   in sp_to_genesdfs[thissp] if "delete" not in x]]
         #print(sp_to_genesdfs[thissp])
@@ -435,9 +437,13 @@ def ribbon_plot(species_order, rbh_filelist,
             else:
                 # there is no acceptable column, raise an error
                 raise ValueError("No acceptable column for filtering in colordf")
-        # now that we have picked the filter column, get the color labels
-        color_labels = color_labels.union( \
-                        set(thisdf.loc[thisdf[filtercol] <= 0.05, "gene_group"].tolist())) 
+        # now that we have picked the filter column, get the color labels.
+        # Drop NaN gene_group values: when an rbh row didn't match any
+        # ALG, gene_group is NaN, which would otherwise produce a mixed
+        # NaN/str set that Python 3 refuses to sort (TypeError on '<').
+        color_labels = color_labels.union(
+            set(thisdf.loc[thisdf[filtercol] <= 0.05, "gene_group"].dropna().tolist())
+        )
     color_labels = sorted(list(color_labels))
 
     # Get a dataframe of group to color based on frequency
