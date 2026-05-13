@@ -1,0 +1,10 @@
+pytest>=7.0
+pytest-cov
+snakemake>=7,<9
+pyyaml
+pandas
+numpy
+matplotlib
+networkx
+biopython
+scipy

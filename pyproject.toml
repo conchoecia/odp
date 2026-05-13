@@ -1,0 +1,19 @@
+# odp is a Snakemake pipeline, not a pip-installable library. This file
+# exists only to give pytest a single discovery config and to hold any
+# future tool configuration (ruff, coverage, etc.) in one place. Do not
+# add a [project] / [build-system] section unless you intend to publish
+# odp on PyPI.
+
+[tool.pytest.ini_options]
+testpaths = ["unittesting"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["source"]
+omit = [
+  "source/kseq.h",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false

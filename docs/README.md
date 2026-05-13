@@ -1,5 +1,7 @@
 <a href="https://www.nature.com/articles/s41586-023-05936-6"><img src="manuscript_DOI.svg" alt="Manuscript"  height="20"></a>
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7857389.svg)](https://doi.org/10.5281/zenodo.7857389)
+![Coverage](coverage-badge.svg)
+[![CI](https://github.com/conchoecia/odp/actions/workflows/ci.yml/badge.svg)](https://github.com/conchoecia/odp/actions/workflows/ci.yml)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="odp_logo_black_400px.png">
