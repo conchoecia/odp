@@ -415,3 +415,95 @@ def test_check_legality_rejects_underscore_in_sample_name(of):
     cfg = {"species": {"my_species": {}}}
     with pytest.raises(IOError, match="Sample names can't have '_' char"):
         of.check_legality(cfg)
+
+
+# ---------------------------------------------------------------------------
+# genome_coords_to_plotstart_dict / genome_coords_to_offset_dict
+# ---------------------------------------------------------------------------
+
+
+def _write_genocoords(tmp_path):
+    p = tmp_path / "geno.coords"
+    p.write_text(dedent("""\
+        chr1 1000 1000 0
+        chr2 2000 3000 1000
+        chr3 1500 4500 3000
+    """))
+    return p
+
+
+def test_genome_coords_to_plotstart_dict(of, tmp_path):
+    """col4 (the per-scaffold plot starting offset) maps to the scaffold name."""
+    p = _write_genocoords(tmp_path)
+    d = of.genome_coords_to_plotstart_dict(str(p))
+    assert d == {"chr1": 0, "chr2": 1000, "chr3": 3000}
+
+
+def test_genome_coords_to_offset_dict(of, tmp_path):
+    """col3 (cumsum total plot size) maps to the scaffold name."""
+    p = _write_genocoords(tmp_path)
+    d = of.genome_coords_to_offset_dict(str(p))
+    assert d == {"chr1": 1000, "chr2": 3000, "chr3": 4500}
+
+
+def test_genome_coords_dicts_skip_blank_lines(of, tmp_path):
+    p = tmp_path / "geno.coords"
+    p.write_text("\n\nchr1 1000 1000 0\n\nchr2 2000 3000 1000\n\n")
+    assert of.genome_coords_to_plotstart_dict(str(p)) == {"chr1": 0, "chr2": 1000}
+
+
+def test_genome_coords_dicts_empty_file(of, tmp_path):
+    p = tmp_path / "geno.coords"
+    p.write_text("")
+    assert of.genome_coords_to_plotstart_dict(str(p)) == {}
+    assert of.genome_coords_to_offset_dict(str(p)) == {}
+
+
+# ---------------------------------------------------------------------------
+# generate_coord_structs_from_chrom_to_loc (kwargs-accepting version)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_coord_structs_kwargs_variant(of, tmp_path):
+    """The kwargs-accepting variant at line 1072 behaves identically to
+    the bare variant at line 935."""
+    p = tmp_path / "x.chrom"
+    p.write_text(dedent("""\
+        prot1\tchrA\t+\t100\t200
+        prot2\tchrB\t-\t300\t400
+    """))
+    out = of.generate_coord_structs_from_chrom_to_loc(str(p))
+    assert out["prot_to_scaf"] == {"prot1": "chrA", "prot2": "chrB"}
+    assert out["prot_to_start"] == {"prot1": 100, "prot2": 300}
+    assert out["prot_to_stop"] == {"prot1": 200, "prot2": 400}
+
+
+# ---------------------------------------------------------------------------
+# general_legal_run — guards against running in install dir
+# ---------------------------------------------------------------------------
+
+
+def test_general_legal_run_outside_install_passes(of, tmp_path, monkeypatch):
+    """Running from a directory outside the odp checkout is always legal."""
+    monkeypatch.chdir(tmp_path)
+    of.general_legal_run()  # should return None, no exception
+
+
+def test_general_legal_run_inside_install_crashes(of, monkeypatch):
+    """Running inside the odp install path (anywhere under odp/ except
+    tests/test_odp_basic) raises."""
+    import source.odp_functions  # for resolving the install dir
+    # Use the repo root as cwd — that's "inside the install dir".
+    import sys
+    odp_module_dir = None
+    for p in sys.path:
+        candidate = Path(p) / "odp_functions.py"
+        if candidate.is_file():
+            odp_module_dir = Path(p)
+            break
+    if odp_module_dir is None:
+        pytest.skip("could not resolve odp install dir for this test")
+    install_root = odp_module_dir.parent
+    monkeypatch.chdir(install_root)
+    with pytest.raises(ValueError, match="odp install directory"):
+        of.general_legal_run()

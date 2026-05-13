@@ -251,3 +251,280 @@ def test_yield_color_each_entry_is_valid_hex(cm):
     for _ in range(25):
         c = next(gen)
         assert re.match(r"^#[0-9A-Fa-f]{6}$", c), f"bad palette entry: {c!r}"
+
+
+# ---------------------------------------------------------------------------
+# LG_db class — directory validation + duplicate-species detection
+# ---------------------------------------------------------------------------
+
+
+def _write_min_lg_db(tmp_path, rbh_content, hmm_content):
+    """Build a fake LG-database directory with one .rbh + one .hmm."""
+    d = tmp_path / "minLG"
+    d.mkdir()
+    (d / "minLG.rbh").write_text(rbh_content)
+    (d / "minLG.hmm").write_text(hmm_content)
+    return d
+
+
+def test_LG_db_missing_directory_raises(cm, tmp_path):
+    with pytest.raises(IOError, match="does not exist"):
+        cm.LG_db("missing", str(tmp_path / "no_such_dir"), [])
+
+
+def test_LG_db_no_rbh_file_raises(cm, tmp_path):
+    d = tmp_path / "norbh"
+    d.mkdir()
+    (d / "x.hmm").write_text("")
+    with pytest.raises(IOError, match="There must be a single .rbh"):
+        cm.LG_db("name", str(d), [])
+
+
+def test_LG_db_no_hmm_file_raises(cm, tmp_path):
+    d = tmp_path / "nohmm"
+    d.mkdir()
+    (d / "x.rbh").write_text("rbh\tgene_group\tcolor\n")
+    with pytest.raises(IOError, match="There must be a single .hmm"):
+        cm.LG_db("name", str(d), [])
+
+
+def test_LG_db_two_rbh_files_raises(cm, tmp_path):
+    d = tmp_path / "tworbh"
+    d.mkdir()
+    (d / "a.rbh").write_text("rbh\tgene_group\tcolor\n")
+    (d / "b.rbh").write_text("rbh\tgene_group\tcolor\n")
+    (d / "x.hmm").write_text("")
+    with pytest.raises(IOError, match="There must be a single .rbh"):
+        cm.LG_db("name", str(d), [])
+
+
+def test_LG_db_basic_instantiation(cm, tmp_path):
+    """Build a minimal but valid LG_db with one ALG and one species, and
+    confirm the lookups are populated."""
+    rbh = (
+        "rbh\tgene_group\tcolor\tsp1_gene\tsp1_scaf\tsp1_pos\n"
+        "rbh1\tA1\t#FF0000\tg1\tchrA\t100\n"
+        "rbh2\tA1\t#FF0000\tg2\tchrA\t200\n"
+        "rbh3\tB2\t#00FF00\tg3\tchrB\t300\n"
+    )
+    # Single ALG model named `rbh1` in the HMM file (hmmer NAME line).
+    hmm = "NAME  rbh1\nNAME  rbh2\nNAME  rbh3\n"
+    d = _write_min_lg_db(tmp_path, rbh, hmm)
+    obj = cm.LG_db("minLG", str(d), [])
+    assert obj.name == "minLG"
+    assert obj.rbhfile.endswith("minLG.rbh")
+    assert obj.hmmfile.endswith("minLG.hmm")
+    # group_to_color picks the most-common color per group
+    assert obj.group_to_color["A1"] == "#FF0000"
+    assert obj.group_to_color["B2"] == "#00FF00"
+    # None/NA defaults to black for downstream plotting
+    assert obj.group_to_color["None"] == "#000000"
+    assert obj.group_to_color["NA"] == "#000000"
+
+
+def test_LG_db_rejects_mismatched_rbh_and_hmm(cm, tmp_path):
+    """The .hmm file must contain a NAME entry for every rbh in the
+    .rbh file. Missing entries raise."""
+    rbh = (
+        "rbh\tgene_group\tcolor\tsp1_gene\tsp1_scaf\tsp1_pos\n"
+        "rbh1\tA1\t#FF0000\tg1\tchrA\t100\n"
+        "rbh2\tA1\t#FF0000\tg2\tchrA\t200\n"
+    )
+    # Only rbh1 has a NAME entry — rbh2 is missing.
+    hmm = "NAME  rbh1\n"
+    d = _write_min_lg_db(tmp_path, rbh, hmm)
+    with pytest.raises(IOError, match="contains some orthologs not in the hmm"):
+        cm.LG_db("minLG", str(d), [])
+
+
+def test_LG_db_rejects_missing_required_column(cm, tmp_path):
+    """rbh file missing one of rbh/gene_group/color raises."""
+    rbh = (
+        # color column missing
+        "rbh\tgene_group\tsp1_gene\tsp1_scaf\tsp1_pos\n"
+        "rbh1\tA1\tg1\tchrA\t100\n"
+    )
+    hmm = "NAME  rbh1\n"
+    d = _write_min_lg_db(tmp_path, rbh, hmm)
+    with pytest.raises(IOError, match="must have the following column"):
+        cm.LG_db("minLG", str(d), [])
+
+
+def test_LG_db_parse_rbhdf_removes_duplicate_species_columns(cm, tmp_path):
+    """When two species columns have identical gene IDs (e.g., one was
+    annotated using the other's proteome), the method should drop one."""
+    rbh = (
+        "rbh\tgene_group\tcolor\tsp1_gene\tsp1_scaf\tsp1_pos\t"
+        "sp2_gene\tsp2_scaf\tsp2_pos\n"
+        "rbh1\tA\t#FF0000\tg1\tchrA\t100\tg1\tscafX\t100\n"
+        "rbh2\tA\t#FF0000\tg2\tchrA\t200\tg2\tscafX\t200\n"
+    )
+    hmm = "NAME  rbh1\nNAME  rbh2\n"
+    d = _write_min_lg_db(tmp_path, rbh, hmm)
+    obj = cm.LG_db("minLG", str(d), [])
+    # After dedup, only one of sp1/sp2 should survive (alphabetically
+    # earlier wins per the docstring).
+    survived = [c for c in obj.rbhdf.columns if c.endswith("_gene")]
+    assert len(survived) == 1
+    assert survived[0] == "sp1_gene"
+
+
+# ---------------------------------------------------------------------------
+# LG_db._gen_sp_to_gene_to_color + _gen_sp_to_gene_to_group
+# ---------------------------------------------------------------------------
+
+
+def test_LG_db_sp_to_gene_to_color_built_from_rbh(cm, tmp_path):
+    rbh = (
+        "rbh\tgene_group\tcolor\tsp1_gene\tsp1_scaf\tsp1_pos\n"
+        "rbh1\tA1\t#FF0000\tg1\tchrA\t100\n"
+        "rbh2\tA1\t#FF0000\tg2\tchrA\t200\n"
+    )
+    hmm = "NAME  rbh1\nNAME  rbh2\n"
+    d = _write_min_lg_db(tmp_path, rbh, hmm)
+    obj = cm.LG_db("minLG", str(d), [])
+    assert obj.sp_to_gene_to_color["sp1"]["g1"] == "#FF0000"
+    assert obj.sp_to_gene_to_color["sp1"]["g2"] == "#FF0000"
+
+
+def test_LG_db_sp_to_gene_to_group_built_from_rbh(cm, tmp_path):
+    rbh = (
+        "rbh\tgene_group\tcolor\tsp1_gene\tsp1_scaf\tsp1_pos\n"
+        "rbh1\tA1\t#FF0000\tg1\tchrA\t100\n"
+        "rbh2\tB2\t#00FF00\tg2\tchrA\t200\n"
+    )
+    hmm = "NAME  rbh1\nNAME  rbh2\n"
+    d = _write_min_lg_db(tmp_path, rbh, hmm)
+    obj = cm.LG_db("minLG", str(d), [])
+    assert obj.sp_to_gene_to_group["sp1"]["g1"] == "A1"
+    assert obj.sp_to_gene_to_group["sp1"]["g2"] == "B2"
+
+
+def test_LG_db_invalid_color_in_row_falls_back_to_black(cm, tmp_path):
+    """When the rbh `color` cell doesn't look like a hex code (no
+    '#'), the per-gene lookup uses black as a fallback."""
+    rbh = (
+        "rbh\tgene_group\tcolor\tsp1_gene\tsp1_scaf\tsp1_pos\n"
+        "rbh1\tA1\tnotacolor\tg1\tchrA\t100\n"
+    )
+    # This should fail because hex_color_legal would reject "notacolor"
+    # — but actually LG_db doesn't use hex_color_legal; it just checks
+    # for "#" in the cell, so "notacolor" becomes #000000.
+    hmm = "NAME  rbh1\n"
+    d = _write_min_lg_db(tmp_path, rbh, hmm)
+    obj = cm.LG_db("minLG", str(d), [])
+    assert obj.sp_to_gene_to_color["sp1"]["g1"] == "#000000"
+
+
+# ---------------------------------------------------------------------------
+# LG_db._sp_matches_which_db_species
+# ---------------------------------------------------------------------------
+
+
+def test_LG_db_sp_matches_returns_match_when_majority_overlap(cm, tmp_path):
+    """When 10:1 majority of input protein IDs match one DB species,
+    that species should be returned."""
+    rbh = (
+        "rbh\tgene_group\tcolor\tdbsp_gene\tdbsp_scaf\tdbsp_pos\n"
+        + "\n".join(
+            f"rbh{i}\tA1\t#FF0000\tprot{i}\tchrA\t{i}"
+            for i in range(20)
+        ) + "\n"
+    )
+    hmm = "\n".join(f"NAME  rbh{i}" for i in range(20)) + "\n"
+    d = _write_min_lg_db(tmp_path, rbh, hmm)
+    obj = cm.LG_db("minLG", str(d), [])
+    # Pass in IDs matching the DB species' proteins.
+    match = obj._sp_matches_which_db_species(
+        [f"prot{i}" for i in range(20)]
+    )
+    assert match == "dbsp"
+
+
+def test_LG_db_sp_matches_returns_none_when_no_match(cm, tmp_path):
+    rbh = (
+        "rbh\tgene_group\tcolor\tdbsp_gene\tdbsp_scaf\tdbsp_pos\n"
+        "rbh1\tA1\t#FF0000\tprot1\tchrA\t1\n"
+    )
+    hmm = "NAME  rbh1\n"
+    d = _write_min_lg_db(tmp_path, rbh, hmm)
+    obj = cm.LG_db("minLG", str(d), [])
+    assert obj._sp_matches_which_db_species(["totally_unrelated"]) is None
+
+
+# ---------------------------------------------------------------------------
+# LG_db.color_dataframe via the HMM-results path
+# ---------------------------------------------------------------------------
+
+
+def test_LG_db_color_dataframe_via_hmm_results(cm, tmp_path):
+    """If the plot species' protein IDs don't match any DB species, the
+    function falls back to using HMM results to identify orthologs."""
+    rbh = (
+        "rbh\tgene_group\tcolor\tdbsp_gene\tdbsp_scaf\tdbsp_pos\n"
+        "rbh1\tA1\t#FF0000\torth_a\tchrA\t1\n"
+        "rbh2\tB2\t#00FF00\torth_b\tchrA\t2\n"
+    )
+    hmm = "NAME  rbh1\nNAME  rbh2\n"
+    d = _write_min_lg_db(tmp_path, rbh, hmm)
+
+    # Build an HMM results file (12-column blastp-like format).
+    # column 1 = rbh id (qseqid); column 2 = species' protein id (sseqid).
+    hmm_results = tmp_path / "results.tsv"
+    hmm_results.write_text(
+        "rbh1\tspecies_prot_1\t99\t100\t0\t0\t1\t100\t1\t100\t1e-50\t200\n"
+        "rbh2\tspecies_prot_2\t99\t100\t0\t0\t1\t100\t1\t100\t1e-50\t200\n"
+    )
+    obj = cm.LG_db("minLG", str(d), [str(hmm_results)])
+    # The HMM-prot-to-rbh map should be populated.
+    assert obj.hmm_prot_to_rbh == {
+        "species_prot_1": "rbh1",
+        "species_prot_2": "rbh2",
+    }
+
+    import pandas as pd
+    plotdf = pd.DataFrame({
+        "plotsp_gene": ["species_prot_1", "species_prot_2", "unknown_prot"],
+        "plotsp_scaf": ["chrZ", "chrZ", "chrZ"],
+        "plotsp_pos":  [1, 2, 3],
+        "color":       ["", "", ""],
+        "gene_group":  ["", "", ""],
+    })
+    result = obj.color_dataframe(plotdf)
+    # gene_group + color come from the rbh file via the hmm lookup
+    assert result.iloc[0]["gene_group"] == "A1"
+    assert result.iloc[0]["color"] == "#FF0000"
+    assert result.iloc[1]["gene_group"] == "B2"
+    assert result.iloc[1]["color"] == "#00FF00"
+    # Unknown protein stays black/None
+    assert result.iloc[2]["color"] == "#000000"
+    assert result.iloc[2]["gene_group"] == "None"
+
+
+def test_LG_db_color_dataframe_via_direct_species_match(cm, tmp_path):
+    """If the plot species' protein IDs match a DB species' IDs
+    directly, the function uses the direct path (no HMM lookup)."""
+    rbh = (
+        "rbh\tgene_group\tcolor\tdbsp_gene\tdbsp_scaf\tdbsp_pos\n"
+        + "\n".join(
+            f"rbh{i}\tA1\t#FF0000\tprot{i}\tchrA\t{i}"
+            for i in range(20)
+        ) + "\n"
+    )
+    hmm = "\n".join(f"NAME  rbh{i}" for i in range(20)) + "\n"
+    d = _write_min_lg_db(tmp_path, rbh, hmm)
+    obj = cm.LG_db("minLG", str(d), [])
+
+    import pandas as pd
+    plotdf = pd.DataFrame({
+        "plotsp_gene": ["prot0", "prot1", "prot2"],
+        "plotsp_scaf": ["chrZ", "chrZ", "chrZ"],
+        "plotsp_pos":  [1, 2, 3],
+        "color":       ["", "", ""],
+        "gene_group":  ["", "", ""],
+    })
+    result = obj.color_dataframe(plotdf)
+    assert result.iloc[0]["gene_group"] == "A1"
+    assert result.iloc[0]["color"] == "#FF0000"
+    # color_method records which path was taken
+    assert "protein ids" in obj.color_method.lower()

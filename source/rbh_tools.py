@@ -331,8 +331,10 @@ def rbhdf_to_alglocdf(df, minsig, ALGname) -> (pd.DataFrame, str):
     if "gene_group" not in df.columns:
         raise IOError(f"The rbh file, {rbhfilepath} does not have a column named 'gene_group'")
 
-    # we need to get the sample names
-    samples = [x.split("_")[0] for x in df.columns if "_scaf" in x]
+    # we need to get the sample names. Use the full `_scaf` suffix as the
+    # split point rather than the first `_` so sample names containing
+    # underscores (rare but theoretically possible) don't get truncated.
+    samples = [x[:-len("_scaf")] for x in df.columns if x.endswith("_scaf")]
     # We need to check that the ALGname is in the samples
     if not ALGname in samples:
         raise IOError(f"The ALGname, {ALGname} is not in the samples. Exiting.")

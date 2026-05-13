@@ -76,13 +76,13 @@ class LG_db:
         # check that there is only one .rbh file in the directory
         if len([x for x in self._dirfiles if x.endswith(".rbh")]) != 1:
             raise IOError("There must be a single .rbh file in the LG db directory for {}.\n Instead we found {}".format(
-                LG_db_name, [x for x in self.dirfiles if x.endswith(".rbh")]))
+                LG_db_name, [x for x in self._dirfiles if x.endswith(".rbh")]))
         self.rbhfile = os.path.join(self.directory, [x for x in self._dirfiles if x.endswith(".rbh")][0])
 
         # check that there is only one .hmm file in the directory
         if len([x for x in self._dirfiles if x.endswith(".hmm")]) != 1:
             raise IOError("There must be a single .hmm file in the LG db directory for {}.\n Instead we found {}".format(
-                LG_db_name, [x for x in self.dirfiles if x.endswith(".hmm")]))
+                LG_db_name, [x for x in self._dirfiles if x.endswith(".hmm")]))
         self.hmmfile = os.path.join(self.directory, [x for x in self._dirfiles if x.endswith(".hmm")][0])
 
         # now open the rbh file and build appropriate data structures
@@ -186,6 +186,11 @@ class LG_db:
         second to last column is evalue.
         last column is bitscore
         """
+        # Empty input is legal — for callers that want a bare LG_db
+        # before running HMM searches. Avoids pd.concat() on an empty
+        # list (which raises ValueError on pandas 2.x).
+        if not hmm_results_paths:
+            return {}
         dataframes = []
         for thisfile in hmm_results_paths:
             if not os.path.exists(thisfile):
