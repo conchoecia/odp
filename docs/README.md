@@ -1,5 +1,5 @@
 <a href="https://www.nature.com/articles/s41586-023-05936-6"><img src="manuscript_DOI.svg" alt="Manuscript"  height="20"></a>
-[![DOI](https://zenodo.org/badge/329185461.svg)](https://zenodo.org/badge/latestdoi/329185461)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7857389.svg)](https://doi.org/10.5281/zenodo.7857389)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="odp_logo_black_400px.png">
