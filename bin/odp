@@ -303,6 +303,69 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return run_subcommand("filecheck", args)
 
 
+def cmd_orthologs_to_rbh(args: argparse.Namespace) -> int:
+    """Join an N-column orthologs table with per-species BED files and
+    emit an odp-style `.rbh` table. The output can be fed into the
+    downstream odp subcommands (groupby, plotting, ribbon, etc.) without
+    going through the full all-vs-all diamond/blastp step.
+
+    Suitable input sources:
+      * Orthofinder runs — filter `Orthogroups.tsv` to single-copy via
+        `Orthogroups_SingleCopyOrthologues.txt` first.
+      * Plain N-column tab-separated ortholog tables with one gene per
+        species per row.
+    """
+    # Lazy import so `odp --help` and the snakemake-backed subcommands
+    # don't pay the pandas import cost.
+    source_dir = repo_root() / "source"
+    sys.path.insert(0, str(source_dir))
+    import ortholog_table_importer as oti  # type: ignore
+
+    bed_paths: dict = {}
+    for entry in args.bed or []:
+        if "=" not in entry:
+            sys.stderr.write(
+                f"orthologs-to-rbh: --bed expects NAME=PATH, got {entry!r}\n"
+            )
+            return 2
+        name, _, path = entry.partition("=")
+        bed_paths[name.strip()] = path.strip()
+
+    if not bed_paths:
+        sys.stderr.write(
+            "orthologs-to-rbh: at least one --bed NAME=PATH argument is "
+            "required (one per species in the orthologs table).\n"
+        )
+        return 2
+
+    species_order = args.species_order.split(",") if args.species_order else None
+    has_og = (
+        True if args.orthogroup_id_col == "yes" else
+        False if args.orthogroup_id_col == "no" else
+        None
+    )
+
+    try:
+        df = oti.orthologs_to_rbh(
+            orthologs_path=args.orthologs,
+            bed_paths=bed_paths,
+            species_order=species_order,
+            has_header=args.header,
+            has_orthogroup_id_column=has_og,
+        )
+    except (ValueError, FileNotFoundError) as e:
+        sys.stderr.write(f"orthologs-to-rbh: {e}\n")
+        return 1
+
+    out_path = Path(args.output).resolve()
+    n = oti.write_rbh(df, out_path)
+    sys.stdout.write(f"orthologs-to-rbh: wrote {n} rows to {out_path}\n")
+    sys.stdout.write(
+        f"orthologs-to-rbh: species = {[c for c in df.columns if c.endswith('_gene')]}\n"
+    )
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # argparse plumbing
 # ---------------------------------------------------------------------------
@@ -380,6 +443,8 @@ def add_common_run_args(p: argparse.ArgumentParser) -> None:
 SUBCOMMAND_ORDER = [
     # Pipeline:
     "run", "only-db",
+    # Import paths that skip the all-vs-all RBH step:
+    "orthologs-to-rbh",
     # RBH chain:
     "nway-rbh", "rbh-to-alignments", "rbh-to-hmm", "rbh-to-ribbon",
     # Plotting:
@@ -493,6 +558,74 @@ def build_parser() -> argparse.ArgumentParser:
         )
         sp.set_defaults(handler=cmd_version)
 
+    def _add_orthologs_to_rbh() -> None:
+        sp = sub.add_parser(
+            "orthologs-to-rbh",
+            help="convert an external orthologs table + BEDs to an odp .rbh",
+            description=(
+                "Join an N-column tab-separated orthologs table (one gene "
+                "per species per row) with per-species BED files and emit "
+                "an odp-style .rbh table. Lets users with pre-computed "
+                "orthology (e.g. an Orthofinder single-copy table) skip "
+                "the all-vs-all diamond/blastp step and feed the result "
+                "into the downstream odp pipeline."
+            ),
+            epilog=(
+                "examples:\n"
+                "  # Orthofinder single-copy orthologs (3 species):\n"
+                "  odp orthologs-to-rbh \\\n"
+                "    --orthologs Orthogroups_SingleCopy.tsv \\\n"
+                "    --bed Bflo=Bflo.bed --bed Pech=Pech.bed --bed Pyes=Pyes.bed \\\n"
+                "    --output rbh.tsv\n"
+                "\n"
+                "  # Plain two-column ortholog table without an orthogroup id:\n"
+                "  odp orthologs-to-rbh \\\n"
+                "    --orthologs my_pairs.tsv --orthogroup-id-col no \\\n"
+                "    --bed Sp1=Sp1.bed --bed Sp2=Sp2.bed \\\n"
+                "    --output rbh.tsv\n"
+            ),
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        sp.add_argument(
+            "--orthologs", "-i", required=True,
+            help="path to the tab-separated orthologs table",
+        )
+        sp.add_argument(
+            "--bed", action="append", metavar="NAME=PATH",
+            help=(
+                "BED file for one species, formatted as NAME=PATH. "
+                "Repeat for each species. NAME must match a species "
+                "column in the orthologs table (header or --species-order)."
+            ),
+        )
+        sp.add_argument(
+            "--output", "-o", required=True,
+            help="path to write the .rbh table",
+        )
+        sp.add_argument(
+            "--species-order",
+            help=(
+                "comma-separated species names matching the species "
+                "columns of the orthologs table left-to-right. Overrides "
+                "header row + auto-detection."
+            ),
+        )
+        sp.add_argument(
+            "--header", action="store_true",
+            help="orthologs table has a header row with species names",
+        )
+        sp.add_argument(
+            "--orthogroup-id-col",
+            choices=["auto", "yes", "no"],
+            default="auto",
+            help=(
+                "whether the first column of the orthologs table is an "
+                "orthogroup identifier (Orthofinder style) rather than a "
+                "gene id. 'auto' detects from the column values."
+            ),
+        )
+        sp.set_defaults(handler=cmd_orthologs_to_rbh)
+
     # Register subcommands in the user-friendly order defined above.
     for name in SUBCOMMAND_ORDER:
         if name in SNAKEFILES:
@@ -503,6 +636,8 @@ def build_parser() -> argparse.ArgumentParser:
             _add_validate()
         elif name == "version":
             _add_version()
+        elif name == "orthologs-to-rbh":
+            _add_orthologs_to_rbh()
     return p
 
 
@@ -525,7 +660,7 @@ def main(argv: list[str] | None = None) -> int:
         argv = sys.argv[1:]
     if argv and argv[0] not in {"-h", "--help", "--version"} and not argv[0].startswith("-"):
         # All known subcommands across the parser.
-        valid = list(SNAKEFILES) + ["init", "validate", "version"]
+        valid = list(SNAKEFILES) + ["init", "validate", "version", "orthologs-to-rbh"]
         if argv[0] not in valid:
             guess = _suggest(argv[0], valid)
             sys.stderr.write(f"odp: unknown subcommand {argv[0]!r}\n")
