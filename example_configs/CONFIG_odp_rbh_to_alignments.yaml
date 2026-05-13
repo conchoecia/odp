@@ -20,6 +20,8 @@
 #  ALGs that are annotated with an abstract group name and color
 
 rbh_file: /path/to/your/filtered/and/annotated/rbhfile.rbh
+duplicate_proteins: "fail"    # currently only "fail" or "best". Fail doesn't allow duplicate names or seqs
+
 
 # Every species that is in the rbh file should also be specified
 #  below in the `species` section.

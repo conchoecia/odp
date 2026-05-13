@@ -20,6 +20,7 @@
 
 nways: 3                 # This number should be the number of species that will be in each combination. Should match the number in analyses below.
 search_method: "diamond" # this must be diamond or blastp
+duplicate_proteins: "fail"    # currently only "fail" or "pass". Fail doesn't allow duplicate names or seqs
 # These are all of the analyses that you would like to perform.
 #  The things in quotes here are the 4-way comparisons that you would like to perform
 #  We require these to be explicitely specified in this program because of the higher compute

@@ -84,10 +84,10 @@ diagrams of conserved linkages between genomes.
     - [Find and characterize ancestral linkage groups](#alganalysis)
       - [ALGs part 1 - Ortholog finding in 3+ species](#nwayreciprocalbest)
       - [ALGs part 2 - Find significantly numerous groups of orthologs](#groupby)
-      - [ALGs part 3 - Filter groups of orthologs](#groupbyfilter)
-      - [ALGs part 4 - Annotate groups of orthologs](#groupbyannotate)
-      - [ALGs part 5 - Merge groupby files](#groupbymerge)
-      - [ALGs part 6 - Find orthologs in more species](#groupbytohmm)
+      - [ALGs part 3 - Filter groups of orthologs](#gbfilter)
+      - [ALGs part 4 - Annotate groups of orthologs](#gbannotate)
+      - [ALGs part 5 - Merge groupby files](#gbmerge)
+      - [ALGs part 6 - Find orthologs in more species](#gbtohmm)
       - [ALGs part 7 - Plot mixing of select linkage groups](#plotmixing)
     - [Determine which clade is sister](#4speciesphylogeny)
 - [Citing odp](#cite)
@@ -109,11 +109,19 @@ This software fills a niche in that it automates comparisons of chromosome-scale
 genomes, an increasingly important task as the genomes of more non-model
 organisms become available.
 
-For the aims above, this software works by:
-1. For comparisons between two species, this program finds reciprocal-best protein matches using diamond blastp. The pipeline performs comparions between all *n* species in the config file. Compute time scales quadratically with increasing species *O(n*<sup>2</sup>*)*. The [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) of each pairwise comparison is calculated to determine synteny block cutoffs in the cases of complex rearrangements. The signifiance of interactions between two or more genomes is calculated 
-2. Calculating [Da and Db](https://www.nature.com/articles/s41559-020-1156-z) for each genome.
-3. Finding which orthologs correspond to previously identified ancestral linkage groups (ALGs), such as the Bilateria-Cnidaria-Sponge ALGs from [Simakov et al. (2020).](https://www.nature.com/articles/s41559-020-1156-z).
-3. Plotting the genome assembly, reciprocal best protein hits, the ALGs, and Da/Db using matplotlib.
+For the aims above, and for comparisons with *two* species, this software works by:
+1. Identifying orthologs.
+  - For comparisons between two species, this program finds reciprocal-best protein matches using diamond blastp. The pipeline performs comparions between all *n* species in the config file. Compute time scales quadratically with increasing species *O(n*<sup>2</sup>*)*.
+2. Identifying homologous scaffolds between species.
+  - The measure D of each pairwise comparison is calculated to determine synteny block cutoffs in the cases of complex rearrangements. See section [6.4 Identification of 17 Chordate Linkage Groups (page 11)](https://static-content.springer.com/esm/art%3A10.1038%2Fs41559-020-1156-z/MediaObjects/41559_2020_1156_MOESM1_ESM.pdf) of the Supplementary Information PDF from [Simakov et al. (2020).](https://www.nature.com/articles/s41559-020-1156-z).
+  -  The homology of scaffolds between two species is inferred by calculating the pairwise p-value using Fisher's exact test. See section [6.5 Significance testing of blocks of conserved synteny (page 12)](https://static-content.springer.com/esm/art%3A10.1038%2Fs41559-020-1156-z/MediaObjects/41559_2020_1156_MOESM1_ESM.pdf) of the Supplementary Information PDF from [Simakov et al. (2020).](https://www.nature.com/articles/s41559-020-1156-z).
+3. Identifying orthologs in the context of known ancestral linkage groups.
+  - Finding which orthologs correspond to previously identified ancestral linkage groups (ALGs), such as the Bilateria-Cnidaria-Sponge ALGs from [Simakov et al 2022](https://www.science.org/doi/10.1126/sciadv.abi5884).
+4. Plotting the genome assembly, reciprocal best protein hits, the ALGs, and D for both species using matplotlib.
+
+For comparisons between *three or more* species, the software can:
+1. Identify ALGs of a given number of species. Warning - each additional species added increases the stringency of the ALG identification.
+2. Test phylogenetic hypotheses with species quartets.
 
 ## <a name="install"></a>Installation
 
@@ -360,13 +368,13 @@ snakemake --snakefile ${YOUR_ODP_INSTALL_PATH}/odp/scripts/odp_rbh_to_ribbon
 # your file will be saved as output.pdf
 ```
 
-A minimal working example of the config file is below. Again, more details are in 
+A minimal working example of the config file is below. Again, more details are in
 [`CONFIG_rbh_to_ribbon.yaml`](../example_configs/CONFIG_rbh_to_ribbon.yaml):
 
 ```yaml
 # There are several options for how to sort the chromosomes.
 # More information is available in the config file.
-chr_sort_order: optimal-chr-or 
+chr_sort_order: optimal-chr-or
 
 # Tells the program whether to plot the non-significant interactions.
 plot_all: True
@@ -488,7 +496,7 @@ The output of the previous program, the `.rbh` file, has one ortholog per line. 
   * _D. melanogaster_ chromosome 3
   * and human *chromosome 17*
 
-will be one group. All of the orthologs that exist on a slightly different set of chromosomes will be another group, for example:  
+will be one group. All of the orthologs that exist on a slightly different set of chromosomes will be another group, for example:
   * _C. elegans_ chromosome I
   * _D. melanogaster_ chromosome 3
   * and *human chromosome 16*
@@ -513,7 +521,7 @@ versions of the genomes by shuffling the gene IDs in the `.chrom` file,
 measuring whether a group of *i* or fewer genes was present, then repeating this
 measurement hundreds of millions of times.
 
-#### <a name=“groupbyfilter”></a>ALGs part 3 - Filter groups of orthologs
+#### <a name="gbfilter"></a>ALGs part 3 - Filter groups of orthologs
 
 The groups of reciprocal best hits, as well as the newly-calculated false
 discovery rates, are saved in the resulting `.groupby` file. This can be
@@ -530,7 +538,7 @@ on Google Drive, Apple Sheets, or Microsoft Excel.
 After removing the rows that have a less-than-significant false discovery rate,
 continue on to the next step to annotate the groups of orthologs.
 
-#### <a name=“groupbyannotate”></a>ALGs part 4 - Annotate groups of orthologs
+#### <a name="gbannotate"></a>ALGs part 4 - Annotate groups of orthologs
 
 At this stage the resulting rows are groups of orthologous genes that are
 present on the same set of chromosomes in the species under consideration, and
@@ -541,7 +549,7 @@ It is useful at this stage to assign names to each of the rows in the `group` co
 
 It is not necessary that each row has its own unique group ID. However, doing so will help plot mixing in downstream analyses.
 
-#### <a name=“groupbymerge”></a>ALGs part 5 - Merge `.groupby`/`.rbh` files
+#### <a name="gbmerge"></a>ALGs part 5 - Merge `.groupby`/`.rbh` files
 
 In this section let’s consider a few species to compare:
   - Unicellular (+colonial multicellular) outgroups of animals:
@@ -566,21 +574,21 @@ Each ortholog (row) in the resulting `.rbh` file will have a gene for each anima
 
 The notation we use to refer to an `.rbh` file created by merging other `.rbh` files uses parentheses to note the species that may have missing data, and unmodified text to note the species that will always have a gene for each ortholog. The analysis discussed above is notated as `(CFR-COW-MBR)-HCA-EMU-RES`.
 
-#### <a name=“groupbytohmm”></a>ALGs part 6 - Find orthologs in more species
+#### <a name="gbtohmm"></a>ALGs part 6 - Find orthologs in more species
 
-Steps 1-4 of finding ALGs relies on using only a few species (perhaps 3-5) to avoid loss of orthologs due to the stringent ortholog selection process. [Step 5 - Merge `.groupby`/`.rbh` files, discussed above,](#groupbymerge) enables the inclusion of more genes by allowing for missing data in select groups. Then, by constructing hidden Markov models of the orthologs, we can search for orthologs in more species.
+Steps 1-4 of finding ALGs relies on using only a few species (perhaps 3-5) to avoid loss of orthologs due to the stringent ortholog selection process. [Step 5 - Merge `.groupby`/`.rbh` files, discussed above,](#gbmerge) enables the inclusion of more genes by allowing for missing data in select groups. Then, by constructing hidden Markov models of the orthologs, we can search for orthologs in more species.
 
 The script `odp_rbh_to_hmm` reads in a `.rbh` file and constructs one HMM model per ortholog (row). The models are then searched against the proteins of every additional species that is included in the `config.yaml` file. The best protein for each HMM is selected, and only proteins with a significant match are kept. Missing data are permissible in this step, so it is not guaranteed that every ortholog will have an identifiable protein in every species added in this step.
 
 The output of this pipeline is another `.rbh` file, now with the proteins of the additional species identified with the HMM.
 
-#### <a name=“plotmixing”></a>ALGs part 7 - Plot mixing of select linkage groups
+#### <a name="plotmixing"></a>ALGs part 7 - Plot mixing of select linkage groups
 
 If you have followed the above steps, you now have a `.rbh` file with orthologs that have been annotated by group, and includes many additional species thanks to the merging and HMM search steps.
 
 If you are using `odp` to look for phylogenetically diagnostic fusion-then-mixing events, then it is useful to plot linkage groups to visualize the extent of mixing of those groups. The script `odp_rbh_plot_mixing` does that. The output of this script are PNG and PDFs of the orthologs in those two groups plotted in the chromosome coordinates for each species. This script also estimates the degree of intermixing of two groups of genes on the chromosomes on which they coexist.
 
-### <a name=“4speciesphylogeny”></a>Determine which clade is sister
+### <a name="4speciesphylogeny"></a>Determine which clade is sister
 
 The module `odp_genome_rearrangegment_simulation` was developed to help answer the question of whether ctenophores or sponges are the sister clade of all other animals. This script requires one species that is the known outgroup, and one species nested in the phylogeny with a known relative position to all other species. In our study, we performed analyses in which the filasterean amoeba _Capsaspora owczarzaki_ or the choanoflagellate _Salpingoeca rosetta_ were the outgroup species. The species with the known phylogenetic position was the fire jellyfish _Rhopilema esculentum_. The program uses these genomes to polarize the relationships between the two genomes in an unresolved polytomy, in this case the ctenophore _Hormiphora californensis_ and the sponge _Ephydatia muelleri_.
 

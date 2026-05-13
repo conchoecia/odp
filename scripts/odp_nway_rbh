@@ -64,6 +64,31 @@ else:
     if config["diamond_or_blastp"] not in ["diamond", "blastp"]:
         raise IOError("diamond_or_blastp must be either 'diamond' or 'blastp'")
 
+# make sure none of the sample names have underscores
+for thissample in config["species"]:
+    if "_" in thissample:
+        raise IOError("Sample names can't have '_' char: {}".format(thissample))
+
+# check if we have specified how to handle duplicate protein sequences
+if "duplicate_proteins" not in config:
+    config["duplicate_proteins"] = "fail"
+else:
+    options_list = ["fail", "pass"] #best is not yet implemented
+    if config["duplicate_proteins"] not in options_list:
+        outstring = ", ".join(options_list)
+        raise IOError("duplicate_proteins must be set to one of the following: {}".format(outstring))
+
+# make sure there are at least 2 samples
+if len(config["species"]) < 2:
+    raise IOError("There must be at least 2 samples")
+
+# make sure that nways is there
+if not "nways" in config:
+    raise IOError("you must specify nways in the config file. must be at least 2.")
+# make sure that nways is greater than equal to 2
+if config["nways"] < 2:
+    raise IOError("nways must be at least 2")
+
 # check num_permutations
 if not "num_permutations" in config:
     raise IOError("you must specify num_permutations in the config to help calculate the false discovery rate")
