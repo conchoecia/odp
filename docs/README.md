@@ -1,5 +1,5 @@
 <a href="https://www.nature.com/articles/s41586-023-05936-6"><img src="manuscript_DOI.svg" alt="Manuscript"  height="20"></a>
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7857389.svg)](https://doi.org/10.5281/zenodo.7857389)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.7857389-blue.svg)](https://doi.org/10.5281/zenodo.7857389)
 ![Coverage](coverage-badge.svg)
 [![CI](https://github.com/conchoecia/odp/actions/workflows/ci.yml/badge.svg)](https://github.com/conchoecia/odp/actions/workflows/ci.yml)
 
