@@ -5,7 +5,7 @@ CPPFLAGS ?= -Ibin/seqtk
 LDLIBS   ?= -lz
 
 
-all: BCnS_ALG UnicellLG UnicellLGOrthofinder seqtk fainfo
+all: BCnS_ALG UnicellLG UnicellLGOrthofinder BCnSSimakov2022 seqtk fainfo
 
 .PHONY: seqtk fainfo
 
@@ -38,6 +38,12 @@ BCnS_ALG: LG_db/BCnS_LGs.tar.gz
 	cd LG_db; \
 	tar --skip-old-files -xzvf BCnS_LGs.tar.gz; \
 	cd BCnS_LGs; \
+	snakemake
+
+BCnSSimakov2022: LG_db/BCnSSimakov2022.tar.gz
+	cd LG_db; \
+	tar --skip-old-files -xzvf BCnSSimakov2022.tar.gz; \
+	cd BCnSSimakov2022; \
 	snakemake
 
 UnicellLG: LG_db/UnicellMetazoanLgs.tar.gz
