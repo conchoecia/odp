@@ -303,15 +303,36 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return run_subcommand("filecheck", args)
 
 
+def _parse_name_path_args(
+    flag_name: str, entries: list[str] | None
+) -> tuple[dict, int]:
+    """Parse a list of NAME=PATH strings (the ``--bed`` / ``--chrom``
+    flag pattern). Returns ``(dict, exit_code)`` — exit_code is 0 on
+    success, 2 on a malformed entry. The dict maps NAME to PATH for
+    every successful entry."""
+    out: dict = {}
+    for entry in entries or []:
+        if "=" not in entry:
+            sys.stderr.write(
+                f"{flag_name}: expected NAME=PATH, got {entry!r}\n"
+            )
+            return out, 2
+        name, _, path = entry.partition("=")
+        out[name.strip()] = path.strip()
+    return out, 0
+
+
 def cmd_orthologs_to_rbh(args: argparse.Namespace) -> int:
-    """Join an N-column orthologs table with per-species BED files and
-    emit an odp-style `.rbh` table. The output can be fed into the
-    downstream odp subcommands (groupby, plotting, ribbon, etc.) without
-    going through the full all-vs-all diamond/blastp step.
+    """Join an N-column orthologs table with per-species coordinate files
+    (.chrom or BED) and emit an odp-style `.rbh` table. The output can be
+    fed into the downstream odp subcommands (groupby, plotting, ribbon,
+    etc.) without going through the full all-vs-all diamond/blastp step.
 
     Suitable input sources:
       * Orthofinder runs — filter `Orthogroups.tsv` to single-copy via
-        `Orthogroups_SingleCopyOrthologues.txt` first.
+        `Orthogroups_SingleCopyOrthologues.txt` first. (Or use
+        `odp orthofinder-import` to skip the filtering step and rescue
+        multi-copy OGs via synteny.)
       * Plain N-column tab-separated ortholog tables with one gene per
         species per row.
     """
@@ -321,20 +342,18 @@ def cmd_orthologs_to_rbh(args: argparse.Namespace) -> int:
     sys.path.insert(0, str(source_dir))
     import ortholog_table_importer as oti  # type: ignore
 
-    bed_paths: dict = {}
-    for entry in args.bed or []:
-        if "=" not in entry:
-            sys.stderr.write(
-                f"orthologs-to-rbh: --bed expects NAME=PATH, got {entry!r}\n"
-            )
-            return 2
-        name, _, path = entry.partition("=")
-        bed_paths[name.strip()] = path.strip()
+    chrom_paths, rc = _parse_name_path_args("orthologs-to-rbh --chrom", args.chrom)
+    if rc != 0:
+        return rc
+    bed_paths, rc = _parse_name_path_args("orthologs-to-rbh --bed", args.bed)
+    if rc != 0:
+        return rc
+    coord_paths = {**bed_paths, **chrom_paths}
 
-    if not bed_paths:
+    if not coord_paths:
         sys.stderr.write(
-            "orthologs-to-rbh: at least one --bed NAME=PATH argument is "
-            "required (one per species in the orthologs table).\n"
+            "orthologs-to-rbh: at least one --chrom or --bed NAME=PATH "
+            "argument is required (one per species in the orthologs table).\n"
         )
         return 2
 
@@ -348,7 +367,7 @@ def cmd_orthologs_to_rbh(args: argparse.Namespace) -> int:
     try:
         df = oti.orthologs_to_rbh(
             orthologs_path=args.orthologs,
-            bed_paths=bed_paths,
+            bed_paths=coord_paths,
             species_order=species_order,
             has_header=args.header,
             has_orthogroup_id_column=has_og,
@@ -363,6 +382,66 @@ def cmd_orthologs_to_rbh(args: argparse.Namespace) -> int:
     sys.stdout.write(
         f"orthologs-to-rbh: species = {[c for c in df.columns if c.endswith('_gene')]}\n"
     )
+    return 0
+
+
+def cmd_orthofinder_import(args: argparse.Namespace) -> int:
+    """Import a full Orthofinder run directory and emit an odp .rbh table.
+
+    Unlike `orthologs-to-rbh` (which requires the user to pre-filter the
+    Orthofinder output to the single-copy subset), this subcommand reads
+    Orthogroups.tsv directly and rescues multi-copy orthogroups by
+    picking the candidate gene that best fits the syntenic context
+    established by the single-copy backbone.
+    """
+    source_dir = repo_root() / "source"
+    sys.path.insert(0, str(source_dir))
+    import orthofinder_importer as ofi  # type: ignore
+    import ortholog_table_importer as oti  # type: ignore  # noqa: F401
+
+    chrom_paths, rc = _parse_name_path_args(
+        "orthofinder-import --chrom", args.chrom
+    )
+    if rc != 0:
+        return rc
+    bed_paths, rc = _parse_name_path_args(
+        "orthofinder-import --bed", args.bed
+    )
+    if rc != 0:
+        return rc
+    coord_paths = {**bed_paths, **chrom_paths}
+
+    if not coord_paths:
+        sys.stderr.write(
+            "orthofinder-import: at least one --chrom or --bed NAME=PATH "
+            "argument is required (one per species in Orthogroups.tsv).\n"
+        )
+        return 2
+
+    try:
+        rbh_df, audit = ofi.orthofinder_to_rbh(
+            orthofinder_dir=args.orthofinder_dir,
+            coord_paths=coord_paths,
+            strategy=args.multi_copy_strategy,
+            min_confidence=args.min_confidence,
+        )
+    except (ValueError, FileNotFoundError) as e:
+        sys.stderr.write(f"orthofinder-import: {e}\n")
+        return 1
+
+    out_path = Path(args.output).resolve()
+    rbh_df.to_csv(out_path, sep="\t", index=False)
+    sys.stdout.write(
+        f"orthofinder-import: wrote {len(rbh_df)} rows to {out_path}\n"
+    )
+
+    if args.report:
+        report_path = Path(args.report).resolve()
+        n = ofi.write_audit_report(audit, report_path)
+        sys.stdout.write(
+            f"orthofinder-import: wrote {n} audit rows to {report_path}\n"
+        )
+
     return 0
 
 
@@ -444,7 +523,7 @@ SUBCOMMAND_ORDER = [
     # Pipeline:
     "run", "only-db",
     # Import paths that skip the all-vs-all RBH step:
-    "orthologs-to-rbh",
+    "orthofinder-import", "orthologs-to-rbh",
     # RBH chain:
     "nway-rbh", "rbh-to-alignments", "rbh-to-hmm", "rbh-to-ribbon",
     # Plotting:
@@ -561,24 +640,27 @@ def build_parser() -> argparse.ArgumentParser:
     def _add_orthologs_to_rbh() -> None:
         sp = sub.add_parser(
             "orthologs-to-rbh",
-            help="convert an external orthologs table + BEDs to an odp .rbh",
+            help="convert an external orthologs table + coords to an odp .rbh",
             description=(
                 "Join an N-column tab-separated orthologs table (one gene "
-                "per species per row) with per-species BED files and emit "
-                "an odp-style .rbh table. Lets users with pre-computed "
-                "orthology (e.g. an Orthofinder single-copy table) skip "
-                "the all-vs-all diamond/blastp step and feed the result "
-                "into the downstream odp pipeline."
+                "per species per row) with per-species coordinate files "
+                "(.chrom or BED, gzip-OK) and emit an odp-style .rbh "
+                "table. Lets users with pre-computed single-copy "
+                "orthology skip the all-vs-all diamond/blastp step and "
+                "feed the result into the downstream odp pipeline. For "
+                "full Orthofinder runs (including multi-copy rescue) see "
+                "`odp orthofinder-import`."
             ),
             epilog=(
                 "examples:\n"
-                "  # Orthofinder single-copy orthologs (3 species):\n"
+                "  # Orthofinder single-copy orthologs (3 species), .chrom inputs:\n"
                 "  odp orthologs-to-rbh \\\n"
                 "    --orthologs Orthogroups_SingleCopy.tsv \\\n"
-                "    --bed Bflo=Bflo.bed --bed Pech=Pech.bed --bed Pyes=Pyes.bed \\\n"
+                "    --chrom Bflo=Bflo.chrom --chrom Pech=Pech.chrom \\\n"
+                "    --chrom Pyes=Pyes.chrom \\\n"
                 "    --output rbh.tsv\n"
                 "\n"
-                "  # Plain two-column ortholog table without an orthogroup id:\n"
+                "  # Plain two-column ortholog table with BED coords:\n"
                 "  odp orthologs-to-rbh \\\n"
                 "    --orthologs my_pairs.tsv --orthogroup-id-col no \\\n"
                 "    --bed Sp1=Sp1.bed --bed Sp2=Sp2.bed \\\n"
@@ -591,11 +673,18 @@ def build_parser() -> argparse.ArgumentParser:
             help="path to the tab-separated orthologs table",
         )
         sp.add_argument(
+            "--chrom", action="append", metavar="NAME=PATH",
+            help=(
+                "odp .chrom file for one species, formatted as NAME=PATH "
+                "(gzip-OK). Repeat for each species. NAME must match a "
+                "species column in the orthologs table."
+            ),
+        )
+        sp.add_argument(
             "--bed", action="append", metavar="NAME=PATH",
             help=(
-                "BED file for one species, formatted as NAME=PATH. "
-                "Repeat for each species. NAME must match a species "
-                "column in the orthologs table (header or --species-order)."
+                "BED file for one species, formatted as NAME=PATH "
+                "(gzip-OK). Alternative to --chrom. Repeat per species."
             ),
         )
         sp.add_argument(
@@ -626,6 +715,94 @@ def build_parser() -> argparse.ArgumentParser:
         )
         sp.set_defaults(handler=cmd_orthologs_to_rbh)
 
+    def _add_orthofinder_import() -> None:
+        sp = sub.add_parser(
+            "orthofinder-import",
+            help="import a full Orthofinder run, rescuing multi-copy orthogroups",
+            description=(
+                "Read an Orthofinder run directory, partition orthogroups "
+                "into single-copy + multi-copy, and emit an odp-style .rbh "
+                "table. Multi-copy orthogroups are not discarded — the "
+                "chosen --multi-copy-strategy is used to pick the most "
+                "likely ortholog per species, optionally informed by the "
+                "syntenic context of the single-copy backbone."
+            ),
+            epilog=(
+                "examples:\n"
+                "  # Synteny-aware (default): use the single-copy backbone\n"
+                "  # to pick the best paralog per multi-copy orthogroup.\n"
+                "  odp orthofinder-import \\\n"
+                "    --orthofinder-dir Results_Apr16/ \\\n"
+                "    --chrom Bflo=Bflo.chrom --chrom Pech=Pech.chrom \\\n"
+                "    --chrom Pyes=Pyes.chrom \\\n"
+                "    --output rbh.tsv --report disambiguation.tsv\n"
+                "\n"
+                "  # Skip every multi-copy orthogroup (matches naive\n"
+                "  # filter-then-import pipelines):\n"
+                "  odp orthofinder-import \\\n"
+                "    --orthofinder-dir Results_Apr16/ --multi-copy-strategy skip \\\n"
+                "    --chrom Sp1=Sp1.chrom --chrom Sp2=Sp2.chrom \\\n"
+                "    --output rbh.tsv\n"
+            ),
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        sp.add_argument(
+            "--orthofinder-dir", required=True,
+            help=(
+                "top-level Orthofinder run directory (the one containing "
+                "Orthogroups/, Single_Copy_Orthologue_Sequences/, etc.). "
+                "The Orthogroups/ subdirectory itself is also accepted."
+            ),
+        )
+        sp.add_argument(
+            "--chrom", action="append", metavar="NAME=PATH",
+            help=(
+                "odp .chrom file for one species, formatted as NAME=PATH "
+                "(gzip-OK). Repeat for each species. NAME must match a "
+                "species column in Orthogroups.tsv."
+            ),
+        )
+        sp.add_argument(
+            "--bed", action="append", metavar="NAME=PATH",
+            help="BED alternative to --chrom (gzip-OK). Repeat per species.",
+        )
+        sp.add_argument(
+            "--output", "-o", required=True,
+            help="path to write the .rbh table",
+        )
+        sp.add_argument(
+            "--multi-copy-strategy",
+            choices=["synteny", "most-common-chrom", "longest", "skip"],
+            default="synteny",
+            help=(
+                "how to choose the representative gene per species in "
+                "multi-copy orthogroups. 'synteny' (default) picks the "
+                "candidate whose chromosome and position best fit the "
+                "syntenic backbone established by single-copy "
+                "orthogroups. 'most-common-chrom' uses chromosome "
+                "voting only (no positional info). 'longest' picks the "
+                "longest CDS — fast and chromosome-blind. 'skip' drops "
+                "every multi-copy orthogroup."
+            ),
+        )
+        sp.add_argument(
+            "--min-confidence", type=float, default=1.0,
+            help=(
+                "minimum picked-candidate score required to keep a "
+                "multi-copy orthogroup. Default 1.0. Only meaningful for "
+                "'synteny' and 'most-common-chrom'."
+            ),
+        )
+        sp.add_argument(
+            "--report",
+            help=(
+                "optional path to write a per-decision audit TSV "
+                "(orthogroup, species, picked gene, score, second-best, "
+                "reason). Useful for sanity-checking the disambiguation."
+            ),
+        )
+        sp.set_defaults(handler=cmd_orthofinder_import)
+
     # Register subcommands in the user-friendly order defined above.
     for name in SUBCOMMAND_ORDER:
         if name in SNAKEFILES:
@@ -638,6 +815,8 @@ def build_parser() -> argparse.ArgumentParser:
             _add_version()
         elif name == "orthologs-to-rbh":
             _add_orthologs_to_rbh()
+        elif name == "orthofinder-import":
+            _add_orthofinder_import()
     return p
 
 
@@ -660,7 +839,10 @@ def main(argv: list[str] | None = None) -> int:
         argv = sys.argv[1:]
     if argv and argv[0] not in {"-h", "--help", "--version"} and not argv[0].startswith("-"):
         # All known subcommands across the parser.
-        valid = list(SNAKEFILES) + ["init", "validate", "version", "orthologs-to-rbh"]
+        valid = list(SNAKEFILES) + [
+            "init", "validate", "version", "orthologs-to-rbh",
+            "orthofinder-import",
+        ]
         if argv[0] not in valid:
             guess = _suggest(argv[0], valid)
             sys.stderr.write(f"odp: unknown subcommand {argv[0]!r}\n")

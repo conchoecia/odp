@@ -30,6 +30,8 @@ No new dependencies. Standard library + pandas (already a runtime dep).
 from __future__ import annotations
 
 import csv
+import gzip
+import io
 import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -38,29 +40,123 @@ import pandas as pd
 
 
 # ---------------------------------------------------------------------------
-# BED parsing
+# Coordinate file parsing (.chrom and BED)
 # ---------------------------------------------------------------------------
+
+
+def _open_text_maybe_gzip(path: Path | str) -> io.TextIOBase:
+    """Open a path as text. Handles gzip by magic bytes (not extension)."""
+    path = Path(path)
+    with open(path, "rb") as fh:
+        head = fh.read(2)
+    if head == b"\x1f\x8b":
+        return io.TextIOWrapper(gzip.open(path, "rb"), encoding="utf-8")
+    return open(path, "r", encoding="utf-8", newline="")
+
+
+def detect_coord_format(path: Path | str) -> str:
+    """Return ``'chrom'``, ``'bed'``, or raise. Inspects the first non-empty
+    line:
+
+    - ``.chrom``: 5 columns; col 3 is ``+``/``-``/``.``; cols 4-5 are int.
+    - BED:        4+ columns; cols 2-3 are int; col 1 is the chromosome.
+    """
+    with _open_text_maybe_gzip(path) as fh:
+        for raw in fh:
+            line = raw.rstrip("\r\n")
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            # chrom format: col[2] in {'+','-','.'} and cols 3, 4 are int
+            if (
+                len(parts) >= 5
+                and parts[2] in ("+", "-", ".")
+                and parts[3].lstrip("-").isdigit()
+                and parts[4].lstrip("-").isdigit()
+            ):
+                return "chrom"
+            # BED format: cols 1, 2 are int
+            if (
+                len(parts) >= 4
+                and parts[1].lstrip("-").isdigit()
+                and parts[2].lstrip("-").isdigit()
+            ):
+                return "bed"
+            raise ValueError(
+                f"Coordinate file {path} line 1: cannot detect format. "
+                f"Expected either odp .chrom (gene_id, chrom, +/-/., start, "
+                f"stop) or BED (chrom, start, end, gene_id). Got: {parts!r}"
+            )
+    raise ValueError(f"Coordinate file {path} is empty")
+
+
+def parse_chrom(path: Path | str) -> pd.DataFrame:
+    """Read an odp ``.chrom`` file (5 tab-separated fields: ``gene_id``,
+    ``scaffold``, ``strand``, ``start``, ``stop``). Transparently handles
+    gzip-compressed input (``.chrom.gz``).
+
+    Returns a DataFrame with columns: ``chrom`` (str), ``start`` (int),
+    ``end`` (int), ``gene_id`` (str), ``strand`` (str), ``pos`` (int —
+    gene midpoint).
+    """
+    path = Path(path)
+    rows: list[dict] = []
+    with _open_text_maybe_gzip(path) as fh:
+        for lineno, raw in enumerate(fh, start=1):
+            line = raw.rstrip("\r\n")
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            if len(parts) < 5:
+                raise ValueError(
+                    f".chrom file {path} line {lineno}: needs at least 5 "
+                    f"tab-separated columns (gene_id, scaffold, strand, "
+                    f"start, stop), got {len(parts)}: {parts!r}"
+                )
+            gene_id, chrom, strand, start_s, stop_s = parts[:5]
+            if strand not in ("+", "-", "."):
+                raise ValueError(
+                    f".chrom file {path} line {lineno}: strand must be "
+                    f"'+', '-', or '.', got {strand!r}"
+                )
+            try:
+                start = int(start_s)
+                end = int(stop_s)
+            except ValueError as e:
+                raise ValueError(
+                    f".chrom file {path} line {lineno}: start/stop must be "
+                    f"integers, got {start_s!r}/{stop_s!r}"
+                ) from e
+            rows.append({
+                "chrom": chrom,
+                "start": start,
+                "end": end,
+                "gene_id": gene_id,
+                "strand": strand,
+                "pos": (start + end) // 2,
+            })
+    if not rows:
+        raise ValueError(f".chrom file {path} is empty or has no parseable lines")
+    return pd.DataFrame(rows)
 
 
 def parse_bed(path: Path | str) -> pd.DataFrame:
     """Read a BED-like file with at least four columns
     (``chrom``, ``start``, ``end``, ``gene_id``). Trailing columns are kept
-    but unused. Strips CRLF and skips blank lines.
+    but unused. Strips CRLF and skips blank lines. Transparently handles
+    gzip-compressed input.
 
     Returns a DataFrame with columns: ``chrom`` (str), ``start`` (int),
     ``end`` (int), ``gene_id`` (str), ``pos`` (int — gene midpoint).
     """
     path = Path(path)
     rows: list[dict] = []
-    with open(path, "r", encoding="utf-8", newline="") as fh:
-        reader = csv.reader(fh, delimiter="\t")
-        for lineno, parts in enumerate(reader, start=1):
-            if not parts:
+    with _open_text_maybe_gzip(path) as fh:
+        for lineno, raw in enumerate(fh, start=1):
+            line = raw.rstrip("\r\n")
+            if not line.strip():
                 continue
-            # Tolerate a single line accidentally written with CRLF only
-            parts = [c.replace("\r", "") for c in parts]
-            if not any(p.strip() for p in parts):
-                continue
+            parts = line.split("\t")
             if len(parts) < 4:
                 raise ValueError(
                     f"BED file {path} line {lineno}: needs at least 4 tab-"
@@ -86,6 +182,26 @@ def parse_bed(path: Path | str) -> pd.DataFrame:
     if not rows:
         raise ValueError(f"BED file {path} is empty or has no parseable lines")
     return pd.DataFrame(rows)
+
+
+def parse_coordinates(path: Path | str, fmt: str = "auto") -> pd.DataFrame:
+    """Parse a coordinate file in either odp .chrom or BED format.
+
+    Args:
+      path: file path (gzip-compressed accepted).
+      fmt: ``'auto'`` (default), ``'chrom'``, or ``'bed'``. With ``'auto'``,
+        the format is detected from the first non-empty line.
+
+    Returns a DataFrame with columns ``chrom``, ``start``, ``end``,
+    ``gene_id``, ``pos`` (and ``strand`` if the input was .chrom).
+    """
+    if fmt == "auto":
+        fmt = detect_coord_format(path)
+    if fmt == "chrom":
+        return parse_chrom(path)
+    if fmt == "bed":
+        return parse_bed(path)
+    raise ValueError(f"unsupported coordinate format: {fmt!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -261,12 +377,15 @@ def orthologs_to_rbh(
     has_header: bool = False,
     has_orthogroup_id_column: Optional[bool] = None,
 ) -> pd.DataFrame:
-    """Join an N-column ortholog table against per-species BED files and
-    return an odp-style `.rbh` DataFrame.
+    """Join an N-column ortholog table against per-species coordinate
+    files and return an odp-style `.rbh` DataFrame.
 
     Args:
       orthologs_path: path to the tab-separated orthologs table.
-      bed_paths: mapping of species name → path to that species' BED.
+      bed_paths: mapping of species name → path to that species'
+        coordinate file. odp ``.chrom`` and BED formats are both
+        accepted; the format is auto-detected from file content.
+        gzip-compressed inputs are handled transparently.
       species_order: if supplied, the species columns of the orthologs
         table are interpreted in this order (overrides any header row
         and disables auto-detection of an orthogroup-id column).
@@ -285,19 +404,20 @@ def orthologs_to_rbh(
         has_header=has_header,
     )
 
-    # Every species in the table must have a BED.
+    # Every species in the table must have a coordinate file.
     missing_beds = [s for s in species_names if s not in bed_paths]
     if missing_beds:
         raise ValueError(
-            f"BED files missing for species {missing_beds!r}. The orthologs "
-            f"table has columns {species_names!r}; --bed must be supplied "
-            f"for every one."
+            f"Coordinate files missing for species {missing_beds!r}. The "
+            f"orthologs table has columns {species_names!r}; --bed or "
+            f"--chrom must be supplied for every one."
         )
 
-    # Load BEDs and build per-species gene-id → (chrom, pos) lookup.
+    # Load coordinate files (auto-detect chrom vs BED) and build
+    # per-species gene-id → (chrom, pos) lookup.
     sp_lookup: Dict[str, Dict[str, Tuple[str, int]]] = {}
     for sp in species_names:
-        bed_df = parse_bed(bed_paths[sp])
+        bed_df = parse_coordinates(bed_paths[sp])
         # If a gene id is duplicated in the BED, keep the first; warn.
         dup_mask = bed_df["gene_id"].duplicated()
         if dup_mask.any():

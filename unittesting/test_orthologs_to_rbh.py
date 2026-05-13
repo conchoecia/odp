@@ -294,7 +294,7 @@ def test_orthologs_to_rbh_missing_bed_for_species_errors(
     importer, two_species_bed_pair, two_col_orthologs
 ):
     sp1_bed, _ = two_species_bed_pair
-    with pytest.raises(ValueError, match="BED files missing for species"):
+    with pytest.raises(ValueError, match="Coordinate files missing for species"):
         importer.orthologs_to_rbh(
             orthologs_path=two_col_orthologs,
             bed_paths={"sp1": sp1_bed},  # sp2 missing
@@ -405,10 +405,10 @@ def test_cli_bed_missing_equals_sign(tmp_path):
         capture_output=True, text=True,
     )
     assert result.returncode == 2
-    assert "expects NAME=PATH" in result.stderr
+    assert "expected NAME=PATH" in result.stderr
 
 
-def test_cli_requires_at_least_one_bed(tmp_path, two_col_orthologs):
+def test_cli_requires_at_least_one_coord(tmp_path, two_col_orthologs):
     result = subprocess.run(
         [
             sys.executable, str(CLI_PATH),
@@ -419,7 +419,7 @@ def test_cli_requires_at_least_one_bed(tmp_path, two_col_orthologs):
         capture_output=True, text=True,
     )
     assert result.returncode == 2
-    assert "at least one --bed" in result.stderr
+    assert "at least one --chrom or --bed" in result.stderr
 
 
 def test_cli_help_lists_orthologs_to_rbh():

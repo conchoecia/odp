@@ -65,7 +65,7 @@ def test_parser_lists_every_subcommand(cli):
     )
     names = set(subparsers_action.choices.keys())
     expected = set(cli.SNAKEFILES) | {
-        "init", "validate", "version", "orthologs-to-rbh",
+        "init", "validate", "version", "orthologs-to-rbh", "orthofinder-import",
     }
     assert names == expected
 
