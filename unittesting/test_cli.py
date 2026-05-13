@@ -64,7 +64,9 @@ def test_parser_lists_every_subcommand(cli):
         a for a in parser._actions if a.dest == "subcommand"
     )
     names = set(subparsers_action.choices.keys())
-    expected = set(cli.SNAKEFILES) | {"init", "validate", "version"}
+    expected = set(cli.SNAKEFILES) | {
+        "init", "validate", "version", "orthologs-to-rbh", "orthofinder-import",
+    }
     assert names == expected
 
 
