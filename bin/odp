@@ -133,6 +133,15 @@ def run_subcommand(subcommand: str, args: argparse.Namespace) -> int:
     workdir = Path(args.workdir).resolve() if args.workdir else None
     configfile = Path(args.config).resolve() if args.config else None
 
+    # Pre-flight: catch a missing config before snakemake does, so the user
+    # sees a one-line error instead of a six-frame traceback.
+    if configfile is not None and not configfile.is_file():
+        sys.stderr.write(f"odp: config file not found: {configfile}\n")
+        return 2
+    if workdir is not None and not workdir.is_dir():
+        sys.stderr.write(f"odp: workdir not found: {workdir}\n")
+        return 2
+
     cmd = build_snakemake_cmd(
         snakefile=snakefile,
         cores=args.cores,
@@ -233,6 +242,17 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_validate(args: argparse.Namespace) -> int:
     """Run filecheck as a one-shot validation, no full pipeline."""
+    if not args.config:
+        # Auto-pick ./config.yaml if it exists; otherwise tell the user.
+        candidate = Path("config.yaml").resolve()
+        if candidate.is_file():
+            args.config = str(candidate)
+        else:
+            sys.stderr.write(
+                "odp validate: no --config given and no ./config.yaml found in "
+                f"{Path.cwd()}\n"
+            )
+            return 2
     workdir = Path(args.config).resolve().parent
     args.workdir = str(workdir)
     args.dry_run = False
@@ -298,6 +318,28 @@ def add_common_run_args(p: argparse.ArgumentParser) -> None:
     )
 
 
+# Ordering for the help text. Workflow commands first, utilities last, so a
+# new user reads top-down and gets the most common paths early.
+SUBCOMMAND_ORDER = [
+    # Pipeline:
+    "run", "only-db",
+    # RBH chain:
+    "nway-rbh", "rbh-to-alignments", "rbh-to-hmm", "rbh-to-ribbon",
+    # Plotting:
+    "plot-mixing",
+    # Utilities:
+    "filecheck", "init", "validate", "version",
+]
+
+
+def _suggest(unknown: str, valid: list[str]) -> str | None:
+    """Return the closest matching subcommand name, or None if nothing is
+    close enough. Used to print 'did you mean ...?' on typos."""
+    import difflib
+    matches = difflib.get_close_matches(unknown, valid, n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="odp",
@@ -305,7 +347,20 @@ def build_parser() -> argparse.ArgumentParser:
             "odp pipeline orchestrator. Wraps the Snakefiles under scripts/ "
             "behind a single CLI."
         ),
+        epilog=(
+            "examples:\n"
+            "  odp init                                 # write starter config.yaml\n"
+            "  odp run --config config.yaml --cores 8   # main pairwise synteny\n"
+            "  odp run -n -c config.yaml                # dry-run\n"
+            "  odp validate                             # one-shot input check\n"
+            "  odp version                              # odp + snakemake versions\n"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument(
+        "--version",
+        action="version",
+        version=f"odp {odp_version()}",
     )
 
     sub = p.add_subparsers(dest="subcommand", metavar="SUBCOMMAND")
@@ -322,43 +377,97 @@ def build_parser() -> argparse.ArgumentParser:
         "rbh-to-ribbon":     "ribbon plots from RBH output",
         "plot-mixing":       "plot RBH mixing across genomes",
     }
-    for name in SNAKEFILES:
-        sp = sub.add_parser(name, help=descriptions[name], description=descriptions[name])
+    examples = {
+        "run": "odp run --config config.yaml --cores 8",
+        "only-db": "odp only-db --config config.yaml --cores 8",
+        "filecheck": "odp filecheck --config config.yaml",
+        "nway-rbh": "odp nway-rbh --config config.yaml --cores 8",
+        "rbh-to-alignments": "odp rbh-to-alignments --config config.yaml",
+        "rbh-to-hmm": "odp rbh-to-hmm --config config.yaml",
+        "rbh-to-ribbon": "odp rbh-to-ribbon --config config.yaml",
+        "plot-mixing": "odp plot-mixing --config config.yaml",
+    }
+
+    def _add_snakefile_subparser(name: str) -> None:
+        sp = sub.add_parser(
+            name,
+            help=descriptions[name],
+            description=descriptions[name],
+            epilog=f"example:\n  {examples[name]}",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
         add_common_run_args(sp)
         sp.set_defaults(handler=lambda args, _name=name: run_subcommand(_name, args))
 
     # Convenience subcommands
-    sp_init = sub.add_parser(
-        "init",
-        help="write a starter config.yaml to the current directory",
-        description="write a starter config.yaml to the current directory",
-    )
-    sp_init.add_argument("--output", "-o", default="config.yaml", help="output path")
-    sp_init.add_argument("--force", "-f", action="store_true", help="overwrite if exists")
-    sp_init.set_defaults(handler=cmd_init)
+    def _add_init() -> None:
+        sp = sub.add_parser(
+            "init",
+            help="write a starter config.yaml to the current directory",
+            description="write a starter config.yaml to the current directory",
+            epilog="example:\n  odp init -o config.yaml",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        sp.add_argument("--output", "-o", default="config.yaml", help="output path")
+        sp.add_argument("--force", "-f", action="store_true", help="overwrite if exists")
+        sp.set_defaults(handler=cmd_init)
 
-    sp_val = sub.add_parser(
-        "validate",
-        help="validate a config without running the full pipeline",
-        description="validate a config without running the full pipeline",
-    )
-    sp_val.add_argument("--config", "-c", required=True, help="path to config.yaml")
-    sp_val.add_argument("--cores", "-j", type=int, default=2, help="snakemake cores (default 2)")
-    sp_val.add_argument("--verbose", "-v", action="store_true")
-    sp_val.set_defaults(handler=cmd_validate)
+    def _add_validate() -> None:
+        sp = sub.add_parser(
+            "validate",
+            help="validate a config without running the full pipeline",
+            description=(
+                "validate a config without running the full pipeline. "
+                "If --config is omitted, looks for ./config.yaml in the cwd."
+            ),
+            epilog="example:\n  odp validate --config config.yaml",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        sp.add_argument("--config", "-c", help="path to config.yaml (default: ./config.yaml)")
+        sp.add_argument("--cores", "-j", type=int, default=2, help="snakemake cores (default 2)")
+        sp.add_argument("--verbose", "-v", action="store_true")
+        sp.set_defaults(handler=cmd_validate)
 
-    sp_ver = sub.add_parser(
-        "version",
-        help="print odp + snakemake versions",
-        description="print odp + snakemake versions",
-    )
-    sp_ver.set_defaults(handler=cmd_version)
+    def _add_version() -> None:
+        sp = sub.add_parser(
+            "version",
+            help="print odp + snakemake versions",
+            description="print odp + snakemake versions",
+        )
+        sp.set_defaults(handler=cmd_version)
 
+    # Register subcommands in the user-friendly order defined above.
+    for name in SUBCOMMAND_ORDER:
+        if name in SNAKEFILES:
+            _add_snakefile_subparser(name)
+        elif name == "init":
+            _add_init()
+        elif name == "validate":
+            _add_validate()
+        elif name == "version":
+            _add_version()
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
+
+    # Friendlier typo error: argparse's default lists every choice flat. We
+    # intercept the unknown subcommand and print a "did you mean ...?"
+    # suggestion if one is reasonably close.
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] not in {"-h", "--help", "--version"} and not argv[0].startswith("-"):
+        # All known subcommands across the parser.
+        valid = list(SNAKEFILES) + ["init", "validate", "version"]
+        if argv[0] not in valid:
+            guess = _suggest(argv[0], valid)
+            sys.stderr.write(f"odp: unknown subcommand {argv[0]!r}\n")
+            if guess:
+                sys.stderr.write(f"odp: did you mean {guess!r}?\n")
+            sys.stderr.write("odp: run `odp --help` to see the full list.\n")
+            return 2
+
     args = parser.parse_args(argv)
     return args.handler(args)
 

@@ -244,3 +244,101 @@ def test_odp_version_helper_returns_string(cli):
     v = cli.odp_version()
     assert isinstance(v, str)
     assert v != ""
+
+
+# ---- UX improvements: --version, typo-suggest, pre-flight ---------------
+
+
+def test_top_level_version_flag(cli):
+    """`odp --version` should exit 0 and print 'odp <something>'."""
+    result = subprocess.run(
+        [sys.executable, str(CLI_PATH), "--version"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stdout.startswith("odp ")
+
+
+def test_unknown_subcommand_suggests_correction(cli):
+    result = subprocess.run(
+        [sys.executable, str(CLI_PATH), "ru"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "unknown subcommand 'ru'" in result.stderr
+    assert "did you mean 'run'" in result.stderr
+
+
+def test_unknown_subcommand_far_off_no_guess(cli):
+    """Garbage subcommand far from any valid name: no false suggestion."""
+    result = subprocess.run(
+        [sys.executable, str(CLI_PATH), "xyzqwerty"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "unknown subcommand 'xyzqwerty'" in result.stderr
+    assert "did you mean" not in result.stderr
+
+
+def test_run_with_missing_config_dies_cleanly(cli):
+    """No snakemake traceback for a missing config — one-line CLI error."""
+    result = subprocess.run(
+        [sys.executable, str(CLI_PATH), "run", "--config", "/nonexistent/x.yaml"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "config file not found" in result.stderr
+    # No traceback lines from snakemake.
+    assert "Traceback" not in result.stderr
+
+
+def test_run_with_missing_workdir_dies_cleanly(cli):
+    result = subprocess.run(
+        [sys.executable, str(CLI_PATH), "run", "--workdir", "/nonexistent/dir"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "workdir not found" in result.stderr
+
+
+def test_subcommand_order_in_help(cli):
+    """Help text should list pipeline subcommands first, utilities last."""
+    parser = cli.build_parser()
+    help_text = parser.format_help()
+    # `run` should appear before `init`; `version` should be last.
+    assert help_text.index("\n    run") < help_text.index("\n    init")
+    assert help_text.index("\n    init") < help_text.index("\n    version")
+
+
+def test_validate_auto_detects_local_config(cli, tmp_path, monkeypatch):
+    """`odp validate` with no --config should pick up ./config.yaml."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("species: {}\n")
+    monkeypatch.chdir(tmp_path)
+    parser = cli.build_parser()
+    args = parser.parse_args(["validate"])
+    # We don't want to actually exec snakemake in a unit test, so monkeypatch
+    # subprocess.call inside the cli module to no-op + remember the cmd.
+    seen = {}
+    def fake_call(cmd):
+        seen["cmd"] = cmd
+        return 0
+    monkeypatch.setattr(cli.subprocess, "call", fake_call)
+    rc = cli.cmd_validate(args)
+    assert rc == 0
+    # The CLI should have resolved ./config.yaml as the config.
+    assert any("config.yaml" in part for part in seen["cmd"])
+
+
+def test_validate_no_config_no_local_fails(cli, tmp_path, monkeypatch):
+    """No --config and no ./config.yaml → error, not snakemake invoked."""
+    monkeypatch.chdir(tmp_path)
+    parser = cli.build_parser()
+    args = parser.parse_args(["validate"])
+    rc = cli.cmd_validate(args)
+    assert rc == 2
