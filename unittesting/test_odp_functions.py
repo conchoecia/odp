@@ -347,6 +347,119 @@ def test_determine_breaks_manual_only(of):
     assert len(out) == 1
 
 
+def test_gen_plotting_df_end_to_end(of, tmp_path):
+    """gen_plotting_df orchestrates parse_coords + coord-struct lookups +
+    calc_D_for_y_and_x and writes a plotorder file + an output table.
+
+    Exercises the full pipeline. Fixtures match the file conventions
+    that the snakemake rules feed in."""
+    xcoords = tmp_path / "x.coords"
+    xcoords.write_text("chrA 1000 1000 0\nchrB 1500 2500 1000\n")
+    ycoords = tmp_path / "y.coords"
+    ycoords.write_text("scafA 1200 1200 0\nscafB 1800 3000 1200\n")
+    xprottoloc = tmp_path / "x.chrom"
+    xprottoloc.write_text(
+        "gx1\tchrA\t+\t100\t200\n"
+        "gx2\tchrA\t+\t400\t500\n"
+        "gx3\tchrB\t-\t100\t200\n"
+    )
+    yprottoloc = tmp_path / "y.chrom"
+    yprottoloc.write_text(
+        "gy1\tscafA\t+\t100\t200\n"
+        "gy2\tscafA\t+\t400\t500\n"
+        "gy3\tscafB\t-\t100\t200\n"
+    )
+    recip = tmp_path / "x_to_y.blast"
+    recip.write_text(
+        "gx1\tgy1\t99\t100\t0\t0\t1\t100\t1\t100\t1e-50\t200\n"
+        "gx2\tgy2\t99\t100\t0\t0\t1\t100\t1\t100\t1e-50\t200\n"
+        "gx3\tgy3\t99\t100\t0\t0\t1\t100\t1\t100\t1e-50\t200\n"
+    )
+    outtable = tmp_path / "plotdf.tsv"
+    plotorder = tmp_path / "plotorder.yaml"
+    config = {
+        "xaxisspecies": {"xsp": {}},
+        "yaxisspecies": {"ysp": {}},
+    }
+    of.gen_plotting_df(
+        ycoords_file=str(ycoords),
+        xcoords_file=str(xcoords),
+        xprottoloc=str(xprottoloc),
+        yprottoloc=str(yprottoloc),
+        xsample="xsp", ysample="ysp",
+        recip=str(recip),
+        outtable=str(outtable),
+        plotorder_file=str(plotorder),
+        config=config,
+    )
+    assert outtable.is_file()
+    assert plotorder.is_file()
+    plotorder_body = plotorder.read_text()
+    assert "xplotorder:" in plotorder_body
+    assert "yplotorder:" in plotorder_body
+
+
+def test_synteny_plot_end_to_end(of, tmp_path):
+    """synteny_plot consumes the plotting_df + xbreaks/ybreaks tsvs and
+    writes a matplotlib figure. Exercises the largest plot orchestrator
+    in odp_functions."""
+    import matplotlib
+    matplotlib.use("Agg")
+    # Re-use the same fixtures as gen_plotting_df.
+    xcoords = tmp_path / "x.coords"
+    xcoords.write_text("chrA 1000 1000 0\nchrB 1500 2500 1000\n")
+    ycoords = tmp_path / "y.coords"
+    ycoords.write_text("scafA 1200 1200 0\nscafB 1800 3000 1200\n")
+    xprottoloc = tmp_path / "x.chrom"
+    xprottoloc.write_text(
+        "gx1\tchrA\t+\t100\t200\n"
+        "gx2\tchrA\t+\t400\t500\n"
+        "gx3\tchrB\t-\t100\t200\n"
+    )
+    yprottoloc = tmp_path / "y.chrom"
+    yprottoloc.write_text(
+        "gy1\tscafA\t+\t100\t200\n"
+        "gy2\tscafA\t+\t400\t500\n"
+        "gy3\tscafB\t-\t100\t200\n"
+    )
+    recip = tmp_path / "x_to_y.blast"
+    recip.write_text(
+        "gx1\tgy1\t99\t100\t0\t0\t1\t100\t1\t100\t1e-50\t200\n"
+        "gx2\tgy2\t99\t100\t0\t0\t1\t100\t1\t100\t1e-50\t200\n"
+        "gx3\tgy3\t99\t100\t0\t0\t1\t100\t1\t100\t1e-50\t200\n"
+    )
+    outtable = tmp_path / "plotdf.tsv"
+    plotorder = tmp_path / "plotorder.yaml"
+    config = {
+        "xaxisspecies": {"xsp": {}},
+        "yaxisspecies": {"ysp": {}},
+    }
+    of.gen_plotting_df(
+        ycoords_file=str(ycoords), xcoords_file=str(xcoords),
+        xprottoloc=str(xprottoloc), yprottoloc=str(yprottoloc),
+        xsample="xsp", ysample="ysp",
+        recip=str(recip), outtable=str(outtable),
+        plotorder_file=str(plotorder), config=config,
+    )
+    # Reuse the plotdf as breaks files (synteny_plot reads xgene/ygene
+    # from them); for a small fixture this is the simplest setup.
+    xbreaks = outtable
+    ybreaks = outtable
+    synplot = tmp_path / "synplot.pdf"
+    of.synteny_plot(
+        plotting_df=str(outtable),
+        xcoords_file=str(xcoords), ycoords_file=str(ycoords),
+        xsample="xsp", ysample="ysp",
+        xbreaks_file=str(xbreaks), ybreaks_file=str(ybreaks),
+        synplot=str(synplot),
+        prot_to_color=None, dropmissing=False,
+        plot_x_lines=True, plot_y_lines=True,
+        config=config,
+    )
+    assert synplot.is_file()
+    assert synplot.stat().st_size > 0
+
+
 def test_parse_coords_basic(of, tmp_path):
     """parse_coords reads a space-separated genome-coords file and
     returns (offset, scaf_to_len, lines_at, max_coord, tick_labels,

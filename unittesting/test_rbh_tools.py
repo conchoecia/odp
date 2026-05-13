@@ -355,6 +355,45 @@ def test_rbhdf_to_alglocdf_inconsistent_FET_raises(rt, tmp_path):
         rt.rbhdf_to_alglocdf(df, 0.05, "ALG")
 
 
+def test_combine_rbh_strips_FET_D_columns_from_inputs(rt, tmp_path):
+    """Lines 252-255: combine_rbh drops columns ending in _FET, _D,
+    _ix etc. from both inputs because the merged frame can't keep stale
+    per-input stats."""
+    a = tmp_path / "a.rbh"
+    a.write_text(dedent("""\
+        rbh\tgene_group\tsp1_gene\tsp1_scaf\tsp1_pos\tspA_gene\tspA_scaf\tspA_pos\tsp1_FET\tsp1_D
+        ra1\tNone\tg1\tchr1\t100\ta1\tscafA\t10\t0.001\t0.5
+        ra2\tNone\tg2\tchr1\t200\ta2\tscafA\t20\t0.002\t0.3
+    """))
+    b = tmp_path / "b.rbh"
+    b.write_text(dedent("""\
+        rbh\tgene_group\tsp1_gene\tsp1_scaf\tsp1_pos\tspB_gene\tspB_scaf\tspB_pos\tsp1_ix
+        rb1\tNone\tg3\tchr1\t300\tb1\tscafB\t30\t5
+    """))
+    df = rt.combine_rbh(a, b)
+    # Stat columns get stripped in the merged output.
+    for col in df.columns:
+        for stale_suffix in ("_FET", "_D", "_ix"):
+            assert not col.endswith(stale_suffix), f"stale {col} should have been dropped"
+
+
+def test_combine_rbh_rejects_shared_rbh_ids_between_files(rt, tmp_path):
+    """Line 285-286: same rbh id in both files is rejected — the merge
+    is meant to bring in disjoint marker sets."""
+    a = tmp_path / "a.rbh"
+    a.write_text(dedent("""\
+        rbh\tgene_group\tsp1_gene\tsp1_scaf\tsp1_pos\tspA_gene\tspA_scaf\tspA_pos
+        rXX\tNone\tg1\tchr1\t100\ta1\tscafA\t10
+    """))
+    b = tmp_path / "b.rbh"
+    b.write_text(dedent("""\
+        rbh\tgene_group\tsp1_gene\tsp1_scaf\tsp1_pos\tspB_gene\tspB_scaf\tspB_pos
+        rXX\tNone\tg2\tchr1\t200\tb1\tscafB\t30
+    """))
+    with pytest.raises(IOError, match="shared entries"):
+        rt.combine_rbh(a, b)
+
+
 def test_combine_rbh_error_paths_do_not_crash_in_format_string(rt, tmp_path):
     """Regression: the error path for `df1_unique_list != 1` previously
     referenced the unbound name `df1_unique`. We can't directly trigger

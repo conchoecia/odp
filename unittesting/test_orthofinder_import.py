@@ -239,6 +239,82 @@ def test_disambiguate_synteny_without_anchor_graph_raises(
         )
 
 
+def test_emit_rbh_skips_rows_with_empty_gene_list(ofi, oti, tmp_path, capsys):
+    """Line 571-573: a row with an empty list for any species is dropped
+    from the .rbh output."""
+    import pandas as pd
+    bed = tmp_path / "sp.bed"
+    bed.write_text(
+        "chr1\t100\t200\tg1\n"
+        "chr1\t300\t400\tg2\n"
+    )
+    coords = {"sp1": oti.parse_coordinates(bed), "sp2": oti.parse_coordinates(bed)}
+    df = pd.DataFrame({
+        "OG": ["OG1", "OG2"],
+        "sp1": [["g1"], []],     # OG2 has empty list for sp1 — drop
+        "sp2": [["g1"], ["g2"]],
+    })
+    rbh = ofi.emit_rbh_from_orthogroups(df, ["sp1", "sp2"], coords)
+    assert len(rbh) == 1
+    err = capsys.readouterr().err
+    assert "dropped 1 OG" in err
+
+
+def test_disambiguate_skips_og_with_zero_genes_in_species(
+    ofi, oti, orthofinder_synthetic, tmp_path
+):
+    """Lines 414-424: an OG whose species column is empty triggers an
+    audit entry with reason 'no candidates in this species'."""
+    import pandas as pd
+    fx = orthofinder_synthetic
+    species_names = ["sp1", "sp2", "sp3"]
+    coords = {
+        sp: oti.parse_coordinates(fx[f"{sp}_chrom"]) for sp in species_names
+    }
+    # An OG with one species empty; the disambiguator should record a
+    # "no candidates" audit row and drop the OG.
+    multi = pd.DataFrame([{
+        "OG": "OG9",
+        "sp1": ["g1", "g2"],  # multi-copy in sp1
+        "sp2": [],            # empty — triggers "no candidates"
+        "sp3": ["y1"],
+    }])
+    resolved, audit = ofi.disambiguate_multicopy(
+        multi, species_names, coords, anchor_graph=None,
+        strategy="longest",
+    )
+    assert len(resolved) == 0
+    reasons = [d.reason for d in audit]
+    assert any("no candidates in this species" in r for r in reasons)
+
+
+def test_disambiguate_when_no_candidate_in_coord_file(
+    ofi, oti, orthofinder_synthetic, tmp_path
+):
+    """Lines 433-444: when a multi-copy species' candidate genes are
+    none in the coord lookup, the OG is dropped with a specific audit
+    reason."""
+    import pandas as pd
+    fx = orthofinder_synthetic
+    species_names = ["sp1", "sp2", "sp3"]
+    coords = {
+        sp: oti.parse_coordinates(fx[f"{sp}_chrom"]) for sp in species_names
+    }
+    multi = pd.DataFrame([{
+        "OG": "OGZ",
+        "sp1": ["ghost1", "ghost2"],  # neither in sp1.chrom
+        "sp2": ["x5"],
+        "sp3": ["y5"],
+    }])
+    resolved, audit = ofi.disambiguate_multicopy(
+        multi, species_names, coords, anchor_graph=None,
+        strategy="longest",
+    )
+    assert len(resolved) == 0
+    reasons = [d.reason for d in audit]
+    assert any("no candidate gene found in coord file" in r for r in reasons)
+
+
 def test_discover_paths_with_results_root(ofi, orthofinder_synthetic):
     paths = ofi.discover_orthofinder_paths(orthofinder_synthetic["root"])
     assert paths.orthogroups_tsv.name == "Orthogroups.tsv"

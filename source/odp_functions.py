@@ -1318,7 +1318,7 @@ def gen_plotting_df(ycoords_file, xcoords_file,
 
     y_offset, y_scaf_to_len, horizontal_lines_at, ymax, yticklabel, ytickpos, yorder = parse_coords(
         ycoords_file, ysample, "y",
-        xprottoloc, yprottoloc, recip, xticklabel)
+        xprottoloc, yprottoloc, recip, xticklabel, **kwargs)
     print("found {} y chromosomes".format(len(y_offset)))
 
     # now save the plot order to a file
@@ -1457,7 +1457,7 @@ def synteny_plot(plotting_df,    xcoords_file,  ycoords_file,
     print("found {} x chromosomes".format(len(x_offset)))
 
     y_offset, y_scaf_to_len, horizontal_lines_at, ymax, yticklabel, ytickpos, yorder = parse_coords(
-        ycoords_file, ysample, "y")
+        ycoords_file, ysample, "y", **kwargs)
     print("found {} y chromosomes".format(len(y_offset)))
 
     # first make a lookup table
