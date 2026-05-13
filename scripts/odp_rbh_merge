@@ -3,6 +3,14 @@ This merges the RBH files based on the anchor species. Makes a special RBH
 that has some missing data.
 """
 
+import os
+import sys
+
+# Wire source/ onto sys.path so odp_functions resolves regardless of cwd.
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+source_path = os.path.join(snakefile_path, "../source")
+sys.path.insert(1, source_path)
+
 import numpy as np
 import odp_functions as OdpF
 import pandas as pd

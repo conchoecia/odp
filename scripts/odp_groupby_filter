@@ -3,9 +3,16 @@ This script takes the grouby RBH hits file and removes the rows
  that have a false discovery rate greater than a selected value.
 """
 
+import os
+import sys
+
+# Wire source/ onto sys.path so odp_functions resolves regardless of cwd.
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+source_path = os.path.join(snakefile_path, "../source")
+sys.path.insert(1, source_path)
+
 import pandas as pd
 import odp_functions as OdpF
-import sys
 
 configfile: "config.yaml"
 

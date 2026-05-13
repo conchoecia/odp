@@ -14,7 +14,11 @@ import odp_plotting_functions as odp_plot
 import logging
 
 # non-standard dependencies
+# Force the non-interactive 'Agg' backend before pyplot import so snakemake
+# rule bodies executed on worker threads don't crash on macOS's MacOSX
+# backend (see odp_plotting_functions.py for the full context).
 import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.path import Path
 import matplotlib.path as mpath

@@ -2,7 +2,7 @@
 
 These paths replace the ad-hoc sys.path.insert dance in test files. Any
 test that needs to import a module from `source/`, `scripts/`, or
-`dependencies/fasta-parser/` should depend on the matching fixture (which
+`dependencies/afp.py` should depend on the matching fixture (which
 also prepends to sys.path the first time it is resolved).
 """
 from __future__ import annotations
@@ -34,9 +34,13 @@ def scripts_dir(repo_root: Path) -> Path:
 
 @pytest.fixture(scope="session")
 def fasta_parser_dir(repo_root: Path) -> Path:
-    path = repo_root / "dependencies" / "fasta-parser"
-    sys.path.insert(0, str(path))
-    return path
+    """Path to the vendored fastx parser. Inserts the parser's parent
+    directory onto sys.path so that ``import afp`` (or
+    ``import afp as fasta`` in legacy callsites) resolves to
+    ``dependencies/afp.py``."""
+    deps = repo_root / "dependencies"
+    sys.path.insert(0, str(deps))
+    return deps / "afp.py"
 
 
 @pytest.fixture(scope="session")

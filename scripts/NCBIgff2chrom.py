@@ -30,7 +30,7 @@ Notes
   min CDS start and max CDS stop across all CDS lines for the same protein.
 - Both GFF and FASTA inputs may be gzipped (detected by suffix).
 
-License: GPL-3.0
+License: See the LICENSE file at the root of this project.
 """
 
 from __future__ import annotations

@@ -4,13 +4,16 @@ This plots the amount that the genes in each group are mixed.
 This version uses an unwrapped groupby dataframe.
 Needs coordinates from the genomes
 """
-# This block imports fasta-parser as fasta
+# This block imports fasta-parser as fasta and wires source/ onto sys.path
+# so that `import odp_functions` below resolves regardless of cwd.
 import os
 import sys
 snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
-dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+dependencies_path = os.path.join(snakefile_path, "../dependencies")
 sys.path.insert(1, dependencies_path)
-import fasta
+source_path = os.path.join(snakefile_path, "../source")
+sys.path.insert(1, source_path)
+import afp as fasta
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mplpatches

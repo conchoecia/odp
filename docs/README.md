@@ -12,20 +12,30 @@
 
 ## <a name="started"></a>Getting Started
 ```sh
-#install
+# 1. install
 git clone https://github.com/conchoecia/odp.git
 # NOTE: The make step will automatically use all of the cores on
 #       your current machine. If using a slurm cluster be sure to
 #       request all of the threads on that node. If you need to use
 #       fewer cores, run `make -f Makefile_1core` instead.
 cd odp && make
-# make a config.yaml file for your odp analysis
-cp odp/example_configs/CONFIG_odp.yaml ./config.yaml
-# modify the config file to include your own data
+
+# 2. put `odp` on your PATH so the CLI wrapper is callable as `odp`
+#    instead of `./bin/odp`. Add the export line to your ~/.bashrc or
+#    ~/.zshrc to make it persistent across shells.
+export PATH="$(pwd)/bin:$PATH"
+
+# 3. generate a starter config.yaml for your analysis
+odp init
+
+# 4. modify the config file to include your own data
 vim config.yaml
-# run the pipeline
-snakemake -r -p --snakefile odp/scripts/odp
-# currently there is no man page, see https://github.com/conchoecia/odp/ for instructions
+
+# 5. run the pipeline (uses all detected cores by default)
+odp run --config config.yaml
+
+# 6. discover other subcommands (only-db, nway-rbh, rbh-to-ribbon, ...)
+odp --help
 ```
 
 ## <a name="quickstart"></a>Quick Start
@@ -206,8 +216,11 @@ species:
 You can perform a comparison between these two genomes with:
 
 ```
-snakemake --snakefile odp/scripts/odp
+odp run --config config.yaml
 ```
+
+(or `snakemake --snakefile odp/scripts/odp` directly if you prefer the
+raw Snakefile interface.)
 
 ### <a name="inputspec"></a>Input file requirements
 
@@ -325,7 +338,7 @@ species:
     genome:   /path/to/Human_genome_assembly.fasta
 ```
 
-Run the pipeline with the command `snakemake -r -p --snakefile odp/scripts/odp`. The output files will be located in the folder `synteny_analysis/`. In this folder there are these folders:
+Run the pipeline with `odp run --config config.yaml` (or the raw form `snakemake -r -p --snakefile odp/scripts/odp` if you prefer). The output files will be located in the folder `synteny_analysis/`. In this folder there are these folders:
   - `db`
     - blastp and and diamond databases for searches.
   - `step0-blastp_results`
@@ -366,7 +379,8 @@ cp ${YOUR_ODP_INSTALL_PATH}/odp/example_configs/CONFIG_rbh_to_ribbon.yaml ./conf
 # edit the config file using the instructions you find there
 vim config.yaml
 # run the script to make your figure
-snakemake --snakefile ${YOUR_ODP_INSTALL_PATH}/odp/scripts/odp_rbh_to_ribbon
+odp rbh-to-ribbon --config config.yaml
+# (or: snakemake --snakefile ${YOUR_ODP_INSTALL_PATH}/odp/scripts/odp_rbh_to_ribbon)
 # your file will be saved as output.pdf
 ```
 

@@ -7,9 +7,9 @@ import gzip
 import os
 import sys
 snakefile_path = os.path.dirname(os.path.abspath(__file__))
-dependencies_path = os.path.join(snakefile_path, "../dependencies/fasta-parser")
+dependencies_path = os.path.join(snakefile_path, "../dependencies")
 sys.path.insert(1, dependencies_path)
-import fasta
+import afp as fasta
 
 # ODP-specific imports
 import odp_plotting_functions as odp_plot
@@ -542,36 +542,36 @@ def chrom_file_is_legal(chrompath):
     """
     # 1. check that the file exists
     check_file_exists(chrompath)
-    # 2. Open the file for whatever type it is
-    chromhandle = fasta.get_open_func(chrompath)
-    # go through the file line by line and inspect each element
-    for line in chromhandle:
-        line = line.strip()
-        if line:
-            fields = line.strip().split("\t")
-            # check if any of the fields have leading or trailing whitespace
-            for field in fields:
-                if field != field.strip():
-                    print("There is leading or trailing whitespace in this field: " + field)
+    # 2. Open the file for whatever type it is. afp.get_open_func returns a
+    # callable (e.g. gzip.open / open); call it to get the actual handle.
+    opener = fasta.get_open_func(chrompath)
+    with opener(chrompath, "rt") as chromhandle:
+        # go through the file line by line and inspect each element
+        for line in chromhandle:
+            line = line.strip()
+            if line:
+                fields = line.strip().split("\t")
+                # check if any of the fields have leading or trailing whitespace
+                for field in fields:
+                    if field != field.strip():
+                        print("There is leading or trailing whitespace in this field: " + field)
+                        return False
+                # check if any of the fields are the header strings
+                if fields[0] == "pid" or fields[1] == "scaf" or fields[2] == "strand" or fields[3] == "start" or fields[4] == "stop":
+                    print("One of the fields is a header string: " + str(fields))
                     return False
-            # check if any of the fields are the header strings
-            if fields[0] == "pid" or fields[1] == "scaf" or fields[2] == "strand" or fields[3] == "start" or fields[4] == "stop":
-                print("One of the fields is a header string: " + str(fields))
-                return False
-            # Check if field 2 is a ['+', '-', '.']
-            if fields[2] not in ['+', '-', '.']:
-                print("Field 2 is not a ['+', '-', '.']: " + str(fields))
-                return False
-            # check that field 3 is able to be converted to an int
-            if not fields[3].isdigit():
-                print("Field 3 is not an int: " + str(fields))
-                return False
-            # check that field 4 is able to be converted to an int
-            if not fields[4].isdigit():
-                print("Field 4 is not an int: " + str(fields))
-                return False
-    # close the handle
-    chromhandle.close()
+                # Check if field 2 is a ['+', '-', '.']
+                if fields[2] not in ['+', '-', '.']:
+                    print("Field 2 is not a ['+', '-', '.']: " + str(fields))
+                    return False
+                # check that field 3 is able to be converted to an int
+                if not fields[3].isdigit():
+                    print("Field 3 is not an int: " + str(fields))
+                    return False
+                # check that field 4 is able to be converted to an int
+                if not fields[4].isdigit():
+                    print("Field 4 is not an int: " + str(fields))
+                    return False
     # if we get here, everything is good
     return True
 
@@ -733,18 +733,19 @@ def check_species_input_legality(fastapath, peppath, chrompath, dup_proteins_all
     check_file_exists(chrompath)
     proteins_not_in_pep    = set()
     scaffolds_not_in_fasta = set()
-    chromhandle = fasta.get_open_func(chrompath)
-    for line in chromhandle:
-        line = line.strip()
-        if line:
-            fields = line.split("\t")
-            # check that the protein was seen in the protein fasta file
-            protid = fields[0]
-            scaffold = fields[1]
-            if protid not in protein_headers:
-                proteins_not_in_pep.add(protid)
-            if scaffold not in genome_headers:
-                scaffolds_not_in_fasta.add(scaffold)
+    opener = fasta.get_open_func(chrompath)
+    with opener(chrompath, "rt") as chromhandle:
+        for line in chromhandle:
+            line = line.strip()
+            if line:
+                fields = line.split("\t")
+                # check that the protein was seen in the protein fasta file
+                protid = fields[0]
+                scaffold = fields[1]
+                if protid not in protein_headers:
+                    proteins_not_in_pep.add(protid)
+                if scaffold not in genome_headers:
+                    scaffolds_not_in_fasta.add(scaffold)
 
     # 2. Check that the proteins in column 1 were seen in the protein fasta file
     if len(proteins_not_in_pep) > 0:

@@ -13,3 +13,7 @@ matplotlib
 networkx
 biopython
 scipy
+# Optional: enables bash/zsh tab completion for `bin/odp`. The CLI imports
+# this lazily and degrades cleanly if absent, so users who install odp
+# without dev deps don't need it.
+argcomplete

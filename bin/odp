@@ -1,0 +1,542 @@
+#!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
+"""odp — orchestrator CLI for the odp pipeline.
+
+Wraps each of the Snakefiles under ``scripts/`` behind a single
+discoverable subcommand interface so users don't have to remember
+which Snakefile to invoke or how to spell snakemake's flags.
+
+Usage:
+    odp <subcommand> [options]
+
+Subcommands (each maps to a Snakefile under scripts/):
+    run                    pairwise synteny analysis (scripts/odp)
+    only-db                DB-only mode (scripts/odp_onlyDB)
+    filecheck              validate input files (scripts/odp_filechecker)
+    nway-rbh               N-way RBH (scripts/odp_nway_rbh)
+    rbh-to-alignments      build per-RBH alignments (scripts/odp_rbh_to_alignments)
+    rbh-to-hmm             build HMM models from RBHs (scripts/odp_rbh_to_hmm)
+    rbh-to-ribbon          ribbon plots (scripts/odp_rbh_to_ribbon)
+    plot-mixing            RBH mixing plots (scripts/odp_rbh_plot_mixing)
+
+Plus a few convenience commands not tied to a Snakefile:
+    init                   write a starter config.yaml in the cwd
+    validate               run filecheck against a config without snakemake
+    version                print odp + snakemake versions
+
+Run `odp <subcommand> --help` for per-subcommand flags.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Discovery: where is this odp checkout?
+# ---------------------------------------------------------------------------
+
+
+def repo_root() -> Path:
+    """Resolve the odp repo root from the location of this script.
+
+    `bin/odp` lives at <root>/bin/odp, so parent.parent gets the root.
+    """
+    return Path(__file__).resolve().parent.parent
+
+
+# Subcommand name → Snakefile basename under scripts/. Names are the
+# user-facing CLI words; the values are the file names on disk.
+SNAKEFILES = {
+    "run":               "odp",
+    "only-db":           "odp_onlyDB",
+    "filecheck":         "odp_filechecker",
+    "nway-rbh":          "odp_nway_rbh",
+    "rbh-to-alignments": "odp_rbh_to_alignments",
+    "rbh-to-hmm":        "odp_rbh_to_hmm",
+    "rbh-to-ribbon":     "odp_rbh_to_ribbon",
+    "plot-mixing":       "odp_rbh_plot_mixing",
+}
+
+
+def snakefile_for(subcommand: str) -> Path:
+    """Return absolute path to the Snakefile that backs a subcommand."""
+    return repo_root() / "scripts" / SNAKEFILES[subcommand]
+
+
+# ---------------------------------------------------------------------------
+# Cores detection
+# ---------------------------------------------------------------------------
+
+
+def available_cores() -> int:
+    """Best-effort logical core count. Falls back to 2 if probing fails."""
+    try:
+        return os.cpu_count() or 2
+    except Exception:
+        return 2
+
+
+def default_cores() -> int:
+    """Default cores for new invocations. Same as ``available_cores()``."""
+    return available_cores()
+
+
+def warn_if_over_provisioned(cores: int) -> None:
+    """If the user asks for more cores than the machine has, print a warning
+    but keep going. Snakemake itself doesn't complain about this; we just
+    surface it so a typo of ``--cores 800`` on a 16-core laptop is visible."""
+    avail = available_cores()
+    if cores > avail:
+        sys.stderr.write(
+            f"odp: warning: --cores {cores} exceeds detected logical cores "
+            f"({avail}). Snakemake will still try; expect contention.\n"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Snakemake invocation
+# ---------------------------------------------------------------------------
+
+
+def build_snakemake_cmd(
+    snakefile: Path,
+    cores: int,
+    workdir: Path | None,
+    configfile: Path | None,
+    dry_run: bool,
+    rerun_incomplete: bool,
+    printshellcmds: bool,
+    retries: int,
+    extra: list[str],
+) -> list[str]:
+    """Build the snakemake CLI argv as a list (no shell)."""
+    snakemake = shutil.which("snakemake")
+    if not snakemake:
+        raise RuntimeError(
+            "snakemake not found on PATH. Install with `pip install snakemake` "
+            "or `conda install -c bioconda snakemake`."
+        )
+
+    cmd = [snakemake, "--snakefile", str(snakefile), "--cores", str(cores)]
+    if workdir is not None:
+        cmd += ["--directory", str(workdir.resolve())]
+    if configfile is not None:
+        cmd += ["--configfile", str(configfile.resolve())]
+    if dry_run:
+        cmd += ["--dry-run"]
+    if rerun_incomplete:
+        cmd += ["--rerun-incomplete"]
+    if printshellcmds:
+        cmd += ["--printshellcmds"]
+    # `--config retries=N` overrides the Snakefile's rule-level
+    # `retries: config.get("retries", 0)`. Skipped if N == 0 (the default
+    # at both layers) to keep the snakemake invocation minimal.
+    if retries:
+        cmd += ["--config", f"retries={retries}"]
+    cmd += extra
+    return cmd
+
+
+def run_subcommand(subcommand: str, args: argparse.Namespace) -> int:
+    """Build and exec the snakemake invocation for ``subcommand``. Returns
+    the exit status."""
+    snakefile = snakefile_for(subcommand)
+    if not snakefile.is_file():
+        sys.stderr.write(
+            f"odp: Snakefile not found at {snakefile}.\n"
+            f"odp: this looks like a broken checkout.\n"
+        )
+        return 2
+
+    workdir = Path(args.workdir).resolve() if args.workdir else None
+    configfile = Path(args.config).resolve() if args.config else None
+
+    # If the user supplied --config but not --workdir, fall back to the
+    # config file's parent directory. Configs commonly contain paths
+    # relative to themselves; running snakemake from anywhere else makes
+    # zcat / seqtk / etc. fail with file-not-found in a way that's hard to
+    # diagnose. Better to default-do-what-you-mean and announce it.
+    if configfile is not None and workdir is None:
+        workdir = configfile.parent
+        if args.verbose:
+            sys.stderr.write(f"odp: auto-set --workdir to {workdir}\n")
+
+    # Warn (don't fail) if --cores exceeds the machine. Heavy snakemake
+    # invocations on shared infra sometimes deliberately oversubscribe, so
+    # cap-as-error would be too aggressive. Fires before the config check so
+    # a user with both a bad config and a wild --cores value sees both.
+    warn_if_over_provisioned(args.cores)
+
+    # Pre-flight: catch a missing config before snakemake does, so the user
+    # sees a one-line error instead of a six-frame traceback.
+    if configfile is not None and not configfile.is_file():
+        sys.stderr.write(f"odp: config file not found: {configfile}\n")
+        return 2
+    if workdir is not None and not workdir.is_dir():
+        sys.stderr.write(f"odp: workdir not found: {workdir}\n")
+        return 2
+
+    cmd = build_snakemake_cmd(
+        snakefile=snakefile,
+        cores=args.cores,
+        workdir=workdir,
+        configfile=configfile,
+        dry_run=args.dry_run,
+        rerun_incomplete=args.rerun_incomplete,
+        printshellcmds=args.printshellcmds,
+        retries=getattr(args, "retries", 0),
+        extra=args.snakemake_arg or [],
+    )
+
+    if args.verbose:
+        sys.stderr.write("odp: " + " ".join(cmd) + "\n")
+
+    # Direct passthrough — let snakemake own its stdout/stderr/return code.
+    return subprocess.call(cmd)
+
+
+# ---------------------------------------------------------------------------
+# Convenience subcommands
+# ---------------------------------------------------------------------------
+
+
+def odp_version() -> str:
+    """Resolve odp's version. Prefers `git describe` against the checkout
+    (so dev builds show e.g. ``v0.4.0-3-gabc1234``); falls back to the last
+    tag name; falls back to ``unknown``."""
+    root = repo_root()
+    try:
+        out = subprocess.check_output(
+            ["git", "describe", "--tags", "--dirty", "--always"],
+            cwd=root,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        if out:
+            return out
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return "unknown"
+
+
+def cmd_version(args: argparse.Namespace) -> int:
+    sys.stdout.write(f"odp: {odp_version()}\n")
+    sys.stdout.write(f"odp checkout: {repo_root()}\n")
+    snakemake = shutil.which("snakemake")
+    if not snakemake:
+        sys.stdout.write("snakemake: not installed\n")
+        return 0
+    try:
+        v = subprocess.check_output([snakemake, "--version"], text=True).strip()
+        sys.stdout.write(f"snakemake: {v}\n")
+    except subprocess.CalledProcessError:
+        sys.stdout.write("snakemake: probe failed\n")
+    return 0
+
+
+STARTER_CONFIG = textwrap.dedent(
+    """\
+    # odp starter config. Edit paths and species names, then run:
+    #   odp run --config config.yaml --cores 8
+    # or any other odp subcommand. See docs/README.md for the full schema.
+
+    ignore_autobreaks: True        # skip steps that find breaks in synteny blocks
+    diamond_or_blastp: "diamond"   # "diamond" or "blastp"
+    duplicate_proteins: "fail"     # "fail" (default) or "pass" to ignore duplicates
+    LG_db: ../LG_db/BCnSSimakov2022   # path to the linkage-group HMM database
+    plot_LGs: True
+    plot_sp_sp: True
+
+    species:
+      SpeciesOne:
+        proteins:    /path/to/species_one.pep
+        chrom:       /path/to/species_one.chrom
+        genome:      /path/to/species_one.fa
+        minscafsize: 100000
+      SpeciesTwo:
+        proteins:    /path/to/species_two.pep
+        chrom:       /path/to/species_two.chrom
+        genome:      /path/to/species_two.fa
+        minscafsize: 100000
+    """
+)
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    out = Path(args.output).resolve()
+    if out.exists() and not args.force:
+        sys.stderr.write(
+            f"odp init: refusing to overwrite {out} (use --force to overwrite)\n"
+        )
+        return 1
+    out.write_text(STARTER_CONFIG)
+    sys.stdout.write(f"odp init: wrote {out}\n")
+    sys.stdout.write("odp init: edit it, then run `odp run --config config.yaml`.\n")
+    return 0
+
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    """Run filecheck as a one-shot validation, no full pipeline."""
+    if not args.config:
+        # Auto-pick ./config.yaml if it exists; otherwise tell the user.
+        candidate = Path("config.yaml").resolve()
+        if candidate.is_file():
+            args.config = str(candidate)
+        else:
+            sys.stderr.write(
+                "odp validate: no --config given and no ./config.yaml found in "
+                f"{Path.cwd()}\n"
+            )
+            return 2
+    workdir = Path(args.config).resolve().parent
+    args.workdir = str(workdir)
+    args.dry_run = False
+    args.rerun_incomplete = False
+    args.printshellcmds = False
+    args.snakemake_arg = []
+    return run_subcommand("filecheck", args)
+
+
+# ---------------------------------------------------------------------------
+# argparse plumbing
+# ---------------------------------------------------------------------------
+
+
+def add_common_run_args(p: argparse.ArgumentParser) -> None:
+    """Flags shared by every Snakefile-backed subcommand."""
+    p.add_argument(
+        "--config", "-c",
+        help="path to config.yaml (default: ./config.yaml in --workdir)",
+    )
+    p.add_argument(
+        "--workdir", "-d",
+        help="directory snakemake runs in (default: current directory)",
+    )
+    p.add_argument(
+        "--cores", "-j",
+        type=int,
+        default=default_cores(),
+        help=f"number of cores (default: detected = {default_cores()})",
+    )
+    p.add_argument(
+        "--dry-run", "-n",
+        action="store_true",
+        help="show what would run without executing",
+    )
+    p.add_argument(
+        "--rerun-incomplete",
+        action="store_true",
+        default=True,
+        help="rerun jobs with incomplete output (default: on)",
+    )
+    p.add_argument(
+        "--no-rerun-incomplete",
+        dest="rerun_incomplete",
+        action="store_false",
+        help="disable the default --rerun-incomplete behaviour",
+    )
+    p.add_argument(
+        "--printshellcmds", "-p",
+        action="store_true",
+        help="print the shell commands snakemake runs",
+    )
+    p.add_argument(
+        "--retries", "-r",
+        type=int,
+        default=0,
+        help=(
+            "Number of times to retry failed jobs (default: 0). Sets "
+            "`retries` in snakemake's config dict, which the rules read "
+            "via config.get('retries', 0). Useful for HPC where transient "
+            "scheduler/IO failures benefit from a retry, but on local "
+            "runs 0 keeps the terminal quiet."
+        ),
+    )
+    p.add_argument(
+        "--snakemake-arg",
+        action="append",
+        metavar="ARG",
+        help=(
+            "extra raw flag passed to snakemake; repeat for multiple. "
+            "Use '=' form for flags whose value starts with '--', "
+            "e.g. --snakemake-arg=--quiet"
+        ),
+    )
+    p.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="echo the snakemake invocation before running it",
+    )
+
+
+# Ordering for the help text. Workflow commands first, utilities last, so a
+# new user reads top-down and gets the most common paths early.
+SUBCOMMAND_ORDER = [
+    # Pipeline:
+    "run", "only-db",
+    # RBH chain:
+    "nway-rbh", "rbh-to-alignments", "rbh-to-hmm", "rbh-to-ribbon",
+    # Plotting:
+    "plot-mixing",
+    # Utilities:
+    "filecheck", "init", "validate", "version",
+]
+
+
+def _suggest(unknown: str, valid: list[str]) -> str | None:
+    """Return the closest matching subcommand name, or None if nothing is
+    close enough. Used to print 'did you mean ...?' on typos."""
+    import difflib
+    matches = difflib.get_close_matches(unknown, valid, n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="odp",
+        description=(
+            "odp pipeline orchestrator. Wraps the Snakefiles under scripts/ "
+            "behind a single CLI."
+        ),
+        epilog=(
+            "examples:\n"
+            "  odp init                                 # write starter config.yaml\n"
+            "  odp run --config config.yaml --cores 8   # main pairwise synteny\n"
+            "  odp run -n -c config.yaml                # dry-run\n"
+            "  odp validate                             # one-shot input check\n"
+            "  odp version                              # odp + snakemake versions\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument(
+        "--version",
+        action="version",
+        version=f"odp {odp_version()}",
+    )
+
+    sub = p.add_subparsers(dest="subcommand", metavar="SUBCOMMAND")
+    sub.required = True
+
+    # Snakefile-backed subcommands
+    descriptions = {
+        "run":               "pairwise synteny analysis (the main pipeline)",
+        "only-db":           "DB-only mode (no per-species synteny)",
+        "filecheck":         "validate inputs without running the pipeline",
+        "nway-rbh":          "N-way reciprocal best hits across 3+ species",
+        "rbh-to-alignments": "build per-RBH protein alignments",
+        "rbh-to-hmm":        "build HMM models from RBHs",
+        "rbh-to-ribbon":     "ribbon plots from RBH output",
+        "plot-mixing":       "plot RBH mixing across genomes",
+    }
+    examples = {
+        "run": "odp run --config config.yaml --cores 8",
+        "only-db": "odp only-db --config config.yaml --cores 8",
+        "filecheck": "odp filecheck --config config.yaml",
+        "nway-rbh": "odp nway-rbh --config config.yaml --cores 8",
+        "rbh-to-alignments": "odp rbh-to-alignments --config config.yaml",
+        "rbh-to-hmm": "odp rbh-to-hmm --config config.yaml",
+        "rbh-to-ribbon": "odp rbh-to-ribbon --config config.yaml",
+        "plot-mixing": "odp plot-mixing --config config.yaml",
+    }
+
+    def _add_snakefile_subparser(name: str) -> None:
+        sp = sub.add_parser(
+            name,
+            help=descriptions[name],
+            description=descriptions[name],
+            epilog=f"example:\n  {examples[name]}",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        add_common_run_args(sp)
+        sp.set_defaults(handler=lambda args, _name=name: run_subcommand(_name, args))
+
+    # Convenience subcommands
+    def _add_init() -> None:
+        sp = sub.add_parser(
+            "init",
+            help="write a starter config.yaml to the current directory",
+            description="write a starter config.yaml to the current directory",
+            epilog="example:\n  odp init -o config.yaml",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        sp.add_argument("--output", "-o", default="config.yaml", help="output path")
+        sp.add_argument("--force", "-f", action="store_true", help="overwrite if exists")
+        sp.set_defaults(handler=cmd_init)
+
+    def _add_validate() -> None:
+        sp = sub.add_parser(
+            "validate",
+            help="validate a config without running the full pipeline",
+            description=(
+                "validate a config without running the full pipeline. "
+                "If --config is omitted, looks for ./config.yaml in the cwd."
+            ),
+            epilog="example:\n  odp validate --config config.yaml",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        sp.add_argument("--config", "-c", help="path to config.yaml (default: ./config.yaml)")
+        sp.add_argument("--cores", "-j", type=int, default=2, help="snakemake cores (default 2)")
+        sp.add_argument("--verbose", "-v", action="store_true")
+        sp.set_defaults(handler=cmd_validate)
+
+    def _add_version() -> None:
+        sp = sub.add_parser(
+            "version",
+            help="print odp + snakemake versions",
+            description="print odp + snakemake versions",
+        )
+        sp.set_defaults(handler=cmd_version)
+
+    # Register subcommands in the user-friendly order defined above.
+    for name in SUBCOMMAND_ORDER:
+        if name in SNAKEFILES:
+            _add_snakefile_subparser(name)
+        elif name == "init":
+            _add_init()
+        elif name == "validate":
+            _add_validate()
+        elif name == "version":
+            _add_version()
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+
+    # Shell completion via argcomplete if installed. Users opt in by adding
+    # `eval "$(register-python-argcomplete odp)"` to their shell rc. Without
+    # argcomplete this is a no-op — no extra runtime dependency.
+    try:
+        import argcomplete  # type: ignore
+        argcomplete.autocomplete(parser)
+    except ImportError:
+        pass
+
+    # Friendlier typo error: argparse's default lists every choice flat. We
+    # intercept the unknown subcommand and print a "did you mean ...?"
+    # suggestion if one is reasonably close.
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] not in {"-h", "--help", "--version"} and not argv[0].startswith("-"):
+        # All known subcommands across the parser.
+        valid = list(SNAKEFILES) + ["init", "validate", "version"]
+        if argv[0] not in valid:
+            guess = _suggest(argv[0], valid)
+            sys.stderr.write(f"odp: unknown subcommand {argv[0]!r}\n")
+            if guess:
+                sys.stderr.write(f"odp: did you mean {guess!r}?\n")
+            sys.stderr.write("odp: run `odp --help` to see the full list.\n")
+            return 2
+
+    args = parser.parse_args(argv)
+    return args.handler(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
