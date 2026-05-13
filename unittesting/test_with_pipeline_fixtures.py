@@ -286,17 +286,6 @@ def test_synteny_plot_sheet_with_user_provided_order(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason=(
-        "ribbon_plot's internal sort raises TypeError on pandas 2.x when "
-        "the gene_group column has mixed NaN + str values (a real bug "
-        "in source/odp_ribbon_plot.py; surfaces in this test because the "
-        "fixture rbh has some rows with no ALG match). Tracked for "
-        "follow-up."
-    ),
-    strict=False,
-    raises=TypeError,
-)
 def test_ribbon_plot_two_species_e2e(rp, of, rbh_with_color, analysis_chromsize, tmp_path):
     """Run the top-level ribbon_plot orchestrator with a colored rbh
     (the only kind the function accepts) and a 2-species species_order.
@@ -317,11 +306,6 @@ def test_ribbon_plot_two_species_e2e(rp, of, rbh_with_color, analysis_chromsize,
     assert out_pdf.stat().st_size > 0
 
 
-@pytest.mark.xfail(
-    reason="same gene_group NaN/str sort bug as above; tracked for follow-up",
-    strict=False,
-    raises=TypeError,
-)
 def test_ribbon_plot_with_None_gene_order(
     rp, of, rbh_with_color, analysis_chromsize, tmp_path
 ):

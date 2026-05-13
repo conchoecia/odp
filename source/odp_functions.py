@@ -375,16 +375,17 @@ def reciprocal_best_hits_blastp_or_diamond_blastp(
     # now filter
     f_seqs = new_df["qseqid"]
     r_seqs = new_df["sseqid"]
+    # Keep every row whose evalue equals the per-qseqid minimum. The
+    # vectorised `transform("min")` form is pandas-3 compatible (no
+    # groupby-apply deprecation) and avoids the column-drop ambiguity.
     fdf = f_raw.copy()
-    fdf = (fdf.groupby("qseqid")
-             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
-             .reset_index(drop=True)
-          )
+    fdf = fdf.loc[
+        fdf.groupby("qseqid")["evalue"].transform("min") == fdf["evalue"]
+    ].reset_index(drop=True)
     rdf = r_raw.copy()
-    rdf = (rdf.groupby("qseqid")
-             .apply(lambda group: group.loc[group["evalue"] == group['evalue'].min()])
-             .reset_index(drop=True)
-          )
+    rdf = rdf.loc[
+        rdf.groupby("qseqid")["evalue"].transform("min") == rdf["evalue"]
+    ].reset_index(drop=True)
 
     # only get the things that we haven't seen yet
     fdf2 = fdf.loc[~fdf["qseqid"].isin(f_seqs)]
@@ -750,12 +751,9 @@ def check_species_input_legality(fastapath, peppath, chrompath, dup_proteins_all
     # 2. Check that the proteins in column 1 were seen in the protein fasta file
     if len(proteins_not_in_pep) > 0:
         #   if there are any duplicates, print out a string of the first 3
-        proteins_not_in_pep   = list(proteins_not_in_pep)
-        dupstring = ""
-        for i in range(3):
-            dupstring += "*    - " + str(proteins_not_in_pep[i]) + "\n"
+        proteins_not_in_pep   = sorted(list(proteins_not_in_pep))
         # raise an error because the proteins should have been seen already
-        dupstring = "".join(["*    - " + str(x) + "\n" for x in sorted(proteins_not_in_pep)[:3]])
+        dupstring = "".join(["*    - " + str(x) + "\n" for x in proteins_not_in_pep[:3]])
         outmessage =  "*********************************************************************\n"
         outmessage += "* ERROR:\n"
         outmessage += "*  Some proteins in the .chrom file were not seen in the protein\n"
@@ -816,6 +814,9 @@ def check_species_input_legality(fastapath, peppath, chrompath, dup_proteins_all
         outmessage += "*   file, or if something is missing from the genome .fasta file.\n"
         outmessage += "*   Then, fix your files and re-run this pipeline.\n"
         outmessage += "*********************************************************************\n"
+        # The error message was previously built but never raised, so
+        # invalid configs slipped past undetected. Raise it now.
+        raise IOError(outmessage)
 
     # everything passed
     return True
