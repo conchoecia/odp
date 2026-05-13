@@ -355,6 +355,28 @@ def test_parse_species_count_with_og_column_mismatch(importer, tmp_path):
         importer.parse_ortholog_table(p, species_names=["only_one"])
 
 
+def test_parse_species_count_one_more_implies_og_column(importer, tmp_path):
+    """Line 300-301: cols == species + 1 → OG column inferred."""
+    p = tmp_path / "x.tsv"
+    p.write_text("OG0000001\tg1\tx1\nOG0000002\tg2\tx2\n")
+    names, df = importer.parse_ortholog_table(p, species_names=["a", "b"])
+    assert names == ["a", "b"]
+    assert df.iloc[0]["a"] == "g1"
+    assert df.iloc[0]["b"] == "x1"
+
+
+def test_parse_species_order_count_mismatch_with_og_column_forced(importer, tmp_path):
+    """Line 323-328: explicit has_orthogroup_id_column=True with wrong
+    species count is rejected by the post-OG-column check."""
+    p = tmp_path / "x.tsv"
+    p.write_text("OG0000001\tg1\tx1\tz1\n")  # 4 cols: OG + 3 species
+    with pytest.raises(ValueError, match="species columns"):
+        importer.parse_ortholog_table(
+            p, species_names=["only_one_name"],
+            has_orthogroup_id_column=True,
+        )
+
+
 def test_orthologs_to_rbh_warns_on_duplicate_bed_gene_ids(
     importer, tmp_path, capsys
 ):
