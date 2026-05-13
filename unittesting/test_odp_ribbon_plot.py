@@ -130,3 +130,53 @@ def test_plot_bezier_lines_color_alpha_attached(rp):
     # PathPatch.get_alpha() returns the supplied alpha.
     assert patch.get_alpha() == pytest.approx(0.8)
     plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# _quality_check_chromosome_list — internal sanity check
+# ---------------------------------------------------------------------------
+
+
+def test_quality_check_rejects_duplicate_chromosomes(rp):
+    """Line 40: duplicate entries in the per-species chromosome list
+    raise (catches config typos / pipeline bugs)."""
+    sp_to_chr_to_size = {"sp": {"chr1": 100, "chr2": 200}}
+    with pytest.raises(IOError, match="duplicate chromosome entries"):
+        rp._quality_check_chromosome_list(
+            "sp", ["chr1", "chr1"], sp_to_chr_to_size, {}, {"sp": 0},
+        )
+
+
+def test_quality_check_rejects_chrom_missing_from_fasta(rp):
+    """Line 44: chromosome in the order list but not in the species'
+    genome FASTA is rejected."""
+    sp_to_chr_to_size = {"sp": {"chr1": 100}}
+    with pytest.raises(IOError, match="not in the fasta file"):
+        rp._quality_check_chromosome_list(
+            "sp", ["chr1", "chr_phantom"], sp_to_chr_to_size, {}, {"sp": 0},
+        )
+
+
+def test_quality_check_filters_to_gene_order_when_provided(rp):
+    """Lines 47-49: if a per-species gene order is supplied, the output
+    is filtered to only those chromosomes that appear in it."""
+    sp_to_chr_to_size = {"sp": {"chr1": 100, "chr2": 200, "chr3": 300}}
+    # Order has only chr1 and chr3 — chr2 should be dropped from the result.
+    sp_to_gene_order = {"sp": {"chr1": 0, "chr3": 1}}
+    out = rp._quality_check_chromosome_list(
+        "sp", ["chr1", "chr2", "chr3"], sp_to_chr_to_size,
+        sp_to_gene_order, {"sp": 0},
+    )
+    assert out == ["chr1", "chr3"]
+
+
+def test_quality_check_drops_small_chromosomes(rp):
+    """Lines 51-53: with no per-species order, chromosomes smaller than
+    min size are dropped."""
+    sp_to_chr_to_size = {"sp": {"chr1": 1000, "chr_tiny": 50}}
+    out = rp._quality_check_chromosome_list(
+        "sp", ["chr1", "chr_tiny"], sp_to_chr_to_size,
+        sp_to_gene_order={},  # no per-species order
+        sp_min_chr_size={"sp": 500},
+    )
+    assert out == ["chr1"]

@@ -280,6 +280,81 @@ def test_calc_D_for_y_and_x_insufficient_args_raises(of):
         of.calc_D_for_y_and_x(df)
 
 
+def test_parse_coords_basic(of, tmp_path):
+    """parse_coords reads a space-separated genome-coords file and
+    returns (offset, scaf_to_len, lines_at, max_coord, tick_labels,
+    tick_pos, scaffold_order)."""
+    p = tmp_path / "geno.coords"
+    p.write_text(
+        "chrA 1000 1000 0\n"
+        "chrB 2000 3000 1000\n"
+        "chrC 1500 4500 3000\n"
+    )
+    config = {"xaxisspecies": {"sp": {}}}
+    out = of.parse_coords(
+        coords_file=str(p), sample="sp", xory="x", config=config,
+    )
+    offset, scaf_to_len, lines_at, max_coord, tick_labels, tick_pos, scaf_order = out
+    assert offset == {"chrA": 0, "chrB": 1000, "chrC": 3000}
+    assert scaf_to_len == {"chrA": 1000, "chrB": 2000, "chrC": 1500}
+    assert lines_at == [1000, 3000]
+    assert max_coord == 4500
+    assert tick_labels == ["chrA", "chrB", "chrC"]
+    assert scaf_order == ["chrA", "chrB", "chrC"]
+
+
+def test_parse_coords_filters_by_plotorder(of, tmp_path):
+    """When the config specifies a per-species plotorder, parse_coords
+    drops scaffolds that aren't in it (lines ~1165-1166)."""
+    p = tmp_path / "geno.coords"
+    p.write_text(
+        "chrA 1000 1000 0\n"
+        "chrB 2000 3000 1000\n"
+        "chrC 1500 4500 3000\n"
+    )
+    config = {"xaxisspecies": {"sp": {"plotorder": ["chrA", "chrC"]}}}
+    out = of.parse_coords(
+        coords_file=str(p), sample="sp", xory="x", config=config,
+    )
+    offset, scaf_to_len, _, _, tick_labels, _, _ = out
+    assert set(offset.keys()) == {"chrA", "chrC"}
+    assert tick_labels == ["chrA", "chrC"]
+
+
+def test_blast_plot_order_helper_basic(of, tmp_path):
+    """End-to-end exercise of blast_plot_order_helper (line ~1076).
+
+    Synthesizes x/y .chrom files and a 12-column blastp result file
+    matching genes across them, then verifies the function returns a
+    y-scaffold ordering as a list."""
+    xchrom = tmp_path / "x.chrom"
+    xchrom.write_text(
+        "gx1\tchrA\t+\t100\t200\n"
+        "gx2\tchrA\t+\t300\t400\n"
+        "gx3\tchrB\t-\t500\t600\n"
+    )
+    ychrom = tmp_path / "y.chrom"
+    ychrom.write_text(
+        "gy1\tscafA\t+\t100\t200\n"
+        "gy2\tscafA\t+\t300\t400\n"
+        "gy3\tscafB\t-\t500\t600\n"
+    )
+    recip = tmp_path / "x_to_y.blast"
+    recip.write_text(
+        "gx1\tgy1\t99\t100\t0\t0\t1\t100\t1\t100\t1e-50\t200\n"
+        "gx2\tgy2\t99\t100\t0\t0\t1\t100\t1\t100\t1e-50\t200\n"
+        "gx3\tgy3\t99\t100\t0\t0\t1\t100\t1\t100\t1e-50\t200\n"
+    )
+    order = of.blast_plot_order_helper(
+        coords=None, sample="x", xory="x",
+        xprottoloc=str(xchrom), yprottoloc=str(ychrom),
+        recip=str(recip), xorder=["chrA", "chrB"],
+    )
+    assert isinstance(order, list)
+    # All y-scaffolds end up in the order.
+    assert set(order) == {"scafA", "scafB"}
+
+
 def test_calc_D_for_y_and_x_single_marker_scaffold(of):
     """Edge case: a scaffold with only one marker hits neither the
     `i == 0` nor `i == len-1` branch — bar coords stay at -1."""

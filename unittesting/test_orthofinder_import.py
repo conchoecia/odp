@@ -127,6 +127,118 @@ def orthofinder_synthetic(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_discover_paths_not_a_directory_errors(ofi, tmp_path):
+    """Line 75: non-existent path / non-directory is rejected up front."""
+    f = tmp_path / "not_a_dir.txt"
+    f.write_text("hi")
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        ofi.discover_orthofinder_paths(f)
+
+
+def test_discover_paths_finds_optional_dirs(ofi, tmp_path):
+    """Lines 99, 103, 107: discover_orthofinder_paths sets the optional
+    output directory attributes when those dirs exist."""
+    root = tmp_path / "Results_X"
+    og_dir = root / "Orthogroups"
+    og_dir.mkdir(parents=True)
+    (og_dir / "Orthogroups.tsv").write_text("Orthogroup\tsp1\nOG1\tg1\n")
+    (root / "Single_Copy_Orthologue_Sequences").mkdir()
+    (root / "Phylogenetic_Hierarchical_Orthogroups").mkdir()
+    (root / "Resolved_Gene_Trees").mkdir()
+    paths = ofi.discover_orthofinder_paths(root)
+    assert paths.single_copy_sequences_dir is not None
+    assert paths.hierarchical_orthogroups_dir is not None
+    assert paths.resolved_gene_trees_dir is not None
+
+
+def test_parse_orthogroups_gzipped(ofi, tmp_path):
+    """Line 131: .gz extension triggers gzip opener."""
+    import gzip
+    p = tmp_path / "Orthogroups.tsv.gz"
+    body = "Orthogroup\tsp1\tsp2\nOG1\tg1\tx1\nOG2\tg2\tx2\n"
+    with gzip.open(p, "wt") as fh:
+        fh.write(body)
+    species, df = ofi.parse_orthogroups_tsv(p)
+    assert species == ["sp1", "sp2"]
+    assert len(df) == 2
+
+
+def test_parse_orthogroups_skips_blank_lines(ofi, tmp_path):
+    """Line 139-140: blank lines inside the file are skipped."""
+    p = tmp_path / "Orthogroups.tsv"
+    p.write_text("Orthogroup\tsp1\tsp2\n\nOG1\tg1\tx1\n\nOG2\tg2\tx2\n")
+    species, df = ofi.parse_orthogroups_tsv(p)
+    assert len(df) == 2
+
+
+def test_parse_orthogroups_header_only_raises(ofi, tmp_path):
+    """Line 142-143: only-header file has no data rows; reject."""
+    p = tmp_path / "Orthogroups.tsv"
+    p.write_text("Orthogroup\tsp1\tsp2\n")
+    with pytest.raises(ValueError, match="no data rows"):
+        ofi.parse_orthogroups_tsv(p)
+
+
+def test_parse_orthogroups_warns_on_non_orthogroup_header_col0(ofi, capsys, tmp_path):
+    """Lines 146-150: warning when first header cell isn't 'Orthogroup'."""
+    p = tmp_path / "Orthogroups.tsv"
+    p.write_text("OG_ID\tsp1\tsp2\nOG1\tg1\tx1\n")
+    ofi.parse_orthogroups_tsv(p)
+    err = capsys.readouterr().err
+    assert "expected 'Orthogroup'" in err
+
+
+def test_parse_orthogroups_no_species_columns_errors(ofi, tmp_path):
+    """Lines 152-155: header with only the OG column and no species."""
+    p = tmp_path / "Orthogroups.tsv"
+    p.write_text("Orthogroup\nOG1\n")
+    with pytest.raises(ValueError, match="no species columns"):
+        ofi.parse_orthogroups_tsv(p)
+
+
+def test_parse_orthogroups_pads_ragged_row(ofi, tmp_path):
+    """Line 159-161: row with fewer cells than the header is padded with
+    empty strings (treated as no genes for the missing species)."""
+    p = tmp_path / "Orthogroups.tsv"
+    p.write_text("Orthogroup\tsp1\tsp2\tsp3\nOG1\tg1\tx1\n")  # row missing sp3
+    species, df = ofi.parse_orthogroups_tsv(p)
+    assert species == ["sp1", "sp2", "sp3"]
+    assert df.iloc[0]["sp3"] == []
+
+
+def test_disambiguate_unknown_strategy_raises(ofi, oti, orthofinder_synthetic):
+    """Line 378-382: unknown strategy is rejected with the four-option list."""
+    fx = orthofinder_synthetic
+    species_names, og_df = ofi.parse_orthogroups_tsv(fx["og_tsv"])
+    _, multi = ofi.partition_single_vs_multi_copy(og_df, species_names)
+    coords = {
+        sp: oti.parse_coordinates(fx[f"{sp}_chrom"]) for sp in species_names
+    }
+    with pytest.raises(ValueError, match="unknown multi-copy strategy"):
+        ofi.disambiguate_multicopy(
+            multi, species_names, coords, None,
+            strategy="not-a-real-strategy",
+        )
+
+
+def test_disambiguate_synteny_without_anchor_graph_raises(
+    ofi, oti, orthofinder_synthetic
+):
+    """Line 384-388: synteny + most-common-chrom need the anchor_graph
+    arg; passing None is rejected."""
+    fx = orthofinder_synthetic
+    species_names, og_df = ofi.parse_orthogroups_tsv(fx["og_tsv"])
+    _, multi = ofi.partition_single_vs_multi_copy(og_df, species_names)
+    coords = {
+        sp: oti.parse_coordinates(fx[f"{sp}_chrom"]) for sp in species_names
+    }
+    with pytest.raises(ValueError, match="needs an anchor graph"):
+        ofi.disambiguate_multicopy(
+            multi, species_names, coords, None,
+            strategy="synteny",
+        )
+
+
 def test_discover_paths_with_results_root(ofi, orthofinder_synthetic):
     paths = ofi.discover_orthofinder_paths(orthofinder_synthetic["root"])
     assert paths.orthogroups_tsv.name == "Orthogroups.tsv"

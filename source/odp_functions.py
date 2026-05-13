@@ -936,45 +936,6 @@ def expand_avoid_matching_all_third(filestring, **kwargs):
     return [x for x in outlist]
 
 
-def generate_coord_structs_from_chrom_to_loc(chrom_file):
-    """
-    This parses a .chrom file and outputs five data structures that are easily
-     used for mapping pandas dataframes.
-    The output is a dict of dicts. Not the most intuitive format but easy for
-     mapping to column values.
-     { "prot_to_scaf":   prot_to_scaf,
-       "prot_to_strand": prot_to_strand,
-       "prot_to_start":  prot_to_start,
-       "prot_to_stop":   prot_to_stop,
-       "prot_to_middle": prot_to_middle }
-    """
-    prot_to_scaf   = {}
-    prot_to_strand = {}
-    prot_to_start  = {}
-    prot_to_stop   = {}
-    prot_to_middle = {}
-    print("chrom_file", chrom_file)
-    with open(chrom_file, "r") as f:
-       for line in f:
-           line = line.strip()
-           if line:
-               splitd = line.split()
-               prot = splitd[0]
-               # add things now
-               prot_to_scaf[prot]   = splitd[1]
-               prot_to_strand[prot] = splitd[2]
-               start = int(splitd[3])
-               prot_to_start[prot]  = start
-               stop = int(splitd[4])
-               prot_to_stop[prot]   = stop
-               stop = int(splitd[4])
-               prot_to_middle[prot] = int(start + (stop - start)/2)
-    return { "prot_to_scaf":   prot_to_scaf,
-             "prot_to_strand": prot_to_strand,
-             "prot_to_start":  prot_to_start,
-             "prot_to_stop":   prot_to_stop,
-             "prot_to_middle": prot_to_middle }
-
 def open_text_maybe_gzip(path, encoding="utf-8"):
     with open(path, "rb") as fh:
         head = fh.read(2)
@@ -1141,7 +1102,7 @@ def blast_plot_order_helper(coords, sample, xory, xprottoloc, yprottoloc, recip,
     df["ypos"] = df["ygene"].map(ycoords["prot_to_middle"])
 
     df["xscaf"] = df["xgene"].map(xcoords["prot_to_scaf"])
-    df["yscaf"] = df["ygene"].map(xcoords["prot_to_scaf"])
+    df["yscaf"] = df["ygene"].map(ycoords["prot_to_scaf"])
     df = df.dropna()
     df = df.sort_values(by=['xpos'])
     df = df.dropna()
