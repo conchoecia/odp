@@ -510,8 +510,8 @@ def check_file_exists(filepath) -> bool:
     if not os.path.isfile(filepath):
         outmessage =  "*********************************************************************\n"
         outmessage += "* ERROR:\n"
-        outmessage += "*  This file does not exist:" + filepath + "\n"
-        outmessage =  "*********************************************************************\n"
+        outmessage += "*  This file does not exist: " + str(filepath) + "\n"
+        outmessage += "*********************************************************************\n"
         raise IOError(outmessage)
     else:
         return True
