@@ -268,16 +268,110 @@ STARTER_CONFIG = textwrap.dedent(
 )
 
 
+STARTER_CONFIG_RIBBON = textwrap.dedent(
+    """\
+    # odp rbh-to-ribbon starter config. Edit paths and species names, then run:
+    #   odp rbh-to-ribbon --config config.yaml --cores 8
+    # See example_configs/CONFIG_rbh_to_ribbon.yaml for fully-commented options.
+
+    chr_sort_order: optimal-chr-or
+    plot_all: True
+    plot_unassigned_rbh: True
+
+    species_order:
+      - SpeciesOne
+      - SpeciesTwo
+      - SpeciesThree
+
+    # Either rbh_files_in_order (explicit list, N-1 files for N species) or
+    # rbh_directory (let odp scan a directory of .rbh files) — pick one.
+    rbh_files_in_order:
+      - /path/to/SpeciesOne_SpeciesTwo_xy_reciprocal_best_hits.coloredby_BCnS_LGs.plotted.rbh
+      - /path/to/SpeciesTwo_SpeciesThree_xy_reciprocal_best_hits.coloredby_BCnS_LGs.plotted.rbh
+    # rbh_directory: /path/to/odp/step2-figures/synteny_coloredby_BCnS_LGs/
+
+    # Optional per-species chromosome ordering. Same syntax as `chromorder:`
+    # in the main odp config.
+    # chromorder:
+    #   SpeciesOne:
+    #     - chr1
+    #     - chr2
+
+    # OPTIONAL — render a cladogram on the left of each panel.
+    # Newick leaf names must match species_order entries.
+    # tree:
+    #   newick: "((SpeciesOne,SpeciesTwo),SpeciesThree);"
+    #   width_in: 1.0
+    #   tip_label_map:
+    #     SpeciesOne:   "Genus species"
+    #     SpeciesTwo:   "Genus species"
+    #     SpeciesThree: "Genus species"
+    #   tip_label_fontsize: 9
+    #   tip_label_style: italic
+    #   lw: 1.5
+    #   tip_pad_axes: 0.02
+
+    # OPTIONAL — cosmetic knobs (defaults match the existing plot output).
+    # chrom_label_rotation: 0           # 0 = horizontal, 90 = vertical
+    # chrom_label_fontsize_chr: 5
+    # chrom_label_fontsize_ix:  4
+    # chrom_capstyle: round             # null | butt | round | projecting
+    # chrom_halo_pt: 0.28               # white halo half-width around chrom bars (pt)
+    # legend_style: lines               # patches (default) | lines
+    # panel_title_offset_in: 0.25
+    # panel_title_style:
+    #   fontsize: 8
+    #   color: "#555555"
+    #   italic: true
+
+    species:
+      SpeciesOne:
+        proteins:    /path/to/species_one.pep
+        chrom:       /path/to/species_one.chrom
+        genome:      /path/to/species_one.fa
+        minscafsize: 1000000
+      SpeciesTwo:
+        proteins:    /path/to/species_two.pep
+        chrom:       /path/to/species_two.chrom
+        genome:      /path/to/species_two.fa
+        minscafsize: 1000000
+      SpeciesThree:
+        proteins:    /path/to/species_three.pep
+        chrom:       /path/to/species_three.chrom
+        genome:      /path/to/species_three.fa
+        minscafsize: 1000000
+    """
+)
+
+
+_STARTER_TEMPLATES = {
+    "synteny":       STARTER_CONFIG,
+    "rbh-to-ribbon": STARTER_CONFIG_RIBBON,
+}
+
+
 def cmd_init(args: argparse.Namespace) -> int:
+    template = _STARTER_TEMPLATES.get(args.kind)
+    if template is None:
+        sys.stderr.write(
+            f"odp init: unknown kind {args.kind!r}; "
+            f"choose from {sorted(_STARTER_TEMPLATES)}\n"
+        )
+        return 2
     out = Path(args.output).resolve()
     if out.exists() and not args.force:
         sys.stderr.write(
             f"odp init: refusing to overwrite {out} (use --force to overwrite)\n"
         )
         return 1
-    out.write_text(STARTER_CONFIG)
+    out.write_text(template)
     sys.stdout.write(f"odp init: wrote {out}\n")
-    sys.stdout.write("odp init: edit it, then run `odp run --config config.yaml`.\n")
+    if args.kind == "rbh-to-ribbon":
+        sys.stdout.write("odp init: edit it, then run "
+                         "`odp rbh-to-ribbon --config config.yaml`.\n")
+    else:
+        sys.stdout.write("odp init: edit it, then run "
+                         "`odp run --config config.yaml`.\n")
     return 0
 
 
@@ -606,11 +700,22 @@ def build_parser() -> argparse.ArgumentParser:
             "init",
             help="write a starter config.yaml to the current directory",
             description="write a starter config.yaml to the current directory",
-            epilog="example:\n  odp init -o config.yaml",
+            epilog=(
+                "examples:\n"
+                "  odp init                              # main pairwise-synteny config\n"
+                "  odp init --kind rbh-to-ribbon         # ribbon-plot config\n"
+                "  odp init --kind rbh-to-ribbon -o ribbon_config.yaml"
+            ),
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
         sp.add_argument("--output", "-o", default="config.yaml", help="output path")
         sp.add_argument("--force", "-f", action="store_true", help="overwrite if exists")
+        sp.add_argument(
+            "--kind", "-k",
+            choices=sorted(_STARTER_TEMPLATES),
+            default="synteny",
+            help="which starter template to emit (default: synteny)",
+        )
         sp.set_defaults(handler=cmd_init)
 
     def _add_validate() -> None:
