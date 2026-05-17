@@ -96,9 +96,252 @@ if len(locus_labels) > 0:
 if "color_map" not in config:
     config["color_map"] = {}
 
+# ---------------------------------------------------------------------------
+# Optional cosmetic / layout config — all defaults preserve current output
+# ---------------------------------------------------------------------------
+#
+#   tree:                          # OPTIONAL — render a cladogram on the
+#                                  # left of each panel, with tips aligned
+#                                  # to the species rows.
+#     newick: "((A,B),C);"         # Newick. Leaf names must match (or be
+#                                  # mapped to) entries in species_order.
+#     width_in: 1.0                # Width of the cladogram strip in inches.
+#     tip_label_map:               # OPTIONAL — display name per leaf, e.g.
+#       A: "Genus species"         # italicised binomials.
+#     tip_label_fontsize: 9        # font size of tip labels in pt
+#     tip_label_style: "italic"    # "italic" | "normal"
+#     lw: 1.5                      # cladogram line-width in pt
+#     tip_pad_axes: 0.02           # gap between tip end and tip-label start
+#                                  # (cladogram axes units, 0–1).
+#
+#   chrom_label_rotation: 0        # degrees; 0 = horizontal (current), 90 =
+#                                  # vertical (read bottom-up).
+#   chrom_label_fontsize_chr: 5    # fontsize for chr-coord panel chrom labels
+#   chrom_label_fontsize_ix:  4    # fontsize for ix-coord panel chrom labels
+#   chrom_capstyle: null           # null = matplotlib default; "round" |
+#                                  # "butt" | "projecting".
+#   chrom_halo_pt: 0.0             # white halo half-width around chrom bars,
+#                                  # in pt (0 = no halo).
+#   legend_style: "patches"        # "patches" (current) | "lines" (vertical
+#                                  # line markers echoing the ribbon look).
+#   panel_title_offset_in: 0.25    # vertical offset of panel titles above
+#                                  # the top of each panel, in inches.
+#   panel_title_style:             # OPTIONAL — header text style.
+#     fontsize: 12
+#     color: "black"
+#     italic: false
+
+_tree_cfg = config.get("tree")
+if _tree_cfg is not None and _tree_cfg is not False:
+    if not isinstance(_tree_cfg, dict) or "newick" not in _tree_cfg:
+        sys.exit("ERROR: when set, config['tree'] must be a mapping with a "
+                 "'newick' key. See example_configs/CONFIG_rbh_to_ribbon.yaml.")
+    _tree_cfg.setdefault("width_in", 1.0)
+    _tree_cfg.setdefault("tip_label_map", {})
+    _tree_cfg.setdefault("tip_label_fontsize", 9)
+    _tree_cfg.setdefault("tip_label_style", "italic")
+    _tree_cfg.setdefault("lw", 1.5)
+    _tree_cfg.setdefault("tip_pad_axes", 0.02)
+    config["tree"] = _tree_cfg
+else:
+    config["tree"] = None
+
+config.setdefault("chrom_label_rotation", 0)
+config.setdefault("chrom_label_fontsize_chr", 5)
+config.setdefault("chrom_label_fontsize_ix",  4)
+config.setdefault("chrom_capstyle", None)
+config.setdefault("chrom_halo_pt", 0.0)
+config.setdefault("legend_style", "patches")
+config.setdefault("panel_title_offset_in", 0.25)
+config.setdefault("panel_title_style", {})
+# Optional figure dimensions in inches. Both default to None, which lets
+# subway_plot keep its existing computed defaults (figWidth=8 + tree.width_in,
+# figHeight=panelHeight*2 + bufferHeight*3). Set either or both to pin the
+# figure to a specific paper size (e.g. figure_width_in: 7.087 for a 180mm
+# single-column figure).
+config.setdefault("figure_width_in", None)
+config.setdefault("figure_height_in", None)
+# Optional panel-row spacing in inches (also drives panelHeight + figHeight
+# when figure_height_in is left unset). Defaults to 0.5 in, the current
+# upstream value.
+config.setdefault("interspecies_height_in", None)
+# Optional font overrides. Defaults None = preserve current upstream setup
+# (font.sans-serif = ["Helvetica", "Arial", "DejaVu Sans"], font.size = 10).
+# Set `font.sans_serif` to a single face name (e.g. "DejaVu Sans") or a
+# list of fallbacks to pin the rendered font, which matters when the
+# upstream's Helvetica-first list falls through to whatever the system
+# happens to have installed.
+config.setdefault("font", {})
+_fnt = config["font"] or {}
+_fnt.setdefault("family",     None)
+_fnt.setdefault("sans_serif", None)
+_fnt.setdefault("size",       None)
+config["font"] = _fnt
+_pts = config["panel_title_style"]
+_pts.setdefault("fontsize", 12)
+_pts.setdefault("color", "black")
+_pts.setdefault("italic", False)
+config["panel_title_style"] = _pts
+
+if config["legend_style"] not in ("patches", "lines"):
+    sys.exit("ERROR: legend_style must be 'patches' or 'lines'; got "
+             f"{config['legend_style']!r}.")
+if config["chrom_capstyle"] not in (None, "butt", "round", "projecting"):
+    sys.exit("ERROR: chrom_capstyle must be one of butt/round/projecting "
+             f"(or omitted); got {config['chrom_capstyle']!r}.")
+
 rule all:
     input:
         output_files
+
+# ---------------------------------------------------------------------------
+# Newick parser + cladogram renderer for the optional `tree:` block.
+# Self-contained (no dendropy / ete3 dependency).
+# ---------------------------------------------------------------------------
+
+def _parse_newick(s):
+    """
+    Parse a Newick tree string into a nested structure of leaf names and
+    internal-node tuples. Branch lengths and support values are ignored;
+    we only need topology for a cladogram. Internal node labels are
+    discarded. Returns either a string (leaf name) or a tuple of children.
+
+    Minimal implementation; accepts the dialect ((A,B),(C,D)); with
+    optional whitespace, quoted names, branch lengths (`:N`), and support
+    values. Not a full Newick parser — sufficient for cladogram input.
+    """
+    import re as _re
+    tokens = _re.findall(r"\(|\)|,|;|'[^']*'|\"[^\"]*\"|[^(),:;\s]+|:[^(),;\s]+",
+                         s.strip())
+    tokens = [t for t in tokens if not t.startswith(":")]
+    pos = [0]
+
+    def _parse_node():
+        if tokens[pos[0]] == "(":
+            pos[0] += 1
+            children = [_parse_node()]
+            while tokens[pos[0]] == ",":
+                pos[0] += 1
+                children.append(_parse_node())
+            if tokens[pos[0]] != ")":
+                raise ValueError("malformed Newick: expected ')' near token "
+                                 + repr(tokens[pos[0]:pos[0]+3]))
+            pos[0] += 1
+            # consume optional internal-node label (discard it)
+            if pos[0] < len(tokens) and tokens[pos[0]] not in (",", ")", ";"):
+                pos[0] += 1
+            return tuple(children)
+        else:
+            name = tokens[pos[0]].strip("'\"")
+            pos[0] += 1
+            return name
+
+    tree = _parse_node()
+    return tree
+
+
+def _collect_leaves(tree):
+    """Yield leaf names in the order they appear in the Newick string."""
+    if isinstance(tree, str):
+        yield tree
+    else:
+        for c in tree:
+            yield from _collect_leaves(c)
+
+
+def _draw_cladogram_left(ax, tree, species_order, tip_label_map=None,
+                        tip_label_fontsize=9, tip_label_style="italic",
+                        lw=1.5, tip_pad_axes=0.02, root_stub_axes=0.04):
+    """
+    Render a cladogram into `ax` whose y-extent should already match the
+    panel it's annotating (y range = [-0.03, N-1+0.03] flipped). Tips are
+    placed at integer y values matching `species_order` (top=0, bottom=N-1).
+
+    Branches sit in axes-x ∈ [ROOT_PAD, TIP_X]; the deepest internal node
+    (root) sits at axes-x = ROOT_PAD, and a short stub of width
+    `root_stub_axes` is drawn from the root toward x=0 so the cladogram
+    has a visible "base" line. Tip labels live in [TIP_X+pad, ~1.0].
+    """
+    if tip_label_map is None:
+        tip_label_map = {}
+
+    leaves = list(_collect_leaves(tree))
+    missing = [lf for lf in leaves if lf not in species_order]
+    if missing:
+        raise ValueError(
+            "Newick leaves not in species_order: {}".format(missing))
+    extra = [sp for sp in species_order if sp not in leaves]
+    if extra:
+        raise ValueError(
+            "species_order entries missing from Newick: {}".format(extra))
+
+    sp_y = {sp: i for i, sp in enumerate(species_order)}
+
+    # Pre-walk to assign depth (longest path from root → leaf) so deeper
+    # internal nodes sit further left (smaller axes-x) than shallower ones.
+    def _depth(node):
+        if isinstance(node, str):
+            return 0
+        return 1 + max(_depth(c) for c in node)
+
+    root_depth = _depth(tree)
+
+    # Layout: tips at TIP_X, deepest internal node (root) at ROOT_PAD.
+    # The root stub goes from ROOT_PAD back toward x=0 so the cladogram
+    # has a visible base line rather than ending abruptly at the panel
+    # boundary.
+    TIP_X    = 0.45
+    ROOT_PAD = root_stub_axes        # x of the root node; stub goes to x=0
+
+    def _node_x(d):
+        # depth d (root_depth = root, 0 = leaf) -> x position
+        if root_depth == 0:
+            return TIP_X
+        return ROOT_PAD + (TIP_X - ROOT_PAD) * (1 - d / root_depth)
+
+    def _draw(node):
+        """Returns the y-midpoint of this subtree."""
+        if isinstance(node, str):
+            return sp_y[node]
+        child_y = [_draw(c) for c in node]
+        depth_here = _depth(node)
+        x = _node_x(depth_here)
+        # horizontal segments from each child's join-x to this x
+        for c, cy in zip(node, child_y):
+            cx = TIP_X if isinstance(c, str) else _node_x(_depth(c))
+            ax.plot([cx, x], [cy, cy], 'k-',
+                    lw=lw, solid_capstyle='round')
+        # vertical segment joining the children
+        ax.plot([x, x], [min(child_y), max(child_y)], 'k-',
+                lw=lw, solid_capstyle='round')
+        return sum(child_y) / len(child_y)
+
+    y_root = _draw(tree)
+
+    # Short root stub so the cladogram has a visible base line
+    if not isinstance(tree, str) and root_stub_axes > 0:
+        ax.plot([ROOT_PAD, max(0.0, ROOT_PAD - root_stub_axes)],
+                [y_root, y_root], 'k-',
+                lw=lw, solid_capstyle='round')
+
+    # Tip labels
+    fontstyle = "italic" if str(tip_label_style).lower() == "italic" else "normal"
+    for sp in species_order:
+        label = tip_label_map.get(sp, sp)
+        ax.text(TIP_X + tip_pad_axes, sp_y[sp], label,
+                ha="left", va="center",
+                fontsize=tip_label_fontsize, style=fontstyle,
+                clip_on=False)
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(-0.03, len(species_order) - 1 + 0.03)
+    ax.set_ylim(ax.get_ylim()[::-1])
+    for side in ("top", "right", "bottom", "left"):
+        ax.spines[side].set_visible(False)
+    ax.set_xticks([]); ax.set_yticks([])
+
+
+# ---------------------------------------------------------------------------
 
 def _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size, sp_to_gene_order, sp_min_chr_size):
     """
@@ -660,9 +903,33 @@ def subway_plot(species_order, rbh_filelist,
     matplotlib.rcParams['pdf.fonttype'] = 42
     matplotlib.rcParams['ps.fonttype'] = 42
 
+    # Optional font overrides (applied AFTER the upstream defaults so they
+    # take effect). Useful when the upstream's Helvetica-first fallback list
+    # picks a system font that differs from what the user wants in a paper
+    # figure — e.g. pinning `font.sans_serif: "DejaVu Sans"` keeps
+    # rendering consistent across Linux/macOS/Windows.
+    _font_cfg = config.get("font") or {}
+    if _font_cfg.get("family") is not None:
+        matplotlib.rcParams["font.family"] = _font_cfg["family"]
+    if _font_cfg.get("sans_serif") is not None:
+        _ss = _font_cfg["sans_serif"]
+        matplotlib.rcParams["font.sans-serif"] = (
+            [_ss] if isinstance(_ss, str) else list(_ss))
+    if _font_cfg.get("size") is not None:
+        matplotlib.rcParams["font.size"] = float(_font_cfg["size"])
+
+    # ---- read optional style config ----
+    _tree_cfg            = config.get("tree")
+    _title_offset_in     = float(config.get("panel_title_offset_in", 0.25))
+    _title_style         = dict(config.get("panel_title_style", {}))
+    _title_fontsize      = _title_style.get("fontsize", 12)
+    _title_color         = _title_style.get("color", "black")
+    _title_italic        = bool(_title_style.get("italic", False))
+
     # first we need to figure out the dimensions of the figure.
     #  Just make it the number of samples times the space, plus the buffer
-    interspeciesHeight = 0.5
+    _ish_override = config.get("interspecies_height_in")
+    interspeciesHeight = float(_ish_override) if _ish_override else 0.5
     panelHeight = interspeciesHeight * len(species_order)
     panelWidth = 7.15
 
@@ -670,17 +937,49 @@ def subway_plot(species_order, rbh_filelist,
     bufferHeight = 1.5
     figHeight = (panelHeight*2) + (bufferHeight * 3)
     figWidth = 8
+    # When `tree:` is set, widen the figure on the left to host a cladogram
+    # strip whose tips align with the species rows. We keep the synteny panels
+    # at their original 7.15-in width and shift leftStart so the strip lives
+    # in the new margin.
+    _tree_width_in = float(_tree_cfg["width_in"]) if _tree_cfg else 0.0
+    figWidth += _tree_width_in
+
+    # Optional explicit figure dimensions (paper-size targeting). When set,
+    # the synteny panel width AND the vertical buffers auto-scale to keep
+    # the layout self-consistent so panels don't overflow the smaller page.
+    _fig_w_override = config.get("figure_width_in")
+    _fig_h_override = config.get("figure_height_in")
+    if _fig_w_override:
+        figWidth = float(_fig_w_override)
+    if _fig_h_override:
+        figHeight = float(_fig_h_override)
+        # Recompute bufferHeight so 2 panels + 3 buffers exactly fill the
+        # new figHeight (preserving the original ratio between panels and
+        # buffers when figure_height_in is set).
+        _bh = (figHeight - 2 * panelHeight) / 3
+        if _bh > 0:
+            bufferHeight = _bh
 
     fig = plt.figure(figsize=(figWidth,figHeight))
 
     #set the panel dimensions
-    leftStart = (figWidth - panelWidth)/1.25
+    leftStart = (8 - panelWidth)/1.25 + _tree_width_in
     bottomMargin = bufferHeight
+    # If the user pinned figure_width_in, use a tighter left margin (just
+    # past the cladogram strip) and rescale panelWidth so the panel fits
+    # with a small right margin.
+    if _fig_w_override:
+        leftStart = _tree_width_in + 0.04
+        _new_panel_w = figWidth - leftStart - 0.05
+        if _new_panel_w > 0:
+            panelWidth = _new_panel_w
     # pChr will host the chrom coordinate plots
-    plt.gcf().text((leftStart + (figWidth/2))/figWidth,
-                   (bottomMargin+panelHeight+0.25)/figHeight,
+    plt.gcf().text((leftStart + (panelWidth/2))/figWidth,
+                   (bottomMargin+panelHeight+_title_offset_in)/figHeight,
                    "p<=0.05 RBH results (Chr-coords)",
-                   fontsize = 12, ha = "center", va = "bottom")
+                   fontsize=_title_fontsize, ha="center", va="bottom",
+                   color=_title_color,
+                   style=("italic" if _title_italic else "normal"))
     pChr = plt.axes([leftStart/figWidth, #left
                    bottomMargin/figHeight,    #bottom
                    panelWidth/figWidth,   #width
@@ -691,10 +990,12 @@ def subway_plot(species_order, rbh_filelist,
                    right=False, labelright=False,
                    top=False, labeltop=False)
     # pChr will host the chrom coordinate plots
-    plt.gcf().text((leftStart + (figWidth/2))/figWidth,
-                   ((bottomMargin*2)+(panelHeight*2)+0.25)/figHeight,
+    plt.gcf().text((leftStart + (panelWidth/2))/figWidth,
+                   ((bottomMargin*2)+(panelHeight*2)+_title_offset_in)/figHeight,
                    "p<=0.05 RBH results (RBH-gene-coords)",
-                   fontsize = 12, ha = "center", va = "bottom")
+                   fontsize=_title_fontsize, ha="center", va="bottom",
+                   color=_title_color,
+                   style=("italic" if _title_italic else "normal"))
     pIx = plt.axes([leftStart/figWidth, #left
                    ((bottomMargin*2)+panelHeight)/figHeight,    #bottom
                    panelWidth/figWidth,   #width
@@ -715,6 +1016,26 @@ def subway_plot(species_order, rbh_filelist,
                         right=False, labelright=False,
                         top=False, labeltop=False)
 
+    # Cladogram strip (optional). Drawn for each synteny panel so tips
+    # align with rows in both. species_order is the row order; the Newick
+    # leaves must be the same set of species names.
+    _tree_axes = []
+    if _tree_cfg is not None:
+        _parsed_tree = _parse_newick(_tree_cfg["newick"])
+        for _pBox in (pChr.get_position(), pIx.get_position()):
+            _tax = plt.axes([0.002,
+                             _pBox.y0,
+                             (_tree_width_in / figWidth) - 0.003,
+                             _pBox.height])
+            _draw_cladogram_left(
+                _tax, _parsed_tree, list(species_order),
+                tip_label_map      = _tree_cfg["tip_label_map"],
+                tip_label_fontsize = _tree_cfg["tip_label_fontsize"],
+                tip_label_style    = _tree_cfg["tip_label_style"],
+                lw                 = _tree_cfg["lw"],
+                tip_pad_axes       = _tree_cfg["tip_pad_axes"])
+            _tree_axes.append(_tax)
+
     # Get a dataframe of group to color based on frequency
     colordf = pd.concat(rbh_df_list)[["gene_group", "color"]
                ].groupby(["gene_group", "color"]
@@ -729,13 +1050,25 @@ def subway_plot(species_order, rbh_filelist,
 
     # make a legend
     # set a legend if it is prot_to_color_mode
+    _legend_style = config.get("legend_style", "patches")
     legend_elements = []
-    for ii in range(len(color_labels)):
-        legend_elements.append(
-            patches.Patch(facecolor=color_colors[ii],
-            edgecolor='black', lw = 0,
-            label=color_labels[ii])
-           )
+    if _legend_style == "lines":
+        from matplotlib.lines import Line2D as _Line2D
+        for ii in range(len(color_labels)):
+            legend_elements.append(
+                _Line2D([0], [0],
+                        marker='|', color='none',
+                        markeredgecolor=color_colors[ii],
+                        markersize=10, markeredgewidth=2.5,
+                        label=color_labels[ii])
+            )
+    else:   # "patches" (default)
+        for ii in range(len(color_labels)):
+            legend_elements.append(
+                patches.Patch(facecolor=color_colors[ii],
+                edgecolor='black', lw=0,
+                label=color_labels[ii])
+            )
     panellg.legend(handles=legend_elements,
                    ncol = 10,
                    fontsize = 8, loc='center left')
@@ -847,20 +1180,43 @@ def subway_plot(species_order, rbh_filelist,
                          plot_unassigned_rbh)
 
     # Now we plot all the chroms
+    _chr_rot       = float(config.get("chrom_label_rotation", 0))
+    _chr_cap       = config.get("chrom_capstyle")    # may be None
+    _chr_halo_pt   = float(config.get("chrom_halo_pt", 0.0))
+    _chr_font_chr  = int(config.get("chrom_label_fontsize_chr", 5))
+    _chr_font_ix   = int(config.get("chrom_label_fontsize_ix",  4))
+    # Compose the kwarg dict for chrom-bar lines. clip_on=False always —
+    # this is a bug fix so the top and bottom species' bars aren't half-cut
+    # by the panel y-limits.
+    _line_kw = {"clip_on": False}
+    if _chr_cap is not None:
+        _line_kw["solid_capstyle"] = _chr_cap
+    if _chr_halo_pt > 0:
+        import matplotlib.patheffects as _pe
+        _line_kw["path_effects"] = [
+            _pe.withStroke(linewidth=1.0 + 2 * _chr_halo_pt, foreground='white')
+        ]
+        _line_kw["linewidth"] = 1.0     # underlying black line is 1 pt
+    _label_kw_common = {"clip_on": False}
+    if _chr_rot:
+        _label_kw_common["rotation"] = _chr_rot
+        _label_kw_common["rotation_mode"] = "anchor"
     for i in range(len(species_order)):
         sp = species_order[i]
         for index, row in sp_to_chromdf[sp].iterrows():
             # plot the line and the text
             x1 = row["chrPlotOffset"]
             x2 = row["chrPlotOffset"] + row["chrPlotPercent"]
-            pChr.plot([x1,x2],[i,i],'k-')
-            pChr.text(x1, i-0.03, row["chrom"],  ha="left", va = "bottom", fontsize =5)
+            pChr.plot([x1, x2], [i, i], 'k-', **_line_kw)
+            pChr.text(x1, i - 0.03, row["chrom"], ha="left", va="bottom",
+                      fontsize=_chr_font_chr, **_label_kw_common)
 
             # plot the line and text for the index plot
             x1 = row["ixPlotOffset"]
             x2 = row["ixPlotOffset"] + row["ixPlotPercent"]
-            pIx.plot([x1,x2],[i,i],'k-')
-            pIx.text(x1, i-0.03, row["chrom"], ha="left", va = "bottom", fontsize = 4)
+            pIx.plot([x1, x2], [i, i], 'k-', **_line_kw)
+            pIx.text(x1, i - 0.03, row["chrom"], ha="left", va="bottom",
+                     fontsize=_chr_font_ix, **_label_kw_common)
 
     # Plot loci of interest overlays
     if loci_data and color_map is not None:
@@ -938,9 +1294,13 @@ def subway_plot(species_order, rbh_filelist,
         p.set_ylim([-0.35,len(species_order)-1+0.35])  # Extra space for annotation boxes
         # flip the axes
         p.set_ylim(p.get_ylim()[::-1])
-        # set the axis labels
+        # set the axis labels — blanked when a cladogram supplies tip
+        # labels of its own; otherwise the original species_order names.
         p.set_yticks(list(range(len(species_order))))
-        p.set_yticklabels(species_order)
+        if _tree_cfg is not None:
+            p.set_yticklabels([""] * len(species_order))
+        else:
+            p.set_yticklabels(species_order)
 
     # Save figure(s) - if loci_data exists, create multi-page PDF with annotation page
     if loci_data and color_map is not None:
@@ -1002,11 +1362,13 @@ def subway_plot(species_order, rbh_filelist,
                              right=False, labelright=False,
                              top=False, labeltop=False)
             
-            plt.gcf().text((leftStart + (figWidth/2))/figWidth,
-                          (bottomMargin+panelHeight+0.25)/figHeight,
+            plt.gcf().text((leftStart + (panelWidth/2))/figWidth,
+                          (bottomMargin+panelHeight+_title_offset_in)/figHeight,
                           "Loci of Interest - Annotated (Chr-coords)",
-                          fontsize = 12, ha = "center", va = "bottom")
-            
+                          fontsize=_title_fontsize, ha="center", va="bottom",
+                          color=_title_color,
+                          style=("italic" if _title_italic else "normal"))
+
             pIx2 = plt.axes([leftStart/figWidth,
                             ((bottomMargin*2)+panelHeight)/figHeight,
                             panelWidth/figWidth,
@@ -1016,25 +1378,47 @@ def subway_plot(species_order, rbh_filelist,
                             left=False, labelleft=True,
                             right=False, labelright=False,
                             top=False, labeltop=False)
-            
-            plt.gcf().text((leftStart + (figWidth/2))/figWidth,
-                          ((bottomMargin*2)+(panelHeight*2)+0.25)/figHeight,
+
+            plt.gcf().text((leftStart + (panelWidth/2))/figWidth,
+                          ((bottomMargin*2)+(panelHeight*2)+_title_offset_in)/figHeight,
                           "Loci of Interest - Annotated (Gene-coords)",
-                          fontsize = 12, ha = "center", va = "bottom")
-            
-            # Plot chromosomes only (no bezier curves)
+                          fontsize=_title_fontsize, ha="center", va="bottom",
+                          color=_title_color,
+                          style=("italic" if _title_italic else "normal"))
+
+            # Cladogram strip on this page too (optional)
+            if _tree_cfg is not None:
+                _parsed_tree2 = _parse_newick(_tree_cfg["newick"])
+                for _pBox in (pChr2.get_position(), pIx2.get_position()):
+                    _tax2 = plt.axes([0.002,
+                                      _pBox.y0,
+                                      (_tree_width_in / figWidth) - 0.003,
+                                      _pBox.height])
+                    _draw_cladogram_left(
+                        _tax2, _parsed_tree2, list(species_order),
+                        tip_label_map      = _tree_cfg["tip_label_map"],
+                        tip_label_fontsize = _tree_cfg["tip_label_fontsize"],
+                        tip_label_style    = _tree_cfg["tip_label_style"],
+                        lw                 = _tree_cfg["lw"],
+                        tip_pad_axes       = _tree_cfg["tip_pad_axes"])
+
+            # Plot chromosomes only (no bezier curves). Same style kwargs as
+            # the main figure (clip_on=False, optional capstyle/halo) so the
+            # two pages look consistent.
+            _line_kw_loci = dict(_line_kw)
+            _line_kw_loci.setdefault("linewidth", 2)
             for i in range(len(species_order)):
                 sp = species_order[i]
                 for index, row in sp_to_chromdf[sp].iterrows():
                     # Chr coords
                     x1 = row["chrPlotOffset"]
                     x2 = row["chrPlotOffset"] + row["chrPlotPercent"]
-                    pChr2.plot([x1,x2],[i,i],'k-', linewidth=2)
-                    
+                    pChr2.plot([x1, x2], [i, i], 'k-', **_line_kw_loci)
+
                     # Gene index coords
                     x1 = row["ixPlotOffset"]
                     x2 = row["ixPlotOffset"] + row["ixPlotPercent"]
-                    pIx2.plot([x1,x2],[i,i],'k-', linewidth=2)
+                    pIx2.plot([x1, x2], [i, i], 'k-', **_line_kw_loci)
             
             # Add gene annotations with boxes and pointers
             for i in range(len(species_order)):
@@ -1097,7 +1481,11 @@ def subway_plot(species_order, rbh_filelist,
                 p.set_ylim([-0.35,len(species_order)-1+0.35])  # Extra space for annotation boxes
                 p.set_ylim(p.get_ylim()[::-1])
                 p.set_yticks(list(range(len(species_order))))
-                p.set_yticklabels(species_order)
+                # blank yticklabels when cladogram tips supply species names
+                if _tree_cfg is not None:
+                    p.set_yticklabels([""] * len(species_order))
+                else:
+                    p.set_yticklabels(species_order)
             
             # Save the annotation page (page 1)
             pdf.savefig(fig2)

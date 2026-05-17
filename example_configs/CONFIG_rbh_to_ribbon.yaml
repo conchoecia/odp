@@ -75,6 +75,52 @@ rbh_files_in_order:
 #  path to the
 rbh_directory: /path/to/odp/step2-figures/synteny_coloredby_BCnS_LGs/
 
+# -----------------------------------------------------------------------------
+# OPTIONAL — cosmetic / layout overrides. All defaults preserve the
+# existing plot output, so omitting this entire block keeps current behavior.
+# -----------------------------------------------------------------------------
+#
+# tree:
+#   # Render a cladogram on the left of each panel; tips align with the
+#   # species rows. Newick leaves must be the same set of names as
+#   # `species_order`. When set, the default y-tick species labels are
+#   # blanked because the tree's tip labels do that job.
+#   newick: "((EMU,RES),HCA);"
+#   width_in: 1.0
+#   tip_label_map:        # optional display name per leaf
+#     EMU: "Ephydatia muelleri"
+#     RES: "Rhopilema esculentum"
+#     HCA: "Hormiphora californensis"
+#   tip_label_fontsize: 9
+#   tip_label_style: "italic"   # "italic" | "normal"
+#   lw: 1.5                     # cladogram line-width in pt
+#   tip_pad_axes: 0.02          # gap between tip end and tip-label start
+#
+# chrom_label_rotation: 0          # degrees; 0 = horizontal (current), 90 =
+#                                  # vertical (read bottom-up).
+# chrom_label_fontsize_chr: 5      # fontsize for chr-coord panel chrom labels
+# chrom_label_fontsize_ix:  4      # fontsize for ix-coord panel chrom labels
+# chrom_capstyle: round            # null = matplotlib default; "round" /
+#                                  # "butt" / "projecting".
+# chrom_halo_pt: 0.28              # white halo half-width around chrom bars,
+#                                  # in pt (0 = no halo).
+# legend_style: "lines"            # "patches" (current) | "lines" (vertical
+#                                  # line markers, echoing the ribbon look).
+# panel_title_offset_in: 0.25      # vertical offset of panel titles above
+#                                  # the top of each panel, in inches.
+# panel_title_style:
+#   fontsize: 8
+#   color: "#555555"
+#   italic: true
+#
+# figure_width_in: 7.087           # pin the figure to a paper size (here:
+#                                  # 180mm single-column). When set, panel
+#                                  # width is rescaled to fit. Leave unset
+#                                  # to keep the current automatic sizing.
+# figure_height_in: 6.77           # corresponding height. Unset = auto.
+# interspecies_height_in: 0.322    # vertical spacing per species row in
+#                                  # inches (default 0.5).
+
 # - Optional: Define colors for gene name patterns in loci_of_interest
 # - Uses case-insensitive substring matching for gene names
 # - Genes matching longer keywords take precedence
