@@ -1,0 +1,88 @@
+# Example config for odp_rbh_to_polarity (single-panel mode).
+#
+# Renders a three-row "polarity-evidence sandwich" panel showing how
+# a hypothesized chromosome fusion / fission event maps across three
+# species:
+#
+#   top row     unfused-side species:  two distinct chromosomes
+#                                      carrying two ancestral linkage
+#                                      groups (ALG-A and ALG-B).
+#   middle row  outgroup species:      the two chromosomes that
+#                                      preserve ALG-A and ALG-B as
+#                                      distinct linkage groups.
+#   bottom row  fused-side species:    the single chromosome carrying
+#                                      both linkage groups.
+#
+# Each ribbon traces one gene via 3-way RBH (top <-> middle <-> bot).
+#
+# Run with:
+#   snakemake --snakefile path/to/odp/scripts/odp_rbh_to_polarity \
+#             --configfile this_file.yaml --cores 1
+
+mode: panel
+
+# Output
+output_pdf:       polarity_panel.pdf
+figure_width_in:  7.087    # 180 mm (single Nature/Science column)
+figure_height_in: 4.0
+
+# Coloring: 'bcns' | 'lg2' | 'raw'
+#   bcns - color each ribbon by the BCnS-Simakov2022 ALG of the
+#          underlying gene (looked up via the per-species HMM-RBH
+#          files produced by odp).
+#   lg2  - two-color split keyed to the top-row chromosomes
+#          (top_chrA -> red, top_chrB -> blue).
+#   raw  - single neutral color (no per-ortholog encoding).
+color_by: bcns
+
+# Required by color_by=bcns. Provided by odp's BCnSSimakov2022 LG_db.
+bcns_palette:  /path/to/odp/LG_db/BCnSSimakov2022/BCnSSimakov2022.rbh
+# Per-species BCnS HMM-RBH files (the per-species rows you got by
+# running odp with plot_LGs:True on a config including these species).
+bcns_hmm_top:  /path/to/run/step1-rbh/BCnSSimakov2022_speciesA_reciprocal_best_hits.hmm.rbh
+bcns_hmm_mid:  /path/to/run/step1-rbh/BCnSSimakov2022_speciesB_reciprocal_best_hits.hmm.rbh
+bcns_hmm_bot:  /path/to/run/step1-rbh/BCnSSimakov2022_speciesC_reciprocal_best_hits.hmm.rbh
+
+# Pairwise reciprocal-best-hit files. odp filenames are sorted
+# alphabetically by species, e.g.
+#   speciesA_speciesB_reciprocal_best_hits.rbh
+rbh_top_mid: /path/to/run/step1-rbh/speciesA_speciesB_reciprocal_best_hits.rbh
+rbh_bot_mid: /path/to/run/step1-rbh/speciesB_speciesC_reciprocal_best_hits.rbh
+
+# Top species: unfused side, two chromosomes carry ALG-A and ALG-B.
+top:
+  name:    speciesA       # must match the {name}_gene / _scaf columns in RBH
+  display: "Species A"    # italic label in the figure
+  abbrev:  Sa             # 2-3 char abbrev used inside each panel
+  chr_A:   chr1           # the chromosome carrying ALG-A
+  chr_B:   chr5           # the chromosome carrying ALG-B
+
+# Middle species: outgroup that preserves ALG-A and ALG-B as separate
+# linkage groups.
+mid:
+  name:    speciesB
+  display: "Species B"
+  abbrev:  Sb
+  chr_A:   contig_2
+  chr_B:   contig_7
+
+# Bottom species: the single chromosome carrying both ALG-A and ALG-B
+# (the fused state).
+bot:
+  name:    speciesC
+  display: "Species C"
+  abbrev:  Sc
+  chr_fused: contig_3
+
+# Optional labels used by color_by=lg2 (legend) and the top banner.
+lg_a_label: "ALG-A"
+lg_b_label: "ALG-B"
+
+# Optional layout knobs (sensible defaults for a single panel).
+# chrom_acronyms        : True  -> compress chromosome labels (OZ246644.1 -> OZ44)
+# chrom_gap_frac        : 0.04  -> horizontal gap fraction between bars
+# equal_width_chroms    : False -> if True, chrom bars share the same width
+# highlight_bottom_species : False  -> bold + deep-red prefix for bottom row
+# highlight_middle_species : False  -> bold + deep-navy prefix for middle row
+# label_fontsize        : 7   -> chrom labels and legend (>=6 for paper)
+# species_fontsize      : 10  -> per-row species abbreviation in each panel

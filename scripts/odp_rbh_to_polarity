@@ -1,0 +1,287 @@
+"""
+odp_rbh_to_polarity
+
+Renders a "polarity-evidence" sandwich panel (or a grid of panels)
+showing how a hypothesized chromosome fusion / fission event maps
+across three species, using pairwise reciprocal-best-hits (RBH) files
+produced by odp.
+
+Modes
+-----
+config["mode"]: "panel" | "grid"
+
+  "panel"  - render one 3-row panel into a single output PDF.
+             Required config keys: rbh_top_mid, rbh_bot_mid, top, mid,
+             bot (each with `name`, optionally `abbrev`, `display`,
+             plus chromosome IDs).
+  "grid"   - render a matrix of panels. Required config keys: top
+             (single species), outgroups (list, one per column),
+             bottoms (list, one per row), plus rbh_dir / bcns_hmm_dir
+             so the script can look up the pairwise RBH files.
+
+See example_configs/CONFIG_rbh_to_polarity_panel.yaml and
+example_configs/CONFIG_rbh_to_polarity_grid.yaml for layouts.
+"""
+import os
+import sys
+snakefile_path = os.path.dirname(os.path.realpath(workflow.snakefile))
+source_path = os.path.join(snakefile_path, "../source")
+sys.path.insert(1, source_path)
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.lines
+
+import odp_polarity_plot as pp
+
+
+configfile: "config.yaml"
+
+
+# ---------------------------------------------------------------------
+# Config validation
+# ---------------------------------------------------------------------
+_MODE = config.get("mode", "panel")
+if _MODE not in ("panel", "grid"):
+    sys.exit("ERROR: config['mode'] must be 'panel' or 'grid'.")
+
+config.setdefault("color_by", "bcns")
+config.setdefault("bcns_palette", None)
+config.setdefault("output_pdf", "polarity.pdf")
+config.setdefault("figure_width_in", 7.087)   # 180 mm default
+config.setdefault("figure_height_in", 4.0)
+
+
+def _sp_keys(d):
+    """Return (name, abbrev, display) for a species block in the config."""
+    return d["name"], d.get("abbrev", d["name"][:3]), \
+           d.get("display", d["name"])
+
+
+def _pairwise_rbh(rbh_dir, sp1, sp2):
+    a, b = sorted([sp1, sp2])
+    return os.path.join(rbh_dir, f"{a}_{b}_reciprocal_best_hits.rbh")
+
+
+def _bcns_hmm(bcns_dir, sp):
+    return os.path.join(bcns_dir,
+                        f"BCnSSimakov2022_{sp}_reciprocal_best_hits.hmm.rbh")
+
+
+# ---------------------------------------------------------------------
+# Single-panel rendering
+# ---------------------------------------------------------------------
+def _render_single_panel(out_pdf):
+    top, top_abbr, top_disp = _sp_keys(config["top"])
+    mid, mid_abbr, mid_disp = _sp_keys(config["mid"])
+    bot, bot_abbr, bot_disp = _sp_keys(config["bot"])
+
+    fig = plt.figure(figsize=(config["figure_width_in"],
+                              config["figure_height_in"]))
+    ax = fig.add_axes([0.10, 0.10, 0.85, 0.78])
+    stats = pp.draw_polarity_panel(
+        ax,
+        top_sp=top, top_chrA=config["top"]["chr_A"], top_chrB=config["top"]["chr_B"],
+        mid_sp=mid, mid_chrA=config["mid"]["chr_A"], mid_chrB=config["mid"]["chr_B"],
+        bot_sp=bot, bot_chr_fused=config["bot"]["chr_fused"],
+        rbh_top_mid=config["rbh_top_mid"],
+        rbh_bot_mid=config["rbh_bot_mid"],
+        color_by=config["color_by"],
+        bcns_hmm_top=config.get("bcns_hmm_top"),
+        bcns_hmm_mid=config.get("bcns_hmm_mid"),
+        bcns_hmm_bot=config.get("bcns_hmm_bot"),
+        bcns_palette=config["bcns_palette"],
+        top_abbrev=top_abbr, mid_abbrev=mid_abbr, bot_abbrev=bot_abbr,
+        chrom_acronyms=config.get("chrom_acronyms", False),
+        chrom_gap_frac=config.get("chrom_gap_frac", 0.04),
+        equal_width_chroms=config.get("equal_width_chroms", False),
+        highlight_bottom_species=config.get("highlight_bottom_species", False),
+        highlight_middle_species=config.get("highlight_middle_species", False),
+        label_fontsize=config.get("label_fontsize", 7),
+        species_fontsize=config.get("species_fontsize", 10),
+        lg_a_label=config.get("lg_a_label", "ALG-A"),
+        lg_b_label=config.get("lg_b_label", "ALG-B"),
+    )
+    fig.savefig(out_pdf, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {out_pdf}  (n_triplets={stats['n_triplets']})", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------
+# Grid rendering (rows = bottom species, cols = outgroup species,
+# single top species across the whole grid).
+# ---------------------------------------------------------------------
+def _render_grid(out_pdf):
+    top, top_abbr, top_disp = _sp_keys(config["top"])
+    outgroups = config["outgroups"]   # list of dicts
+    bottoms   = config["bottoms"]     # list of dicts
+    rbh_dir   = config["rbh_dir"]
+    bcns_dir  = config.get("bcns_hmm_dir", rbh_dir)
+
+    nrows = len(bottoms)
+    ncols = len(outgroups)
+
+    fig = plt.figure(figsize=(config["figure_width_in"],
+                              config["figure_height_in"]))
+    gs = fig.add_gridspec(nrows=nrows + 1, ncols=ncols + 1,
+                           left=config.get("grid_left", 0.02),
+                           right=config.get("grid_right", 0.995),
+                           top=config.get("grid_top", 0.945),
+                           bottom=config.get("grid_bottom", 0.06),
+                           hspace=config.get("grid_hspace", 0.05),
+                           wspace=config.get("grid_wspace", 0.20),
+                           height_ratios=[config.get("grid_header_h_ratio", 0.15)]
+                                          + [1] * nrows,
+                           width_ratios=[config.get("grid_label_w_ratio", 0.18)]
+                                         + [1] * ncols)
+
+    # Top banner
+    banner_text = config.get("top_banner_text",
+                              "Top row of every panel:")
+    fig.text(0.02, 0.990, banner_text,
+             ha="left", va="top", fontsize=8, color="0.30")
+    fig.text(0.21, 0.990, top_disp,
+             ha="left", va="top", style="italic", weight="bold", fontsize=10)
+    fig.text(0.34, 0.990,
+             f"({pp.chrom_acronym(config['top']['chr_A'])} = "
+             f"{config.get('lg_a_label', 'ALG-A')},  "
+             f"{pp.chrom_acronym(config['top']['chr_B'])} = "
+             f"{config.get('lg_b_label', 'ALG-B')})",
+             ha="left", va="top", fontsize=8, color="0.30")
+
+    # Column headers (middle species)
+    for j, og in enumerate(outgroups, start=1):
+        og_name, og_abbr, og_disp = _sp_keys(og)
+        hax = fig.add_subplot(gs[0, j])
+        hax.axis("off")
+        hax.text(0.5, 0.55, og_disp,
+                 ha="center", va="center", style="italic", weight="bold",
+                 color=pp.LABEL_COLOR_MIDDLE, fontsize=9,
+                 transform=hax.transAxes)
+        if "group_label" in og:
+            hax.text(0.5, 0.10, og["group_label"],
+                     ha="center", va="center", fontsize=7, color="0.35",
+                     transform=hax.transAxes)
+
+    # Row labels (bottom species)
+    for i, bot in enumerate(bottoms, start=1):
+        bot_name, bot_abbr, bot_disp = _sp_keys(bot)
+        rax = fig.add_subplot(gs[i, 0])
+        rax.axis("off")
+        rax.text(0.95, 0.60, bot_abbr,
+                 ha="right", va="center", style="italic", weight="bold",
+                 color=pp.LABEL_COLOR_BOTTOM, fontsize=14,
+                 transform=rax.transAxes)
+        rax.text(0.95, 0.30,
+                 f"fused chrom\n{pp.chrom_acronym(bot['chr_fused'])}",
+                 ha="right", va="center", fontsize=7, color="0.30",
+                 linespacing=1.1, transform=rax.transAxes)
+
+    # Optional section divider (e.g. metazoan / non-metazoan).
+    if "section_divider_after" in config:
+        n_left = int(config["section_divider_after"])
+        if 0 < n_left < ncols:
+            x_div = gs[0, n_left + 1].get_position(fig).x0 - 0.020
+            line = matplotlib.lines.Line2D([x_div, x_div], [0.06, 0.94],
+                                            color="0.7", lw=0.5,
+                                            transform=fig.transFigure,
+                                            figure=fig)
+            fig.lines.append(line)
+            if "section_label_left" in config:
+                fig.text(x_div - 0.10, 0.962, config["section_label_left"],
+                         ha="right", va="center", fontsize=8, color="0.25")
+            if "section_label_right" in config:
+                fig.text(x_div + 0.005, 0.962, config["section_label_right"],
+                         ha="left", va="center", fontsize=8, color="0.25")
+
+    # Panel cells
+    panel_stats = []
+    for i, bot in enumerate(bottoms, start=1):
+        bot_name, bot_abbr, bot_disp = _sp_keys(bot)
+        for j, og in enumerate(outgroups, start=1):
+            og_name, og_abbr, og_disp = _sp_keys(og)
+            ax = fig.add_subplot(gs[i, j])
+            stats = pp.draw_polarity_panel(
+                ax,
+                top_sp=top,    top_chrA=config["top"]["chr_A"],
+                               top_chrB=config["top"]["chr_B"],
+                mid_sp=og_name, mid_chrA=og["chr_A"], mid_chrB=og["chr_B"],
+                bot_sp=bot_name, bot_chr_fused=bot["chr_fused"],
+                rbh_top_mid=_pairwise_rbh(rbh_dir, top, og_name),
+                rbh_bot_mid=_pairwise_rbh(rbh_dir, bot_name, og_name),
+                color_by=config["color_by"],
+                bcns_hmm_top=_bcns_hmm(bcns_dir, top),
+                bcns_hmm_mid=_bcns_hmm(bcns_dir, og_name),
+                bcns_hmm_bot=_bcns_hmm(bcns_dir, bot_name),
+                bcns_palette=config["bcns_palette"],
+                top_abbrev=top_abbr, mid_abbrev=og_abbr, bot_abbrev=bot_abbr,
+                show_chrom_labels=True,
+                show_species_labels=True,
+                show_legend=False,
+                chrom_acronyms=True,
+                chrom_label_map=config.get("chrom_label_map"),
+                chrom_gap_frac=config.get("chrom_gap_frac", 0.15),
+                equal_width_chroms=config.get("equal_width_chroms", True),
+                highlight_bottom_species=True,
+                highlight_middle_species=True,
+                label_fontsize=6,
+                species_fontsize=6,
+                lg_a_label=config.get("lg_a_label", "ALG-A"),
+                lg_b_label=config.get("lg_b_label", "ALG-B"),
+            )
+            panel_stats.append((bot_name, og_name, stats))
+            ax.text(0.5, 0.12, f"n = {stats['n_triplets']} orthologs",
+                    ha="center", va="top", fontsize=6, color="0.25",
+                    transform=ax.transAxes)
+
+    # Shared legend at the bottom (BCnS palette).
+    if config["color_by"] == "bcns" and config.get("bcns_palette"):
+        import pandas as pd
+        import matplotlib.patches as mpatches
+        palette_df = pp.load_rbh(config["bcns_palette"])
+        alg_to_color = (palette_df[["gene_group", "color"]]
+                          .drop_duplicates().dropna()
+                          .set_index("gene_group")["color"].to_dict())
+        legend_algs = config.get("legend_algs",
+                                  ["D", "I", "F", "J1", "J2", "A1a", "A1b",
+                                   "C1", "Eb", "H", "G", "B1"])
+        legend_elems = [
+            mpatches.Patch(facecolor=alg_to_color.get(a, "#888"),
+                            edgecolor="none", label=f"BCnS-{a}")
+            for a in legend_algs
+        ]
+        legend_elems.append(
+            mpatches.Patch(facecolor=pp.FALLBACK_GREY, edgecolor="none",
+                            label="no BCnS call"))
+        lax = fig.add_axes([0.04, 0.005, 0.92, 0.025])
+        lax.axis("off")
+        lax.legend(handles=legend_elems, loc="center",
+                   ncol=min(len(legend_elems), 7),
+                   frameon=False, fontsize=7)
+
+    fig.savefig(out_pdf, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {out_pdf}", file=sys.stderr)
+    print("\n=== panel n_triplets summary ===", file=sys.stderr)
+    print(f"{'bottom':<24} {'outgroup':<24} n_triplets", file=sys.stderr)
+    for bot_name, og_name, st in panel_stats:
+        print(f"{bot_name:<24} {og_name:<24} {st['n_triplets']}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------
+# Snakemake rule
+# ---------------------------------------------------------------------
+rule all:
+    input:
+        config["output_pdf"]
+
+
+rule render:
+    output:
+        pdf = config["output_pdf"]
+    run:
+        if _MODE == "panel":
+            _render_single_panel(output.pdf)
+        else:
+            _render_grid(output.pdf)
