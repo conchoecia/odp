@@ -34,6 +34,17 @@ def cli():
     return _load_cli_module()
 
 
+@pytest.fixture
+def fake_snakemake(cli, monkeypatch):
+    """Unit tests that only inspect argv should not require snakemake installed."""
+    monkeypatch.setattr(
+        cli.shutil,
+        "which",
+        lambda name: "/usr/bin/snakemake" if name == "snakemake" else None,
+    )
+    return "/usr/bin/snakemake"
+
+
 # ---- Module-level helpers ----------------------------------------------
 
 
@@ -90,7 +101,8 @@ def test_subcommand_help_executes(cli, capsys):
 
 @pytest.mark.parametrize("subcommand", [
     "run", "only-db", "filecheck", "nway-rbh",
-    "rbh-to-alignments", "rbh-to-hmm", "rbh-to-ribbon", "plot-mixing",
+    "rbh-to-alignments", "rbh-to-hmm", "rbh-to-ribbon",
+    "rbh-to-polarity", "plot-mixing",
 ])
 def test_each_run_subcommand_parses(cli, subcommand):
     """All snakefile-backed subcommands should accept the common arg shape."""
@@ -134,7 +146,7 @@ def test_snakemake_arg_passthrough_repeatable(cli):
 # ---- build_snakemake_cmd -----------------------------------------------
 
 
-def test_build_cmd_minimal(cli):
+def test_build_cmd_minimal(cli, fake_snakemake):
     parser = cli.build_parser()
     args = parser.parse_args(["run"])
     cmd = cli.build_snakemake_cmd(
@@ -155,7 +167,7 @@ def test_build_cmd_minimal(cli):
     assert str(args.cores) in cmd
 
 
-def test_build_cmd_all_flags(cli, tmp_path):
+def test_build_cmd_all_flags(cli, tmp_path, fake_snakemake):
     cfg = tmp_path / "config.yaml"
     cfg.write_text("species: {}\n")
     cmd = cli.build_snakemake_cmd(
@@ -229,6 +241,7 @@ def test_cli_top_level_help_via_subprocess(cli):
     assert result.returncode == 0
     assert "SUBCOMMAND" in result.stdout
     assert "rbh-to-ribbon" in result.stdout
+    assert "rbh-to-polarity" in result.stdout
 
 
 def test_cli_version_via_subprocess(cli):
@@ -319,7 +332,7 @@ def test_subcommand_order_in_help(cli):
     assert help_text.index("\n    init") < help_text.index("\n    version")
 
 
-def test_validate_auto_detects_local_config(cli, tmp_path, monkeypatch):
+def test_validate_auto_detects_local_config(cli, tmp_path, monkeypatch, fake_snakemake):
     """`odp validate` with no --config should pick up ./config.yaml."""
     cfg = tmp_path / "config.yaml"
     cfg.write_text("species: {}\n")
@@ -400,7 +413,7 @@ def test_cli_has_argcomplete_marker(cli):
 # ---- Auto-workdir from config -------------------------------------------
 
 
-def test_auto_workdir_from_config(cli, tmp_path, monkeypatch):
+def test_auto_workdir_from_config(cli, tmp_path, monkeypatch, fake_snakemake):
     """If --config is given and --workdir is omitted, the CLI should run
     snakemake with --directory set to the config's parent directory.
     Configs frequently contain relative paths, so this is the
@@ -424,7 +437,7 @@ def test_auto_workdir_from_config(cli, tmp_path, monkeypatch):
     assert cmd[idx + 1] == str(tmp_path.resolve())
 
 
-def test_explicit_workdir_wins_over_auto(cli, tmp_path, monkeypatch):
+def test_explicit_workdir_wins_over_auto(cli, tmp_path, monkeypatch, fake_snakemake):
     """If --workdir is explicit, the auto-set must not clobber it."""
     cfg = tmp_path / "config.yaml"
     cfg.write_text("species: {}\n")
@@ -451,7 +464,7 @@ def test_explicit_workdir_wins_over_auto(cli, tmp_path, monkeypatch):
 # ---- --retries flag -----------------------------------------------------
 
 
-def test_retries_default_zero_no_config_kwarg(cli):
+def test_retries_default_zero_no_config_kwarg(cli, fake_snakemake):
     """With --retries 0 (the default) no '--config retries=...' is added."""
     cmd = cli.build_snakemake_cmd(
         snakefile=cli.snakefile_for("run"),
@@ -468,7 +481,7 @@ def test_retries_default_zero_no_config_kwarg(cli):
     assert "retries=" not in joined
 
 
-def test_retries_nonzero_injects_config_kwarg(cli):
+def test_retries_nonzero_injects_config_kwarg(cli, fake_snakemake):
     cmd = cli.build_snakemake_cmd(
         snakefile=cli.snakefile_for("run"),
         cores=2,
