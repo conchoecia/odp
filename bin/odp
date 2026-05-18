@@ -17,6 +17,7 @@ Subcommands (each maps to a Snakefile under scripts/):
     rbh-to-alignments      build per-RBH alignments (scripts/odp_rbh_to_alignments)
     rbh-to-hmm             build HMM models from RBHs (scripts/odp_rbh_to_hmm)
     rbh-to-ribbon          ribbon plots (scripts/odp_rbh_to_ribbon)
+    rbh-to-polarity        polarity-evidence ribbon panels (scripts/odp_rbh_to_polarity)
     plot-mixing            RBH mixing plots (scripts/odp_rbh_plot_mixing)
 
 Plus a few convenience commands not tied to a Snakefile:
@@ -60,6 +61,7 @@ SNAKEFILES = {
     "rbh-to-alignments": "odp_rbh_to_alignments",
     "rbh-to-hmm":        "odp_rbh_to_hmm",
     "rbh-to-ribbon":     "odp_rbh_to_ribbon",
+    "rbh-to-polarity":   "odp_rbh_to_polarity",
     "plot-mixing":       "odp_rbh_plot_mixing",
 }
 
@@ -620,6 +622,7 @@ SUBCOMMAND_ORDER = [
     "orthofinder-import", "orthologs-to-rbh",
     # RBH chain:
     "nway-rbh", "rbh-to-alignments", "rbh-to-hmm", "rbh-to-ribbon",
+    "rbh-to-polarity",
     # Plotting:
     "plot-mixing",
     # Utilities:
@@ -670,6 +673,7 @@ def build_parser() -> argparse.ArgumentParser:
         "rbh-to-alignments": "build per-RBH protein alignments",
         "rbh-to-hmm":        "build HMM models from RBHs",
         "rbh-to-ribbon":     "ribbon plots from RBH output",
+        "rbh-to-polarity":   "polarity-evidence ribbon panels from RBH output",
         "plot-mixing":       "plot RBH mixing across genomes",
     }
     examples = {
@@ -680,6 +684,7 @@ def build_parser() -> argparse.ArgumentParser:
         "rbh-to-alignments": "odp rbh-to-alignments --config config.yaml",
         "rbh-to-hmm": "odp rbh-to-hmm --config config.yaml",
         "rbh-to-ribbon": "odp rbh-to-ribbon --config config.yaml",
+        "rbh-to-polarity": "odp rbh-to-polarity --config config.yaml",
         "plot-mixing": "odp plot-mixing --config config.yaml",
     }
 
