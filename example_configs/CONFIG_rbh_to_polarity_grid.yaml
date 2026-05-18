@@ -1,0 +1,88 @@
+# Example config for odp_rbh_to_polarity (grid mode).
+#
+# Renders an N x M grid of polarity-evidence sandwich panels with:
+#   - one TOP species fixed across the whole grid
+#   - one OUTGROUP species per column
+#   - one FUSED-side species per row
+#
+# Each cell is rendered the same way as the single-panel mode (3-way
+# RBH, color by BCnS / lg2 / raw, etc.) but stripped down to fit a
+# small subplot. Row labels (left margin) and column headers (top
+# strip) carry the species names; per-cell labels use 2-3 char
+# abbreviations.
+
+mode: grid
+
+output_pdf:       polarity_grid.pdf
+figure_width_in:  7.087    # 180 mm
+figure_height_in: 8.5
+
+color_by:     bcns
+bcns_palette: /path/to/odp/LG_db/BCnSSimakov2022/BCnSSimakov2022.rbh
+
+# odp run directories. The script looks up per-pair RBH files via the
+# odp filename convention: {a}_{b}_reciprocal_best_hits.rbh (a, b
+# alphabetical) and the BCnS HMM-RBH files via:
+#   BCnSSimakov2022_{species}_reciprocal_best_hits.hmm.rbh
+rbh_dir:       /path/to/odp/run/step1-rbh
+bcns_hmm_dir:  /path/to/odp/run/step1-rbh
+
+# Top banner text (defaults to "Top row of every panel:" if unset).
+top_banner_text: "Top row of every panel:"
+lg_a_label:      "ALG-A"
+lg_b_label:      "ALG-B"
+
+# Top species (fixed across the whole grid).
+top:
+  name:    speciesA
+  display: "Species A"
+  abbrev:  Sa
+  chr_A:   chr1
+  chr_B:   chr5
+
+# Outgroups (one per column, left -> right).
+outgroups:
+  - name: speciesB1
+    display: "Species B1"
+    abbrev:  Sb1
+    chr_A:   contig_2
+    chr_B:   contig_7
+    group_label: "Group I"          # optional sub-header below the species name
+  - name: speciesB2
+    display: "Species B2"
+    abbrev:  Sb2
+    chr_A:   scaffold_4
+    chr_B:   scaffold_9
+    group_label: "Group II"
+
+# Fused-side species (one per row, top -> bottom).
+bottoms:
+  - name: speciesC1
+    display: "Species C1"
+    abbrev:  Sc1
+    chr_fused: contig_3
+  - name: speciesC2
+    display: "Species C2"
+    abbrev:  Sc2
+    chr_fused: scaffold_8
+
+# Optional: a vertical divider between groups of columns. Set to the
+# 1-based count of outgroup columns to the LEFT of the divider.
+# (Unset or 0 = no divider.)
+# section_divider_after: 1
+# section_label_left:  "Group I outgroups"
+# section_label_right: "Group II outgroups"
+
+# Optional override of the BCnS-ALGs shown in the shared legend.
+# Defaults to the union most commonly seen in metazoan data.
+# legend_algs: ["D", "I", "F", "J1", "J2", "A1a", "A1b", "C1", "Eb", "H", "G", "B1"]
+
+# Optional gridspec layout knobs.
+# grid_left:           0.02
+# grid_right:          0.995
+# grid_top:            0.945
+# grid_bottom:         0.06
+# grid_hspace:         0.05
+# grid_wspace:         0.20
+# grid_header_h_ratio: 0.15
+# grid_label_w_ratio:  0.18
