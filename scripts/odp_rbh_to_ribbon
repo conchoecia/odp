@@ -251,11 +251,14 @@ def _collect_leaves(tree):
 
 def _draw_cladogram_left(ax, tree, species_order, tip_label_map=None,
                         tip_label_fontsize=9, tip_label_style="italic",
-                        lw=1.5, tip_pad_axes=0.02, root_stub_axes=0.04):
+                        lw=1.5, tip_pad_axes=0.02, root_stub_axes=0.04,
+                        y_pad=0.03):
     """
     Render a cladogram into `ax` whose y-extent should already match the
-    panel it's annotating (y range = [-0.03, N-1+0.03] flipped). Tips are
-    placed at integer y values matching `species_order` (top=0, bottom=N-1).
+    panel it's annotating (y range = [-y_pad, N-1+y_pad] flipped). Tips
+    are placed at integer y values matching `species_order` (top=0,
+    bottom=N-1). `y_pad` must match the synteny panel's vertical
+    padding so tips line up with chromosome rows.
 
     Branches sit in axes-x ∈ [ROOT_PAD, TIP_X]; the deepest internal node
     (root) sits at axes-x = ROOT_PAD, and a short stub of width
@@ -334,7 +337,7 @@ def _draw_cladogram_left(ax, tree, species_order, tip_label_map=None,
                 clip_on=False)
 
     ax.set_xlim(0, 1)
-    ax.set_ylim(-0.03, len(species_order) - 1 + 0.03)
+    ax.set_ylim(-y_pad, len(species_order) - 1 + y_pad)
     ax.set_ylim(ax.get_ylim()[::-1])
     for side in ("top", "right", "bottom", "left"):
         ax.spines[side].set_visible(False)
@@ -935,7 +938,17 @@ def subway_plot(species_order, rbh_filelist,
 
     #           two panels        top, bottom, middle
     bufferHeight = 1.5
-    figHeight = (panelHeight*2) + (bufferHeight * 3)
+
+    # Optional: render only one of the two panels. Default preserves the
+    # original two-panel behavior.
+    show_chr_coords  = bool(config.get("show_chr_coords",  True))
+    show_gene_coords = bool(config.get("show_gene_coords", True))
+    if not (show_chr_coords or show_gene_coords):
+        sys.exit("ERROR: at least one of show_chr_coords / show_gene_coords "
+                 "must be True.")
+    n_panels = int(show_chr_coords) + int(show_gene_coords)
+
+    figHeight = (panelHeight * n_panels) + (bufferHeight * (n_panels + 1))
     figWidth = 8
     # When `tree:` is set, widen the figure on the left to host a cladogram
     # strip whose tips align with the species rows. We keep the synteny panels
@@ -953,10 +966,10 @@ def subway_plot(species_order, rbh_filelist,
         figWidth = float(_fig_w_override)
     if _fig_h_override:
         figHeight = float(_fig_h_override)
-        # Recompute bufferHeight so 2 panels + 3 buffers exactly fill the
-        # new figHeight (preserving the original ratio between panels and
-        # buffers when figure_height_in is set).
-        _bh = (figHeight - 2 * panelHeight) / 3
+        # Recompute bufferHeight so n_panels panels + (n_panels+1) buffers
+        # exactly fill the new figHeight (preserving the original ratio
+        # between panels and buffers when figure_height_in is set).
+        _bh = (figHeight - n_panels * panelHeight) / (n_panels + 1)
         if _bh > 0:
             bufferHeight = _bh
 
@@ -973,38 +986,47 @@ def subway_plot(species_order, rbh_filelist,
         _new_panel_w = figWidth - leftStart - 0.05
         if _new_panel_w > 0:
             panelWidth = _new_panel_w
-    # pChr will host the chrom coordinate plots
-    plt.gcf().text((leftStart + (panelWidth/2))/figWidth,
-                   (bottomMargin+panelHeight+_title_offset_in)/figHeight,
-                   "p<=0.05 RBH results (Chr-coords)",
-                   fontsize=_title_fontsize, ha="center", va="bottom",
-                   color=_title_color,
-                   style=("italic" if _title_italic else "normal"))
-    pChr = plt.axes([leftStart/figWidth, #left
-                   bottomMargin/figHeight,    #bottom
-                   panelWidth/figWidth,   #width
-                   panelHeight/figHeight])     #height
-    pChr.tick_params(axis='both',which='both',
-                   bottom=False, labelbottom=False,
-                   left=False, labelleft=True,
-                   right=False, labelright=False,
-                   top=False, labeltop=False)
-    # pChr will host the chrom coordinate plots
-    plt.gcf().text((leftStart + (panelWidth/2))/figWidth,
-                   ((bottomMargin*2)+(panelHeight*2)+_title_offset_in)/figHeight,
-                   "p<=0.05 RBH results (RBH-gene-coords)",
-                   fontsize=_title_fontsize, ha="center", va="bottom",
-                   color=_title_color,
-                   style=("italic" if _title_italic else "normal"))
-    pIx = plt.axes([leftStart/figWidth, #left
-                   ((bottomMargin*2)+panelHeight)/figHeight,    #bottom
-                   panelWidth/figWidth,   #width
-                   panelHeight/figHeight])     #height
-    pIx.tick_params(axis='both',which='both',
-                   bottom=False, labelbottom=False,
-                   left=False, labelleft=True,
-                   right=False, labelright=False,
-                   top=False, labeltop=False)
+    # pChr hosts the chrom-coord plot; only built when show_chr_coords.
+    pChr = None
+    if show_chr_coords:
+        plt.gcf().text((leftStart + (panelWidth/2))/figWidth,
+                       (bottomMargin+panelHeight+_title_offset_in)/figHeight,
+                       "p<=0.05 RBH results (Chr-coords)",
+                       fontsize=_title_fontsize, ha="center", va="bottom",
+                       color=_title_color,
+                       style=("italic" if _title_italic else "normal"))
+        pChr = plt.axes([leftStart/figWidth, #left
+                       bottomMargin/figHeight,    #bottom
+                       panelWidth/figWidth,   #width
+                       panelHeight/figHeight])     #height
+        pChr.tick_params(axis='both',which='both',
+                       bottom=False, labelbottom=False,
+                       left=False, labelleft=True,
+                       right=False, labelright=False,
+                       top=False, labeltop=False)
+    # pIx hosts the gene-coord plot; positioned above pChr when both
+    # panels are present, otherwise it occupies the bottom slot.
+    pIx = None
+    if show_gene_coords:
+        pIx_bottom = ((bottomMargin*2)+panelHeight) if show_chr_coords else bottomMargin
+        pIx_title_y = (((bottomMargin*2)+(panelHeight*2)+_title_offset_in)
+                       if show_chr_coords
+                       else (bottomMargin+panelHeight+_title_offset_in))
+        plt.gcf().text((leftStart + (panelWidth/2))/figWidth,
+                       pIx_title_y/figHeight,
+                       "p<=0.05 RBH results (RBH-gene-coords)",
+                       fontsize=_title_fontsize, ha="center", va="bottom",
+                       color=_title_color,
+                       style=("italic" if _title_italic else "normal"))
+        pIx = plt.axes([leftStart/figWidth, #left
+                       pIx_bottom/figHeight,    #bottom
+                       panelWidth/figWidth,   #width
+                       panelHeight/figHeight])     #height
+        pIx.tick_params(axis='both',which='both',
+                       bottom=False, labelbottom=False,
+                       left=False, labelleft=True,
+                       right=False, labelright=False,
+                       top=False, labeltop=False)
     # make a panel for the legend, too
     panellg = plt.axes([ 0/figWidth, #left
                          0/figHeight,    #bottom
@@ -1022,18 +1044,29 @@ def subway_plot(species_order, rbh_filelist,
     _tree_axes = []
     if _tree_cfg is not None:
         _parsed_tree = _parse_newick(_tree_cfg["newick"])
-        for _pBox in (pChr.get_position(), pIx.get_position()):
+        # Pair each tree axes with its panel via sharey so the cladogram's
+        # y-mapping locks to the panel's at render time. Without this, the
+        # panel's final ylim (set later, with annotation-box padding) won't
+        # propagate to the cladogram, and tips drift out of row alignment.
+        _tree_panel_pairs = [p for p in (pChr, pIx) if p is not None]
+        for _panel in _tree_panel_pairs:
+            _pBox = _panel.get_position()
             _tax = plt.axes([0.002,
                              _pBox.y0,
                              (_tree_width_in / figWidth) - 0.003,
-                             _pBox.height])
+                             _pBox.height],
+                            sharey=_panel)
+            # y_pad MUST match the synteny panel's ylim padding (set at
+            # the "Extra space for annotation boxes" block below) so tips
+            # line up with chromosome rows.
             _draw_cladogram_left(
                 _tax, _parsed_tree, list(species_order),
                 tip_label_map      = _tree_cfg["tip_label_map"],
                 tip_label_fontsize = _tree_cfg["tip_label_fontsize"],
                 tip_label_style    = _tree_cfg["tip_label_style"],
                 lw                 = _tree_cfg["lw"],
-                tip_pad_axes       = _tree_cfg["tip_pad_axes"])
+                tip_pad_axes       = _tree_cfg["tip_pad_axes"],
+                y_pad              = 0.35)
             _tree_axes.append(_tax)
 
     # Get a dataframe of group to color based on frequency
@@ -1069,9 +1102,12 @@ def subway_plot(species_order, rbh_filelist,
                 edgecolor='black', lw=0,
                 label=color_labels[ii])
             )
+    _lg_ncol = int(config.get("legend_ncol", 10))
+    _lg_fontsize = int(config.get("legend_fontsize", 8))
+    _lg_loc = config.get("legend_loc", "center left")
     panellg.legend(handles=legend_elements,
-                   ncol = 10,
-                   fontsize = 8, loc='center left')
+                   ncol = _lg_ncol,
+                   fontsize = _lg_fontsize, loc=_lg_loc)
 
     # plot all the lines
     for i in range(len(species_order)-1):
@@ -1163,21 +1199,23 @@ def subway_plot(species_order, rbh_filelist,
         tr = tr.sort_values(by=["bottomChr_finalOffset"]).reset_index(drop=True)
 
         # plot the indices
-        pIx = plot_bezier_lines(pIx,
-                         tr["topIx_finalOffset"],
-                         tr["bottomIx_finalOffset"],
-                         tr["color"],
-                         tr["alpha"],
-                         i, i+1,
-                         plot_unassigned_rbh)
+        if pIx is not None:
+            pIx = plot_bezier_lines(pIx,
+                             tr["topIx_finalOffset"],
+                             tr["bottomIx_finalOffset"],
+                             tr["color"],
+                             tr["alpha"],
+                             i, i+1,
+                             plot_unassigned_rbh)
 
-        pChr = plot_bezier_lines(pChr,
-                         tr["topChr_finalOffset"],
-                         tr["bottomChr_finalOffset"],
-                         tr["color"],
-                         tr["alpha"],
-                         i, i+1,
-                         plot_unassigned_rbh)
+        if pChr is not None:
+            pChr = plot_bezier_lines(pChr,
+                             tr["topChr_finalOffset"],
+                             tr["bottomChr_finalOffset"],
+                             tr["color"],
+                             tr["alpha"],
+                             i, i+1,
+                             plot_unassigned_rbh)
 
     # Now we plot all the chroms
     _chr_rot       = float(config.get("chrom_label_rotation", 0))
@@ -1204,19 +1242,21 @@ def subway_plot(species_order, rbh_filelist,
     for i in range(len(species_order)):
         sp = species_order[i]
         for index, row in sp_to_chromdf[sp].iterrows():
-            # plot the line and the text
-            x1 = row["chrPlotOffset"]
-            x2 = row["chrPlotOffset"] + row["chrPlotPercent"]
-            pChr.plot([x1, x2], [i, i], 'k-', **_line_kw)
-            pChr.text(x1, i - 0.03, row["chrom"], ha="left", va="bottom",
-                      fontsize=_chr_font_chr, **_label_kw_common)
+            if pChr is not None:
+                # plot the line and the text
+                x1 = row["chrPlotOffset"]
+                x2 = row["chrPlotOffset"] + row["chrPlotPercent"]
+                pChr.plot([x1, x2], [i, i], 'k-', **_line_kw)
+                pChr.text(x1, i - 0.03, row["chrom"], ha="left", va="bottom",
+                          fontsize=_chr_font_chr, **_label_kw_common)
 
-            # plot the line and text for the index plot
-            x1 = row["ixPlotOffset"]
-            x2 = row["ixPlotOffset"] + row["ixPlotPercent"]
-            pIx.plot([x1, x2], [i, i], 'k-', **_line_kw)
-            pIx.text(x1, i - 0.03, row["chrom"], ha="left", va="bottom",
-                     fontsize=_chr_font_ix, **_label_kw_common)
+            if pIx is not None:
+                # plot the line and text for the index plot
+                x1 = row["ixPlotOffset"]
+                x2 = row["ixPlotOffset"] + row["ixPlotPercent"]
+                pIx.plot([x1, x2], [i, i], 'k-', **_line_kw)
+                pIx.text(x1, i - 0.03, row["chrom"], ha="left", va="bottom",
+                         fontsize=_chr_font_ix, **_label_kw_common)
 
     # Plot loci of interest overlays
     if loci_data and color_map is not None:
@@ -1285,7 +1325,7 @@ def subway_plot(species_order, rbh_filelist,
                    fontsize=6, title='Loci of Interest', title_fontsize=7, frameon=True)
 
     # flip the y axes
-    for p in [pChr, pIx]:
+    for p in [p for p in (pChr, pIx) if p is not None]:
         # remove some spines
         for side in ["top", "right", "bottom", "left"]:
             p.spines[side].set_visible(False)
@@ -1400,7 +1440,8 @@ def subway_plot(species_order, rbh_filelist,
                         tip_label_fontsize = _tree_cfg["tip_label_fontsize"],
                         tip_label_style    = _tree_cfg["tip_label_style"],
                         lw                 = _tree_cfg["lw"],
-                        tip_pad_axes       = _tree_cfg["tip_pad_axes"])
+                        tip_pad_axes       = _tree_cfg["tip_pad_axes"],
+                        y_pad              = 0.35)
 
             # Plot chromosomes only (no bezier curves). Same style kwargs as
             # the main figure (clip_on=False, optional capstyle/halo) so the
@@ -1492,7 +1533,7 @@ def subway_plot(species_order, rbh_filelist,
             plt.close(fig2)
             
             # Now apply the same x-limits to the main ribbon plot and save as page 2
-            for p in [pChr, pIx]:
+            for p in [p for p in (pChr, pIx) if p is not None]:
                 p.set_xlim([xlim_min, xlim_max])
             
             # Save the main ribbon plot as page 2
