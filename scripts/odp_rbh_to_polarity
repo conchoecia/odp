@@ -136,7 +136,10 @@ def _render_grid(out_pdf):
                            width_ratios=[config.get("grid_label_w_ratio", 0.18)]
                                          + [1] * ncols)
 
-    # Top banner
+    # Top banner. Honors chrom_label_map for the chromosome acronyms.
+    _label_map = config.get("chrom_label_map") or {}
+    def _chr_label(c):
+        return _label_map.get(c, pp.chrom_acronym(c))
     banner_text = config.get("top_banner_text",
                               "Top row of every panel:")
     fig.text(0.02, 0.990, banner_text,
@@ -144,9 +147,9 @@ def _render_grid(out_pdf):
     fig.text(0.21, 0.990, top_disp,
              ha="left", va="top", style="italic", weight="bold", fontsize=10)
     fig.text(0.34, 0.990,
-             f"({pp.chrom_acronym(config['top']['chr_A'])} = "
+             f"({_chr_label(config['top']['chr_A'])} = "
              f"{config.get('lg_a_label', 'ALG-A')},  "
-             f"{pp.chrom_acronym(config['top']['chr_B'])} = "
+             f"{_chr_label(config['top']['chr_B'])} = "
              f"{config.get('lg_b_label', 'ALG-B')})",
              ha="left", va="top", fontsize=8, color="0.30")
 

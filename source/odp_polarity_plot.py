@@ -81,8 +81,11 @@ def chrom_acronym(chrom: str) -> str:
         (r"^NC_\d+(\d{2})$",       "NC{0}"),
         (r"^OZ\d+(\d{2})$",        "OZ{0}"),
         (r"^CM\d+(\d{2})$",        "CM{0}"),
+        # Generic "*_chrN" / "*_chromN" — picks up haplotype-resolved
+        # assemblies like eupHapAv0.3_chr1, Foo_chr14, asm_chrom5, etc.
+        (r"_chr(?:om)?(\d+)$",     "chr{0}"),
     ):
-        m = re.match(pat, s)
+        m = re.search(pat, s) if pat.startswith("_") else re.match(pat, s)
         if m:
             return fmt.format(m.group(1))
     return s
