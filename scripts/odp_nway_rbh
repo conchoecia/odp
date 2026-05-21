@@ -19,6 +19,7 @@ Step 4: Convert the filtered groupby file back to a rbh file.
 
 import copy
 import ast
+import re
 from itertools import groupby
 from itertools import combinations
 from itertools import permutations
@@ -681,8 +682,11 @@ def parse_pd_list_or_string(pd_list, rowcount):
     """
     templist = []
     if type(pd_list) == str:
+        # Map whole-token nan/NaN (not valid Python literals) to None so
+        # ast.literal_eval can parse the list. Match only whole tokens so
+        # chromosome names that contain "nan" survive (e.g. "unanchor1"). #76
         for entry in ["nan", "NaN"]:
-            pd_list = pd_list.replace(entry, "None")
+            pd_list = re.sub(r"\b" + entry + r"\b", "None", pd_list)
         if '[' in pd_list:
             # the thing is a list, parse it as a list
             return ast.literal_eval(pd_list)
