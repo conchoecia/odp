@@ -49,6 +49,17 @@ chromosome_order:
       - chrB
 
 
+# Optional. Sets the colors of the linkage groups in the ribbon diagram.
+#  color_palette selects a curated, repeatable palette. Valid values:
+#    mypals25   - 25-color qualitative palette (default)
+#    tableau20  - the Tableau 20 palette
+color_palette: "mypals25"
+
+# Optional. If True, linkage group colors are generated randomly instead of
+#  being drawn from color_palette. Default is False.
+random_colors: False
+
+
 num_permutations: 1000000
 
 species:
