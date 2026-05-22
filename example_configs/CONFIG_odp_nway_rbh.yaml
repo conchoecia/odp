@@ -21,16 +21,26 @@
 nways: 3                 # This number should be the number of species that will be in each combination. Should match the number in analyses below.
 search_method: "diamond" # this must be diamond or blastp
 duplicate_proteins: "fail"    # currently only "fail" or "pass". Fail doesn't allow duplicate names or seqs
-# These are all of the analyses that you would like to perform.
-#  The things in quotes here are the 4-way comparisons that you would like to perform
-#  We require these to be explicitely specified in this program because of the higher compute
-#   time of each analysis.
-# Put them in the order that you want them to be plotted in the final ribbon diagram.
+# analyses
+# --------
+# Each list below is one n-way comparison. An entry must contain exactly
+#  `nways` species, and every species named must be defined in the `species`
+#  block at the bottom of this file. Entries are listed explicitly because
+#  each one is computationally expensive.
+#
+# Every analysis listed here automatically produces one ribbon diagram; there
+#  is no separate on/off switch for plotting. The diagram is written to:
+#    odp_nway_rbh/step4-ribbon_diagram/<species sorted, joined by "_">.ribbon.pdf
+#  e.g. the first entry below produces SP1_SP2_SP3.ribbon.pdf
+#
+# The order you write the species in sets their top-to-bottom order in that
+#  analysis's ribbon diagram (the file name itself always uses sorted order).
+# To skip an analysis entirely (both its computation and its diagram), comment
+#  the line out.
 analyses:
   - ["SP1", "SP2", "SP3"]
   - ["SP2", "SP3", "SP4"]
-  # You can comment out analyses that you want to mark down, but not complete, or if you need to rerun the pipeline
-  #- ["SP1", "SP2", "SP4"]
+  #- ["SP1", "SP2", "SP4"]   # commented-out entries are skipped entirely
 
 # This is an optional field that allows you to specify the order of the chromosomes for the final ribbon diagram.
 # It does this on a per-analysis basis, so there are opportunities to have different chromosome orders for different analyses.
