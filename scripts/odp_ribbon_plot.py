@@ -11,6 +11,7 @@ These functions can be called by the other
 import odp_plotting_functions as odp_plot
 
 # Other standard python libraries
+import bisect
 import logging
 
 # non-standard dependencies
@@ -22,6 +23,135 @@ import matplotlib.patches as patches
 import pandas as pd
 
 import sys
+
+
+def _count_inversions(seq):
+    """Number of pairs (i,j) with i<j and seq[i]>seq[j]. O(n log n) via
+    bisect into a sorted side buffer. Used to score ribbon crossings: lay
+    out line endpoints sorted by the top species' x, then count inversions
+    in the bottom species' x — each inversion is one crossing of bezier
+    paths in plot_bezier_lines (paths are monotonic in y, so two paths
+    cross iff their endpoint orderings flip)."""
+    side = []
+    inv = 0
+    for x in reversed(list(seq)):
+        i = bisect.bisect_left(side, x)
+        inv += i
+        bisect.insort(side, x)
+    return inv
+
+
+def _optimize_chrom_flips_top_down(species_order, rbh_df_list,
+                                   sp_pair_to_rbh_df_list_index,
+                                   sp_to_chromorder, sp_to_genesdfs,
+                                   max_passes=8, verbose=False):
+    """Decide, for every scaffold of every species, whether to plot it in the
+    fasta-forward direction or reversed, so that the total number of
+    ribbon-line crossings between each adjacent pair of species is
+    minimized. Greedy cascade top-down: the top species is fixed
+    forward; for each species below, the species above is already pinned
+    and only this species' flips are optimized.
+
+    Returns a dict sp -> {scaf: bool}, True means "reverse this scaffold
+    relative to the assembly fasta".
+
+    Two-stage optimization per cascade step:
+      1. Independent per-scaffold seed: for each bottom-side scaffold,
+         compare crossings inside that scaffold (lines on the same B)
+         with and without flipping; take the cheaper. Cheap, O(L log L).
+      2. Iterative greedy global refinement: try flipping each scaffold
+         in turn; keep it flipped if the total crossing count drops.
+         Repeats until a full pass makes no improvement.
+
+    Inter-scaffold crossings are dominated by chromosome *order*, not
+    rotation, so the greedy global pass usually converges in 1–3 sweeps.
+    """
+    sp_to_flip = {sp: {scaf: False for scaf in sp_to_chromorder[sp]}
+                  for sp in species_order}
+
+    for i in range(1, len(species_order)):
+        topsp = species_order[i - 1]
+        botsp = species_order[i]
+        top_scaf_col = "{}_scaf".format(topsp)
+        bot_scaf_col = "{}_scaf".format(botsp)
+        top_gene_col = "{}_gene".format(topsp)
+        bot_gene_col = "{}_gene".format(botsp)
+        top_order = sp_to_chromorder[topsp]
+        bot_order = sp_to_chromorder[botsp]
+
+        lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([topsp, botsp]))]
+        df = rbh_df_list[lookup]
+        mask = df[top_scaf_col].isin(top_order) & df[bot_scaf_col].isin(bot_order)
+        df = df.loc[mask, [top_scaf_col, bot_scaf_col, top_gene_col, bot_gene_col]].copy()
+
+        top_gene_to_rank = dict(zip(sp_to_genesdfs[topsp][top_gene_col],
+                                    sp_to_genesdfs[topsp]["{}_chromIx".format(topsp)]))
+        bot_gene_to_rank = dict(zip(sp_to_genesdfs[botsp][bot_gene_col],
+                                    sp_to_genesdfs[botsp]["{}_chromIx".format(botsp)]))
+        top_scaf_size = sp_to_genesdfs[topsp].groupby(top_scaf_col).size().to_dict()
+        bot_scaf_size = sp_to_genesdfs[botsp].groupby(bot_scaf_col).size().to_dict()
+
+        df["_top_rank"] = df[top_gene_col].map(top_gene_to_rank)
+        df["_bot_rank"] = df[bot_gene_col].map(bot_gene_to_rank)
+        df = df.dropna(subset=["_top_rank", "_bot_rank"]).reset_index(drop=True)
+        if df.empty:
+            continue
+        df["_top_sz"]  = df[top_scaf_col].map(top_scaf_size).astype(float)
+        df["_bot_sz"]  = df[bot_scaf_col].map(bot_scaf_size).astype(float)
+        df["_top_ord"] = df[top_scaf_col].map(top_order).astype(float)
+        df["_bot_ord"] = df[bot_scaf_col].map(bot_order).astype(float)
+
+        top_flip = sp_to_flip[topsp]
+        top_flipped_mask = df[top_scaf_col].map(lambda s: top_flip.get(s, False))
+        df["_top_eff"] = df["_top_rank"].where(~top_flipped_mask,
+                                               df["_top_sz"] - 1 - df["_top_rank"])
+        df["_top_pos"] = df["_top_ord"] + df["_top_eff"] / df["_top_sz"]
+        df = df.sort_values("_top_pos", kind="mergesort").reset_index(drop=True)
+
+        bot_scaf = df[bot_scaf_col].to_numpy()
+        bot_rank = df["_bot_rank"].to_numpy()
+        bot_sz   = df["_bot_sz"].to_numpy()
+        bot_ord  = df["_bot_ord"].to_numpy()
+
+        flips = dict(sp_to_flip[botsp])
+
+        def bot_positions(flips_dict):
+            flipped = pd.Series(bot_scaf).map(lambda s: flips_dict.get(s, False)).to_numpy()
+            eff = bot_rank.copy()
+            eff[flipped] = bot_sz[flipped] - 1 - bot_rank[flipped]
+            return bot_ord + eff / bot_sz
+
+        # Stage 1: independent per-chrom seed.
+        for scaf, sub in df.groupby(bot_scaf_col, sort=False):
+            if len(sub) < 2:
+                continue
+            ranks = sub["_bot_rank"].tolist()
+            sz = bot_scaf_size[scaf] - 1
+            if _count_inversions([sz - r for r in ranks]) < _count_inversions(ranks):
+                flips[scaf] = True
+
+        # Stage 2: iterated greedy refinement on full crossing count.
+        cur = _count_inversions(bot_positions(flips))
+        for _ in range(max_passes):
+            improved = False
+            for scaf in list(flips.keys()):
+                flips[scaf] = not flips[scaf]
+                new = _count_inversions(bot_positions(flips))
+                if new < cur:
+                    cur = new
+                    improved = True
+                else:
+                    flips[scaf] = not flips[scaf]
+            if not improved:
+                break
+
+        sp_to_flip[botsp] = flips
+        if verbose:
+            print("flip cascade {} -> {}: crossings={}, flipped={}".format(
+                topsp, botsp, cur,
+                sum(1 for v in flips.values() if v)))
+
+    return sp_to_flip
 
 def _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size,
                                    sp_to_gene_order, sp_min_chr_size):
@@ -80,6 +210,30 @@ def _optimize_spA_based_on_rbh(sp, prevsp, rbhdf, sp_to_chromorder, sp_to_gene_o
     rbhdf.reset_index(drop=True, inplace=True)
     return rbhdf["{}_scaf".format(sp)].tolist()
 
+def _draw_orientation_arrow(panel, x1, x2, y, flipped):
+    """Render a small filled triangle at one end of a chromosome bar to
+    show plot direction vs fasta direction. Arrow tip lies at the
+    fasta-3' end and points outward (right when forward, left when
+    reversed)."""
+    width = x2 - x1
+    if width <= 0:
+        return
+    arrow_h = min(width * 0.25, 0.006)  # cap so tiny chroms still look ok
+    arrow_y = 0.18
+    if flipped:
+        tip_x  = x1
+        base_x = x1 + arrow_h
+    else:
+        tip_x  = x2
+        base_x = x2 - arrow_h
+    triangle = patches.Polygon(
+        [(tip_x, y), (base_x, y - arrow_y), (base_x, y + arrow_y)],
+        closed=True, facecolor="black", edgecolor="black", lw=0.3,
+        zorder=4,
+    )
+    panel.add_patch(triangle)
+
+
 def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy):
     """
     Plot bezier curves between chromosome coordinates of different species.
@@ -137,7 +291,9 @@ def ribbon_plot(species_order, rbh_filelist,
                 sp_min_chr_size, outfile,
                 sp_to_gene_order = {},
                 chr_sort_order   = "custom",
-                plot_all = False):
+                plot_all = False,
+                optimize_chrom_rotation = True,
+                show_orientation_marks  = True):
     """
     Takes in a list of species as the plotting order,
      a list of rbh files, and a dict of species_to_chr_to_sizes
@@ -151,6 +307,18 @@ def ribbon_plot(species_order, rbh_filelist,
         optimal-size   - sort the top species' chromosomes by number of genes, optimize everything else
         optimal-chr-or - use `chromorder` when possible, optimize everything else
         optimal-random - randomly sort the chromosomes of the top species, optimize everything else
+
+    optimize_chrom_rotation:
+        If True (default), every scaffold's plot direction is chosen
+        independently of the fasta orientation, cascading top-down, to
+        minimize ribbon-line crossings. See _optimize_chrom_flips_top_down.
+        Resolves the "twist" artefact described in odp issue #127.
+    show_orientation_marks:
+        If True (default), each chromosome bar gets a small triangle at
+        the fasta-3' end. The triangle points right (▶) for scaffolds
+        plotted forward and left (◀) for scaffolds plotted reversed,
+        so the viewer can tell the plot direction from the fasta
+        direction at a glance.
     """
 
     # check sp_to_gene_order. Reset to empty dict if None
@@ -200,14 +368,11 @@ def ribbon_plot(species_order, rbh_filelist,
         sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp][["{}_gene".format(thissp),
                                                          "{}_scaf".format(thissp),
                                                          "{}_pos".format(thissp)]]
-        sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp].groupby(
-                                   by=["{}_scaf".format(thissp)], as_index=False
-                                   ).apply(lambda x: x.reset_index(drop=True)
-                                   )
-        sp_to_genesdfs[thissp].index.names = ["{}_delete".format(thissp),"{}_chromIx".format(thissp)]
-        sp_to_genesdfs[thissp].reset_index(inplace =True)
-        sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp][[x for x
-                                  in sp_to_genesdfs[thissp] if "delete" not in x]]
+        # Assign within-scaffold index (chromIx). Replaces a pandas-version-
+        # fragile groupby().apply().reset_index() pattern with a direct
+        # cumcount, which is the same operation expressed plainly.
+        sp_to_genesdfs[thissp]["{}_chromIx".format(thissp)] = sp_to_genesdfs[thissp].groupby(
+            "{}_scaf".format(thissp)).cumcount()
         #print(sp_to_genesdfs[thissp])
 
     # This block is used for determining the chromosome order for the figure
@@ -284,6 +449,19 @@ def ribbon_plot(species_order, rbh_filelist,
                 templist = _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size, sp_to_gene_order, sp_min_chr_size)
                 sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
                 first_optimized -= 1
+
+    # Decide per-scaffold plot direction (issue #127). The chromosome
+    # ordering is now fixed; we only choose, for each scaffold, whether to
+    # display it in the fasta-forward direction or reversed. Cascades
+    # top-down so a flip on row i is judged against the already-pinned
+    # row i-1.
+    if optimize_chrom_rotation:
+        sp_to_chrom_flip = _optimize_chrom_flips_top_down(
+            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+            sp_to_chromorder, sp_to_genesdfs)
+    else:
+        sp_to_chrom_flip = {sp: {scaf: False for scaf in sp_to_chromorder[sp]}
+                            for sp in species_order}
 
     # now construct dataframes describing how to plot the chromosomes based on
     #  gene index or on chromosome coordinate
@@ -480,20 +658,19 @@ def ribbon_plot(species_order, rbh_filelist,
         lookup_index = sp_pair_to_rbh_df_list_index[sp_pair_lookup]
 
         tr = rbh_df_list[lookup_index].copy()
+        # Choose the column used to decide whether a line is "significant".
+        filtercol = "break_FET"
+        if filtercol not in tr.columns:
+            if "alpha" in tr.columns:
+                filtercol = "alpha"
+            else:
+                print("ERROR: no break_FET or alpha column in rbh_df_list[{}]".format(i))
+                sys.exit(1)
         if not plot_all:
-            # if we have performed FET use that, otherwise look up alpha
-            filtercol = "break_FET"
-            if "break_FET" not in tr.columns:
-                if "alpha" in tr.columns:
-                    filtercol = "alpha"
-                else:
-                    print("ERROR: no break_FET or alpha column in rbh_df_list[{}]".format(i))
-                    sys.exit(1)
-            
             tr = tr.loc[tr[filtercol] <= 0.05, ]
-            tr["alpha"] = tr.apply(lambda x: 0.8
-                                   if x[filtercol] <= 0.05 else 0.1,
-                                   axis = 1)
+            tr["alpha"] = 0.8
+        else:
+            tr["alpha"] = tr[filtercol].apply(lambda x: 0.8 if x <= 0.05 else 0.15)
         tr = tr[["{}_gene".format(thissp),
                  "{}_scaf".format(thissp),
                   "{}_pos".format(thissp),
@@ -506,6 +683,16 @@ def ribbon_plot(species_order, rbh_filelist,
         #print(thisspChrom)
         #print()
 
+        # Per-scaffold flip state from the rotation optimizer (issue #127).
+        # When True we mirror the within-chrom position about the chromosome
+        # midpoint, so the plotted x is (chrPercent - geneOffset) instead of
+        # geneOffset. We apply the same flip to both rank ("Ix") and bp
+        # ("Chr") coordinates so the two panels stay consistent.
+        top_flip_map = sp_to_chrom_flip[thissp]
+        bot_flip_map = sp_to_chrom_flip[nextsp]
+        tr["_top_flipped"] = tr["{}_scaf".format(thissp)].map(top_flip_map).fillna(False)
+        tr["_bot_flipped"] = tr["{}_scaf".format(nextsp)].map(bot_flip_map).fillna(False)
+
         # get the index plot position for the top
         chrom_to_ixSize    = dict(zip(thisspChrom["chrom"], thisspChrom["ixSize"]))
         chrom_to_ixPercent = dict(zip(thisspChrom["chrom"], thisspChrom["ixPlotPercent"]))
@@ -515,7 +702,9 @@ def ribbon_plot(species_order, rbh_filelist,
         tr["topIx"] = tr["{}_gene".format(thissp)].map(gene_to_ix)
         tr["topIx_ChromSize"] = tr["{}_scaf".format(thissp)].map(chrom_to_ixSize)
         tr["topIx_ChromPercent"] = tr["{}_scaf".format(thissp)].map(chrom_to_ixPercent)
-        tr["topIx_geneOffset"]   = (tr["topIx"]/tr["topIx_ChromSize"]) * tr["topIx_ChromPercent"]
+        _topIx_eff = tr["topIx"].where(~tr["_top_flipped"],
+                                       (tr["topIx_ChromSize"] - 1) - tr["topIx"])
+        tr["topIx_geneOffset"]   = (_topIx_eff / tr["topIx_ChromSize"]) * tr["topIx_ChromPercent"]
         tr["topIx_ChromOffset"] = tr["{}_scaf".format(thissp)].map(chrom_to_ixOffset)
         tr["topIx_finalOffset"] = tr["topIx_ChromOffset"] + tr["topIx_geneOffset"]
         delete = ["topIx", "topIx_ChromSize", "topIx_ChromPercent",
@@ -532,7 +721,9 @@ def ribbon_plot(species_order, rbh_filelist,
         tr["bottomIx"] = tr["{}_gene".format(nextsp)].map(gene_to_ix)
         tr["bottomIx_ChromSize"] = tr["{}_scaf".format(nextsp)].map(chrom_to_ixSize)
         tr["bottomIx_ChromPercent"] = tr["{}_scaf".format(nextsp)].map(chrom_to_ixPercent)
-        tr["bottomIx_geneOffset"]   = (tr["bottomIx"]/tr["bottomIx_ChromSize"]) * tr["bottomIx_ChromPercent"]
+        _botIx_eff = tr["bottomIx"].where(~tr["_bot_flipped"],
+                                          (tr["bottomIx_ChromSize"] - 1) - tr["bottomIx"])
+        tr["bottomIx_geneOffset"]   = (_botIx_eff / tr["bottomIx_ChromSize"]) * tr["bottomIx_ChromPercent"]
         tr["bottomIx_ChromOffset"] = tr["{}_scaf".format(nextsp)].map(chrom_to_ixOffset)
         tr["bottomIx_finalOffset"] = tr["bottomIx_ChromOffset"] + tr["bottomIx_geneOffset"]
         delete = ["bottomIx", "bottomIx_ChromSize", "bottomIx_ChromPercent",
@@ -546,8 +737,10 @@ def ribbon_plot(species_order, rbh_filelist,
         chrom_to_chrOffset =  dict(zip(thisspChrom["chrom"], thisspChrom["chrPlotOffset"]))
         tr["topChr_ChromSize"] = tr["{}_scaf".format(thissp)].map(chrom_to_chrSize)
         tr["topChr_ChromPercent"] = tr["{}_scaf".format(thissp)].map(chrom_to_chrPercent)
-        tr["topChr_geneOffset"]   = (tr["{}_pos".format(thissp)
-                                        ]/tr["topChr_ChromSize"]) * tr["topChr_ChromPercent"]
+        _topChr_pos = tr["{}_pos".format(thissp)]
+        _topChr_eff = _topChr_pos.where(~tr["_top_flipped"],
+                                        tr["topChr_ChromSize"] - _topChr_pos)
+        tr["topChr_geneOffset"]   = (_topChr_eff / tr["topChr_ChromSize"]) * tr["topChr_ChromPercent"]
         tr["topChr_ChromOffset"] = tr["{}_scaf".format(thissp)].map(chrom_to_chrOffset)
         tr["topChr_finalOffset"] = tr["topChr_ChromOffset"] + tr["topChr_geneOffset"]
         delete = ["topChr", "topChr_ChromSize", "topChr_ChromPercent",
@@ -561,8 +754,10 @@ def ribbon_plot(species_order, rbh_filelist,
         chrom_to_chrOffset =  dict(zip(nextspChrom["chrom"], nextspChrom["chrPlotOffset"]))
         tr["bottomChr_ChromSize"] = tr["{}_scaf".format(nextsp)].map(chrom_to_chrSize)
         tr["bottomChr_ChromPercent"] = tr["{}_scaf".format(nextsp)].map(chrom_to_chrPercent)
-        tr["bottomChr_geneOffset"]   = (tr["{}_pos".format(nextsp)
-                                        ]/tr["bottomChr_ChromSize"]) * tr["bottomChr_ChromPercent"]
+        _botChr_pos = tr["{}_pos".format(nextsp)]
+        _botChr_eff = _botChr_pos.where(~tr["_bot_flipped"],
+                                        tr["bottomChr_ChromSize"] - _botChr_pos)
+        tr["bottomChr_geneOffset"]   = (_botChr_eff / tr["bottomChr_ChromSize"]) * tr["bottomChr_ChromPercent"]
         tr["bottomChr_ChromOffset"] = tr["{}_scaf".format(nextsp)].map(chrom_to_chrOffset)
         tr["bottomChr_finalOffset"] = tr["bottomChr_ChromOffset"] + tr["bottomChr_geneOffset"]
         delete = ["bottomChr", "bottomChr_ChromSize", "bottomChr_ChromPercent",
@@ -588,18 +783,29 @@ def ribbon_plot(species_order, rbh_filelist,
     # Now we plot all the chroms
     for i in range(len(species_order)):
         sp = species_order[i]
+        flip_map = sp_to_chrom_flip.get(sp, {})
         for index, row in sp_to_chromdf[sp].iterrows():
+            flipped = bool(flip_map.get(row["chrom"], False))
             # plot the line and the text
             x1 = row["chrPlotOffset"]
             x2 = row["chrPlotOffset"] + row["chrPlotPercent"]
             pChr.plot([x1,x2],[i,i],'k-')
             pChr.text(x1, i-0.03, row["chrom"],  ha="left", va = "bottom", fontsize =5)
+            if show_orientation_marks:
+                # Triangle at the fasta-3' end of the chromosome. Pointing
+                # right => scaffold drawn in fasta-forward direction.
+                # Pointing left => scaffold drawn reversed. Lets a viewer
+                # tell plot orientation from fasta orientation at a glance
+                # (odp issue #127).
+                _draw_orientation_arrow(pChr, x1, x2, i, flipped)
 
             # plot the line and text for the index plot
             x1 = row["ixPlotOffset"]
             x2 = row["ixPlotOffset"] + row["ixPlotPercent"]
             pIx.plot([x1,x2],[i,i],'k-')
             pIx.text(x1, i-0.03, row["chrom"], ha="left", va = "bottom", fontsize = 4)
+            if show_orientation_marks:
+                _draw_orientation_arrow(pIx, x1, x2, i, flipped)
 
     # flip the y axes
     for p in [pChr, pIx]:
