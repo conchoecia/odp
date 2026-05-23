@@ -1665,14 +1665,15 @@ def ribbon_plot(species_order, rbh_filelist,
     #  Just make it the number of samples times the space, plus the buffer
     interspeciesHeight = 0.5
     panelHeight = interspeciesHeight * len(species_order)
-    # Panel width allows for a wider left margin so multi-word species
-    # labels (e.g. "Plutella xylostella") don't get clipped.
-    panelWidth = 6.4
+    # Panel width leaves room for two-line species labels on the y-axis
+    # (species + assembly accession). Total figure width is 180 mm
+    # (7.087"); the left margin holds the labels.
+    panelWidth = 4.6
 
     #           two panels        top, bottom, middle
     bufferHeight = 1.5
     figHeight = (panelHeight*2) + (bufferHeight * 3)
-    figWidth = 10  # extra width for multi-word species labels on the y-axis
+    figWidth = 7.087  # 180 mm (single-column journal width)
 
     fig = plt.figure(figsize=(figWidth,figHeight))
 
@@ -1948,17 +1949,21 @@ def ribbon_plot(species_order, rbh_filelist,
         p.set_ylim(p.get_ylim()[::-1])
         # set the axis labels
         p.set_yticks(list(range(len(species_order))))
-        # Use caller-supplied species_labels dict if provided; otherwise
-        # strip the "-taxid-GCAxxx" / "-taxid-GCFxxx" suffix so the
-        # y-tick is just the genus+species concatenation. Matplotlib
-        # otherwise truncates from the left, leaving only the last 6
-        # characters of the assembly version.
+        # Two-line y-axis labels: species name on top, assembly accession
+        # below. species_labels dict (typically from
+        # config["tree"]["tip_label_map"]) supplies the human-friendly
+        # name; if absent, we fall back to stripping the "-taxid-GCxxx"
+        # suffix off the species id.
         import re as _re
         def _disp(sp):
             if species_labels and sp in species_labels:
-                return species_labels[sp]
-            return _re.sub(r"-\d+-GC[AF]\d+\.\d+$", "", sp)
-        p.set_yticklabels([_disp(s) for s in species_order])
+                primary = species_labels[sp]
+            else:
+                primary = _re.sub(r"-\d+-GC[AF]\d+\.\d+$", "", sp)
+            acc_m = _re.search(r"(GC[AF]\d+\.\d+)$", sp)
+            acc = acc_m.group(1) if acc_m else ""
+            return "{}\n{}".format(primary, acc) if acc else primary
+        p.set_yticklabels([_disp(s) for s in species_order], fontsize=7)
 
     plt.savefig(outfile)
     return sp_to_chromorder
