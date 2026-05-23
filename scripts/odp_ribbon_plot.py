@@ -772,6 +772,205 @@ def _greedy_swap_polish(species_order, rbh_df_list,
     return sp_to_chromorder
 
 
+def _fenwick_weighted_inversion(values, weights):
+    """Weighted inversion count. For every pair (i < j) with values[i] >
+    values[j], adds weights[i] * weights[j] to the total. O(n log n)
+    using a Fenwick tree over the unique values seen in `values`. This
+    is the scoring kernel for the crossing-count local search: each
+    bezier-line pair is one potential crossing, weighted by the
+    importance of the two lines."""
+    if not values:
+        return 0.0
+    sorted_unique = sorted(set(values))
+    rank = {v: i + 1 for i, v in enumerate(sorted_unique)}
+    n = len(sorted_unique)
+    fen = [0.0] * (n + 1)
+
+    def update(i, w):
+        while i <= n:
+            fen[i] += w
+            i += i & -i
+
+    def query(i):
+        s = 0.0
+        while i > 0:
+            s += fen[i]
+            i -= i & -i
+        return s
+
+    inv = 0.0
+    total = 0.0
+    for v, w in zip(values, weights):
+        r = rank[v]
+        gt = total - query(r)
+        inv += w * gt
+        update(r, w)
+        total += w
+    return inv
+
+
+def _build_pair_line_data(species_order, rbh_df_list,
+                          sp_pair_to_rbh_df_list_index, sp_to_genesdfs,
+                          fet_weight=1000.0):
+    """For every adjacent species pair, precompute per-line records
+    (chrom, within-chrom rank, chrom size, weight). Used by the local
+    search so we don't re-parse the RBH dataframes for each candidate
+    move. fet_weight controls how much FET-significant lines outscore
+    non-significant ones — the user-specified 1000x makes the search
+    effectively minimize crossings of the bold ribbons first, only
+    using the faint ones as a tiebreak."""
+    line_data_per_pair = []
+    for k in range(len(species_order) - 1):
+        top_sp = species_order[k]
+        bot_sp = species_order[k + 1]
+        lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([top_sp, bot_sp]))]
+        df = rbh_df_list[lookup]
+        tcol = "{}_scaf".format(top_sp); bcol = "{}_scaf".format(bot_sp)
+        tg = "{}_gene".format(top_sp); bg = "{}_gene".format(bot_sp)
+        t_rank = dict(zip(sp_to_genesdfs[top_sp][tg],
+                          sp_to_genesdfs[top_sp]["{}_chromIx".format(top_sp)]))
+        b_rank = dict(zip(sp_to_genesdfs[bot_sp][bg],
+                          sp_to_genesdfs[bot_sp]["{}_chromIx".format(bot_sp)]))
+        t_sz = sp_to_genesdfs[top_sp].groupby(tcol).size().to_dict()
+        b_sz = sp_to_genesdfs[bot_sp].groupby(bcol).size().to_dict()
+        records = []
+        for tchrom, bchrom, trk, brk, fet in zip(
+                df[tcol].values, df[bcol].values,
+                df[tg].map(t_rank).values,
+                df[bg].map(b_rank).values,
+                df.get("whole_FET", pd.Series([1.0] * len(df))).values):
+            if trk is None or brk is None or pd.isna(trk) or pd.isna(brk):
+                continue
+            w = fet_weight if fet <= 0.05 else 1.0
+            records.append((tchrom, bchrom, int(trk), int(brk),
+                            int(t_sz[tchrom]), int(b_sz[bchrom]), w))
+        line_data_per_pair.append(records)
+    return line_data_per_pair
+
+
+def _score_pair_lines(records, top_order, bot_order, top_flip, bot_flip):
+    """Weighted crossing count for one adjacent species pair given
+    current chrom orders and per-chrom flips. Lines whose endpoints
+    sit on chroms not in `top_order`/`bot_order` are ignored
+    (typical when a scaffold is filtered out by minscafsize)."""
+    vals_top = []
+    vals_bot = []
+    weights = []
+    for tchrom, bchrom, trk, brk, tsz, bsz, w in records:
+        if tchrom not in top_order or bchrom not in bot_order:
+            continue
+        t_eff = (tsz - 1 - trk) if top_flip.get(tchrom, False) else trk
+        b_eff = (bsz - 1 - brk) if bot_flip.get(bchrom, False) else brk
+        vals_top.append(top_order[tchrom] + t_eff / tsz)
+        vals_bot.append(bot_order[bchrom] + b_eff / bsz)
+        weights.append(w)
+    if not vals_top:
+        return 0.0
+    order = sorted(range(len(vals_top)), key=lambda i: vals_top[i])
+    sorted_bot = [vals_bot[i] for i in order]
+    sorted_w   = [weights[i]  for i in order]
+    return _fenwick_weighted_inversion(sorted_bot, sorted_w)
+
+
+def _crossing_local_search(species_order, rbh_df_list,
+                           sp_pair_to_rbh_df_list_index,
+                           sp_to_chromorder, sp_to_chrom_flip,
+                           sp_to_genesdfs, fet_weight=1000.0,
+                           max_passes=15, verbose=False):
+    """Greedy improvement-monotone local search on the *true* total
+    weighted crossing count across every adjacent species pair. Moves
+    tried per chromosome: F/R flip, swap with the next chrom in the
+    same row. Per-pass species traversal order: most-rearranged
+    species first ("start on the species that are rearranged, then
+    work outward"). Stops on the first pass that yields no
+    improvement; any move that reduces the global score is kept.
+
+    Seeds (chrom order and flips) are read from sp_to_chromorder and
+    sp_to_chrom_flip and mutated in place; the function returns the
+    refined dicts.
+    """
+    line_data = _build_pair_line_data(
+        species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+        sp_to_genesdfs, fet_weight=fet_weight)
+
+    def pair_score(k):
+        return _score_pair_lines(
+            line_data[k],
+            sp_to_chromorder[species_order[k]],
+            sp_to_chromorder[species_order[k + 1]],
+            sp_to_chrom_flip[species_order[k]],
+            sp_to_chrom_flip[species_order[k + 1]])
+
+    def neighboring_pair_indices(sp_idx):
+        out = []
+        if sp_idx > 0:
+            out.append(sp_idx - 1)
+        if sp_idx < len(species_order) - 1:
+            out.append(sp_idx)
+        return out
+
+    pair_cache = {k: pair_score(k) for k in range(len(species_order) - 1)}
+
+    def total_score():
+        return sum(pair_cache.values())
+
+    def rescore_neighbors(sp_idx):
+        for k in neighboring_pair_indices(sp_idx):
+            pair_cache[k] = pair_score(k)
+
+    cur = total_score()
+    if verbose:
+        print("local search seed score = {:.0f}".format(cur))
+
+    for pass_num in range(max_passes):
+        # rank species by local crossings, worst first
+        sp_local = [0.0] * len(species_order)
+        for k, s in pair_cache.items():
+            sp_local[k]     += s
+            sp_local[k + 1] += s
+        order_idx = sorted(range(len(species_order)), key=lambda i: -sp_local[i])
+
+        improved_pass = False
+        for sp_idx in order_idx:
+            sp = species_order[sp_idx]
+            chrom_seq = sorted(sp_to_chromorder[sp].items(), key=lambda x: x[1])
+            chroms = [c for c, _ in chrom_seq]
+            # 1) try a flip on every chrom in this row
+            for chrom in chroms:
+                sp_to_chrom_flip[sp][chrom] = not sp_to_chrom_flip[sp][chrom]
+                rescore_neighbors(sp_idx)
+                new = total_score()
+                if new < cur - 1e-9:
+                    cur = new
+                    improved_pass = True
+                else:
+                    sp_to_chrom_flip[sp][chrom] = not sp_to_chrom_flip[sp][chrom]
+                    rescore_neighbors(sp_idx)
+            # 2) try swapping every adjacent chrom pair in this row
+            j = 0
+            while j < len(chroms) - 1:
+                a, b = chroms[j], chroms[j + 1]
+                sp_to_chromorder[sp][a], sp_to_chromorder[sp][b] = \
+                    sp_to_chromorder[sp][b], sp_to_chromorder[sp][a]
+                rescore_neighbors(sp_idx)
+                new = total_score()
+                if new < cur - 1e-9:
+                    cur = new
+                    chroms[j], chroms[j + 1] = b, a
+                    improved_pass = True
+                else:
+                    sp_to_chromorder[sp][a], sp_to_chromorder[sp][b] = \
+                        sp_to_chromorder[sp][b], sp_to_chromorder[sp][a]
+                    rescore_neighbors(sp_idx)
+                j += 1
+        if verbose:
+            print("  pass {} done, score={:.0f}".format(pass_num, cur))
+        if not improved_pass:
+            break
+
+    return sp_to_chromorder, sp_to_chrom_flip
+
+
 def _iterative_order_propagation(species_order, rbh_df_list,
                                  sp_pair_to_rbh_df_list_index,
                                  sp_to_chromorder, sp_to_gene_order,
@@ -1175,6 +1374,23 @@ def ribbon_plot(species_order, rbh_filelist,
     else:
         sp_to_chrom_flip = {sp: {scaf: False for scaf in sp_to_chromorder[sp]}
                             for sp in species_order}
+
+    # Crossing-count local search refinement. Takes whatever the order
+    # cascade + flip cascade produced and improves it by directly
+    # minimizing the global weighted crossing count -- the very thing
+    # the plot reader sees. Moves are (a) flip a chromosome, (b) swap
+    # adjacent chromosomes in a row. Every accepted move strictly
+    # reduces the score, so iteration is improvement-monotone. The
+    # search visits the worst-rearranged species first, then radiates
+    # outward. FET-significant orthologs are weighted 1000x faint ones
+    # so the bold ribbons drive the optimization. Skipped when the
+    # caller turned the flip optimizer off (the search would then
+    # explore a degenerate subset).
+    if optimize_chrom_rotation and len(species_order) > 1:
+        sp_to_chromorder, sp_to_chrom_flip = _crossing_local_search(
+            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+            sp_to_chromorder, sp_to_chrom_flip, sp_to_genesdfs,
+            fet_weight=1000.0, verbose=True)
 
     # now construct dataframes describing how to plot the chromosomes based on
     #  gene index or on chromosome coordinate
