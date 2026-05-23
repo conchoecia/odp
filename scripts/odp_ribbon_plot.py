@@ -809,6 +809,56 @@ def _fenwick_weighted_inversion(values, weights):
     return inv
 
 
+def _build_pair_anchor_data(species_order, rbh_df_list,
+                            sp_pair_to_rbh_df_list_index, sp_to_genesdfs,
+                            fet_weight=1000.0):
+    """Coarsened version of _build_pair_line_data: every distinct
+    (top_chrom, bot_chrom) pair becomes ONE record at the
+    within-chrom mean rank on each side, weight = (fet_weight if the
+    pair's best whole_FET <= 0.05 else 1) * shared-ortholog count.
+    Drops the line count from ~2000 to ~200 per pair on Lep-style data
+    and brings the local search runtime down by ~10x. Resolution
+    loss: we no longer see within-chrom inversions caused by individual
+    gene-pair crossings, which the search couldn't fix anyway (the
+    moves are chrom flips and chrom swaps, not gene reorderings)."""
+    out = []
+    for k in range(len(species_order) - 1):
+        top_sp = species_order[k]
+        bot_sp = species_order[k + 1]
+        lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([top_sp, bot_sp]))]
+        df = rbh_df_list[lookup]
+        tcol = "{}_scaf".format(top_sp); bcol = "{}_scaf".format(bot_sp)
+        tg = "{}_gene".format(top_sp); bg = "{}_gene".format(bot_sp)
+        t_rank = dict(zip(sp_to_genesdfs[top_sp][tg],
+                          sp_to_genesdfs[top_sp]["{}_chromIx".format(top_sp)]))
+        b_rank = dict(zip(sp_to_genesdfs[bot_sp][bg],
+                          sp_to_genesdfs[bot_sp]["{}_chromIx".format(bot_sp)]))
+        t_sz = sp_to_genesdfs[top_sp].groupby(tcol).size().to_dict()
+        b_sz = sp_to_genesdfs[bot_sp].groupby(bcol).size().to_dict()
+        tmp = df.copy()
+        tmp["_trk"] = tmp[tg].map(t_rank)
+        tmp["_brk"] = tmp[bg].map(b_rank)
+        tmp = tmp.dropna(subset=["_trk", "_brk"])
+        if "whole_FET" not in tmp.columns:
+            tmp["whole_FET"] = 1.0
+        gr = tmp.groupby([tcol, bcol]).agg(
+            count=("whole_FET", "size"),
+            best_fet=("whole_FET", "min"),
+            mean_trk=("_trk", "mean"),
+            mean_brk=("_brk", "mean")).reset_index()
+        records = []
+        for tchrom, bchrom, count, best_fet, mtrk, mbrk in zip(
+                gr[tcol].values, gr[bcol].values,
+                gr["count"].values, gr["best_fet"].values,
+                gr["mean_trk"].values, gr["mean_brk"].values):
+            w_unit = fet_weight if best_fet <= 0.05 else 1.0
+            records.append((tchrom, bchrom, float(mtrk), float(mbrk),
+                            int(t_sz[tchrom]), int(b_sz[bchrom]),
+                            float(w_unit * count)))
+        out.append(records)
+    return out
+
+
 def _build_pair_line_data(species_order, rbh_df_list,
                           sp_pair_to_rbh_df_list_index, sp_to_genesdfs,
                           fet_weight=1000.0):
@@ -876,7 +926,8 @@ def _crossing_local_search(species_order, rbh_df_list,
                            sp_pair_to_rbh_df_list_index,
                            sp_to_chromorder, sp_to_chrom_flip,
                            sp_to_genesdfs, fet_weight=1000.0,
-                           max_passes=15, verbose=False):
+                           max_passes=50, coarse=True,
+                           early_stop_frac=0.0005, verbose=False):
     """Greedy improvement-monotone local search on the *true* total
     weighted crossing count across every adjacent species pair. Moves
     tried per chromosome: F/R flip, swap with the next chrom in the
@@ -889,9 +940,14 @@ def _crossing_local_search(species_order, rbh_df_list,
     sp_to_chrom_flip and mutated in place; the function returns the
     refined dicts.
     """
-    line_data = _build_pair_line_data(
-        species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
-        sp_to_genesdfs, fet_weight=fet_weight)
+    if coarse:
+        line_data = _build_pair_anchor_data(
+            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+            sp_to_genesdfs, fet_weight=fet_weight)
+    else:
+        line_data = _build_pair_line_data(
+            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+            sp_to_genesdfs, fet_weight=fet_weight)
 
     def pair_score(k):
         return _score_pair_lines(
@@ -919,6 +975,7 @@ def _crossing_local_search(species_order, rbh_df_list,
             pair_cache[k] = pair_score(k)
 
     cur = total_score()
+    prev = cur
     if verbose:
         print("local search seed score = {:.0f}".format(cur))
 
@@ -967,6 +1024,15 @@ def _crossing_local_search(species_order, rbh_df_list,
             print("  pass {} done, score={:.0f}".format(pass_num, cur))
         if not improved_pass:
             break
+        # Early stop: each pass costs the same; if the relative drop
+        # falls below early_stop_frac we are deep in the long tail
+        # and further passes won't visually change the plot.
+        if prev > 0 and (prev - cur) / prev < early_stop_frac:
+            if verbose:
+                print("  early stop: delta {:.0f} < {} * {:.0f}".format(
+                    prev - cur, early_stop_frac, prev))
+            break
+        prev = cur
 
     return sp_to_chromorder, sp_to_chrom_flip
 
