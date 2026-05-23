@@ -1003,23 +1003,29 @@ def _crossing_local_search(species_order, rbh_df_list,
                 else:
                     sp_to_chrom_flip[sp][chrom] = not sp_to_chrom_flip[sp][chrom]
                     rescore_neighbors(sp_idx)
-            # 2) try swapping every adjacent chrom pair in this row
-            j = 0
-            while j < len(chroms) - 1:
-                a, b = chroms[j], chroms[j + 1]
-                sp_to_chromorder[sp][a], sp_to_chromorder[sp][b] = \
-                    sp_to_chromorder[sp][b], sp_to_chromorder[sp][a]
-                rescore_neighbors(sp_idx)
-                new = total_score()
-                if new < cur - 1e-9:
-                    cur = new
-                    chroms[j], chroms[j + 1] = b, a
-                    improved_pass = True
-                else:
+            # 2) Swap chrom_j with chrom_{j+offset} for a small set of
+            #    offsets. Adjacent swap (offset=1) covers the local case;
+            #    larger offsets let the search escape local minima where
+            #    moving a chrom one slot only swaps it with a sibling and
+            #    raises the score, but moving it two or three slots lands
+            #    it next to its real partner.
+            for offset in (1, 2, 3, 5):
+                j = 0
+                while j + offset < len(chroms):
+                    a, b = chroms[j], chroms[j + offset]
                     sp_to_chromorder[sp][a], sp_to_chromorder[sp][b] = \
                         sp_to_chromorder[sp][b], sp_to_chromorder[sp][a]
                     rescore_neighbors(sp_idx)
-                j += 1
+                    new = total_score()
+                    if new < cur - 1e-9:
+                        cur = new
+                        chroms[j], chroms[j + offset] = b, a
+                        improved_pass = True
+                    else:
+                        sp_to_chromorder[sp][a], sp_to_chromorder[sp][b] = \
+                            sp_to_chromorder[sp][b], sp_to_chromorder[sp][a]
+                        rescore_neighbors(sp_idx)
+                    j += 1
         if verbose:
             print("  pass {} done, score={:.0f}".format(pass_num, cur))
         if not improved_pass:
@@ -1033,6 +1039,37 @@ def _crossing_local_search(species_order, rbh_df_list,
                     prev - cur, early_stop_frac, prev))
             break
         prev = cur
+
+    # Dedicated final flip-only sweep. After the order has settled, the
+    # context in which each chromosome's orientation matters is fully
+    # determined; some flips may now be improvable that weren't when
+    # the search visited them earlier with a different ordering. User
+    # called this out as key: at the end of optimization, re-check
+    # every chromosome's LR/RL orientation.
+    for _ in range(5):
+        improved = False
+        # process species worst-rearranged first, same as main loop
+        sp_local = [0.0] * len(species_order)
+        for k, s in pair_cache.items():
+            sp_local[k] += s
+            sp_local[k + 1] += s
+        order_idx = sorted(range(len(species_order)), key=lambda i: -sp_local[i])
+        for sp_idx in order_idx:
+            sp = species_order[sp_idx]
+            for chrom in list(sp_to_chrom_flip[sp].keys()):
+                sp_to_chrom_flip[sp][chrom] = not sp_to_chrom_flip[sp][chrom]
+                rescore_neighbors(sp_idx)
+                new = total_score()
+                if new < cur - 1e-9:
+                    cur = new
+                    improved = True
+                else:
+                    sp_to_chrom_flip[sp][chrom] = not sp_to_chrom_flip[sp][chrom]
+                    rescore_neighbors(sp_idx)
+        if not improved:
+            break
+    if verbose:
+        print("after final flip sweep: score={:.0f}".format(cur))
 
     return sp_to_chromorder, sp_to_chrom_flip
 
@@ -1453,10 +1490,20 @@ def ribbon_plot(species_order, rbh_filelist,
     # caller turned the flip optimizer off (the search would then
     # explore a degenerate subset).
     if optimize_chrom_rotation and len(species_order) > 1:
+        # Two-stage refinement: a fast coarse-scoring pass converges
+        # to the right neighborhood quickly, then a per-ortholog pass
+        # captures the within-chrom detail the coarse anchors flatten
+        # out. Both stages share the same move set, so the user can
+        # follow the score across stages.
         sp_to_chromorder, sp_to_chrom_flip = _crossing_local_search(
             species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
             sp_to_chromorder, sp_to_chrom_flip, sp_to_genesdfs,
-            fet_weight=1000.0, verbose=True)
+            fet_weight=1000.0, coarse=True, verbose=True)
+        sp_to_chromorder, sp_to_chrom_flip = _crossing_local_search(
+            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+            sp_to_chromorder, sp_to_chrom_flip, sp_to_genesdfs,
+            fet_weight=1000.0, coarse=False, max_passes=15,
+            verbose=True)
 
     # now construct dataframes describing how to plot the chromosomes based on
     #  gene index or on chromosome coordinate
