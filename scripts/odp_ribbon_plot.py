@@ -974,6 +974,32 @@ def _crossing_local_search(species_order, rbh_df_list,
         for k in neighboring_pair_indices(sp_idx):
             pair_cache[k] = pair_score(k)
 
+    def chrom_crossings(sp_idx, chrom):
+        """Crossings involving lines incident to `chrom` on the two
+        adjacent pairs of species `sp_idx`. Used to sort chroms within
+        a species so the worst-offenders are visited first.
+        """
+        total = 0.0
+        for k in neighboring_pair_indices(sp_idx):
+            recs = line_data[k]
+            top_sp = species_order[k]
+            bot_sp = species_order[k + 1]
+            top_order = sp_to_chromorder[top_sp]
+            bot_order = sp_to_chromorder[bot_sp]
+            top_flip  = sp_to_chrom_flip[top_sp]
+            bot_flip  = sp_to_chrom_flip[bot_sp]
+            this_is_top = (species_order[sp_idx] == top_sp)
+            for tchrom, bchrom, trk, brk, tsz, bsz, w in recs:
+                if (this_is_top and tchrom != chrom) or \
+                   (not this_is_top and bchrom != chrom):
+                    continue
+                if tchrom not in top_order or bchrom not in bot_order:
+                    continue
+                # quick proxy: contribution to crossings = weight * line count
+                # (rather than exact; we just need ordering of severity)
+                total += w
+        return total
+
     cur = total_score()
     prev = cur
     if verbose:
@@ -992,6 +1018,12 @@ def _crossing_local_search(species_order, rbh_df_list,
             sp = species_order[sp_idx]
             chrom_seq = sorted(sp_to_chromorder[sp].items(), key=lambda x: x[1])
             chroms = [c for c, _ in chrom_seq]
+            # Visit chroms in this row worst-first (chrom that has the
+            # most weight in lines crossing into the adjacent pairs).
+            # The user-cited case -- a single chromosome that crosses
+            # many others on the row above -- is the kind we want to
+            # try moving first.
+            chroms.sort(key=lambda c: -chrom_crossings(sp_idx, c))
             # 1) try a flip on every chrom in this row
             for chrom in chroms:
                 sp_to_chrom_flip[sp][chrom] = not sp_to_chrom_flip[sp][chrom]
@@ -1026,6 +1058,48 @@ def _crossing_local_search(species_order, rbh_df_list,
                             sp_to_chromorder[sp][b], sp_to_chromorder[sp][a]
                         rescore_neighbors(sp_idx)
                     j += 1
+            # 3) Insertion move: for each chrom, try moving it to every
+            #    other slot in the row. A swap can only exchange a
+            #    chrom with a fixed neighbor; insertion lets the worst
+            #    offender go directly to its true partner column,
+            #    which is the kind of move adjacent-swap cannot make
+            #    when the route between the two slots crosses unrelated
+            #    chroms that each individual swap raises the score.
+            for src_chrom in list(chroms):
+                src_pos = sp_to_chromorder[sp][src_chrom]
+                best_delta = 0.0
+                best_dst = None
+                # Try every destination slot
+                cur_chroms = sorted(sp_to_chromorder[sp].items(),
+                                    key=lambda x: x[1])
+                ids_in_order = [c for c, _ in cur_chroms]
+                for dst_pos in range(len(ids_in_order)):
+                    if dst_pos == src_pos:
+                        continue
+                    new_order = list(ids_in_order)
+                    new_order.pop(src_pos)
+                    new_order.insert(dst_pos, src_chrom)
+                    new_map = {c: k for k, c in enumerate(new_order)}
+                    saved = dict(sp_to_chromorder[sp])
+                    sp_to_chromorder[sp] = new_map
+                    rescore_neighbors(sp_idx)
+                    new = total_score()
+                    if new < cur + best_delta - 1e-9:
+                        best_delta = new - cur
+                        best_dst = dst_pos
+                    sp_to_chromorder[sp] = saved
+                    rescore_neighbors(sp_idx)
+                if best_dst is not None:
+                    new_order = list(ids_in_order)
+                    new_order.pop(src_pos)
+                    new_order.insert(best_dst, src_chrom)
+                    sp_to_chromorder[sp] = {c: k for k, c in enumerate(new_order)}
+                    rescore_neighbors(sp_idx)
+                    cur = cur + best_delta
+                    improved_pass = True
+                    # Update the local chroms list so the next iter sees
+                    # the new order.
+                    chroms = list(new_order)
         if verbose:
             print("  pass {} done, score={:.0f}".format(pass_num, cur))
         if not improved_pass:
@@ -1217,7 +1291,8 @@ def ribbon_plot(species_order, rbh_filelist,
                 chr_sort_order   = "custom",
                 plot_all = False,
                 optimize_chrom_rotation = True,
-                show_orientation_marks  = True):
+                show_orientation_marks  = True,
+                species_labels = None):
     """
     Takes in a list of species as the plotting order,
      a list of rbh files, and a dict of species_to_chr_to_sizes
@@ -1590,17 +1665,19 @@ def ribbon_plot(species_order, rbh_filelist,
     #  Just make it the number of samples times the space, plus the buffer
     interspeciesHeight = 0.5
     panelHeight = interspeciesHeight * len(species_order)
-    panelWidth = 7.15
+    # Panel width allows for a wider left margin so multi-word species
+    # labels (e.g. "Plutella xylostella") don't get clipped.
+    panelWidth = 6.4
 
     #           two panels        top, bottom, middle
     bufferHeight = 1.5
     figHeight = (panelHeight*2) + (bufferHeight * 3)
-    figWidth = 8
+    figWidth = 10  # extra width for multi-word species labels on the y-axis
 
     fig = plt.figure(figsize=(figWidth,figHeight))
 
     #set the panel dimensions
-    leftStart = (figWidth - panelWidth)/1.25
+    leftStart = figWidth - panelWidth - 0.3  # 0.3" right margin
     bottomMargin = bufferHeight
     # pChr will host the chrom coordinate plots
     plt.gcf().text((leftStart + (figWidth/2))/figWidth,
@@ -1871,7 +1948,17 @@ def ribbon_plot(species_order, rbh_filelist,
         p.set_ylim(p.get_ylim()[::-1])
         # set the axis labels
         p.set_yticks(list(range(len(species_order))))
-        p.set_yticklabels(species_order)
+        # Use caller-supplied species_labels dict if provided; otherwise
+        # strip the "-taxid-GCAxxx" / "-taxid-GCFxxx" suffix so the
+        # y-tick is just the genus+species concatenation. Matplotlib
+        # otherwise truncates from the left, leaving only the last 6
+        # characters of the assembly version.
+        import re as _re
+        def _disp(sp):
+            if species_labels and sp in species_labels:
+                return species_labels[sp]
+            return _re.sub(r"-\d+-GC[AF]\d+\.\d+$", "", sp)
+        p.set_yticklabels([_disp(s) for s in species_order])
 
     plt.savefig(outfile)
     return sp_to_chromorder
