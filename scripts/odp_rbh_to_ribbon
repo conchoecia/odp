@@ -107,8 +107,13 @@ if ("rbh_directory" in config) and ("rbh_files_in_order" not in config):
 if "chr_sort_order" not in config:
     sys.exit("ERROR: chr_sort_order not in config file. Please add this to the config file and see the available options in the example config.")
 else:
-    if config["chr_sort_order"] not in ["custom", "optimal-top", "optimal-size", "optimal-chr-or", "optimal-random"]:
-        sys.exit("ERROR: chr_sort_order must be selected from < custom | optimal-top | optimal-size | optimal-chr-or | optimal-random >. You provided {}.".format(config["chr_sort_order"]))
+    _allowed_chr_sort = ["custom", "optimal-top", "optimal-size",
+                         "optimal-chr-or", "optimal-random",
+                         "optimal-barycenter", "optimal-barycenter-iter",
+                         "optimal-median", "optimal-swap"]
+    if config["chr_sort_order"] not in _allowed_chr_sort:
+        sys.exit("ERROR: chr_sort_order must be one of < {} >. You provided {}.".format(
+            " | ".join(_allowed_chr_sort), config["chr_sort_order"]))
 
 if "chromorder" not in config:
     config["chromorder"] = {}

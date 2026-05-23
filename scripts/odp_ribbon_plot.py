@@ -210,28 +210,243 @@ def _optimize_spA_based_on_rbh(sp, prevsp, rbhdf, sp_to_chromorder, sp_to_gene_o
     rbhdf.reset_index(drop=True, inplace=True)
     return rbhdf["{}_scaf".format(sp)].tolist()
 
-def _draw_orientation_arrow(panel, x1, x2, y, flipped):
-    """Render a small filled triangle at one end of a chromosome bar to
-    show plot direction vs fasta direction. Arrow tip lies at the
-    fasta-3' end and points outward (right when forward, left when
-    reversed)."""
+def _draw_oriented_bar(panel, x1, x2, y, flipped, lw=0.9,
+                       head_len_frac=0.15, head_len_cap=0.0045,
+                       head_h=0.07, color="black"):
+    """Render a chromosome as a chevron-tipped bar: the bar ends in a
+    small arrowhead whose tip lies at the fasta-3' end of the scaffold.
+    Replaces the separate-triangle marker so the arrowhead IS the bar
+    rather than an extra glyph next to it. Forward scaffolds tip right,
+    reversed scaffolds tip left."""
     width = x2 - x1
     if width <= 0:
         return
-    arrow_h = min(width * 0.25, 0.006)  # cap so tiny chroms still look ok
-    arrow_y = 0.18
+    head_len = min(width * head_len_frac, head_len_cap)
+    shaft_w  = max(width - head_len, 0)
     if flipped:
-        tip_x  = x1
-        base_x = x1 + arrow_h
+        tip_x   = x1
+        base_x  = x1 + head_len
+        shaft_x = (base_x, x2)
     else:
-        tip_x  = x2
-        base_x = x2 - arrow_h
-    triangle = patches.Polygon(
-        [(tip_x, y), (base_x, y - arrow_y), (base_x, y + arrow_y)],
-        closed=True, facecolor="black", edgecolor="black", lw=0.3,
-        zorder=4,
+        tip_x   = x2
+        base_x  = x2 - head_len
+        shaft_x = (x1, base_x)
+    # shaft
+    panel.plot([shaft_x[0], shaft_x[1]], [y, y],
+               color=color, lw=lw, solid_capstyle="butt", zorder=3)
+    # filled arrowhead
+    head = patches.Polygon(
+        [(tip_x, y), (base_x, y - head_h), (base_x, y + head_h)],
+        closed=True, facecolor=color, edgecolor=color, lw=0.3, zorder=4,
     )
-    panel.add_patch(triangle)
+    panel.add_patch(head)
+
+
+def _shorten_chrom_labels(labels):
+    """Compact a scaffold id to "<first 2 chars>/<tail>", where tail is
+    chosen to keep the assembly-version suffix visible whenever the id
+    ends with a "<digits>.<digits>" pattern (the usual NCBI form):
+        NC_051358.1 -> NC/358.1
+        NC_051358   -> NC/358
+        JAJNFR010000001.1 -> JA/001.1
+    Short ids (<=6 chars) are returned unchanged."""
+    import re as _re
+    decimal_tail = _re.compile(r"\.([^.]+)$")
+    out = {}
+    for lbl in labels:
+        if len(lbl) <= 6:
+            out[lbl] = lbl
+            continue
+        m = decimal_tail.search(lbl)
+        if m:
+            stem = lbl[:m.start()]
+            tail = "{}.{}".format(stem[-3:], m.group(1))
+            head = stem[:2]
+        else:
+            head = lbl[:2]
+            tail = lbl[-3:]
+        out[lbl] = "{}/{}".format(head, tail)
+    return out
+
+
+_DETANGLE_MODES = {"optimal-barycenter", "optimal-barycenter-iter",
+                   "optimal-median", "optimal-swap"}
+
+
+def _seed_top_order_from_partner(sp, partner_sp, rbhdf):
+    """Top-row ordering that respects FET-significant chromosome
+    relationships with the second species. Chromosomes of the top
+    species that share the same best-FET partner in row 2 get grouped
+    together; partner groups are ordered by total shared ortholog
+    count desc; within a group, members are sorted by FET (most
+    significant first).
+
+    Solves the case (odp issue #127 review) where the previous top-row
+    ordering, plain value_counts(), would separate two top-row
+    chromosomes that both map to the same row-2 chromosome — leading
+    to forced crossings the cascade below cannot fix."""
+    sa = "{}_scaf".format(sp)
+    sb = "{}_scaf".format(partner_sp)
+    if rbhdf.empty or sa not in rbhdf.columns or sb not in rbhdf.columns:
+        return list(rbhdf[sa].value_counts().index) if sa in rbhdf.columns else []
+    counts = rbhdf.groupby([sa, sb]).size().reset_index(name="_count")
+    fets   = rbhdf.groupby([sa, sb])["whole_FET"].min().reset_index() \
+             if "whole_FET" in rbhdf.columns else None
+    if fets is None:
+        counts["whole_FET"] = 0.0
+        pairs = counts
+    else:
+        pairs = counts.merge(fets, on=[sa, sb])
+    best = pairs.sort_values([sa, "whole_FET"]).drop_duplicates(subset=[sa])
+    partner_totals = pairs.groupby(sb)["_count"].sum().sort_values(ascending=False)
+    partner_pos = {p: i for i, p in enumerate(partner_totals.index)}
+    best["_pord"] = best[sb].map(partner_pos)
+    best = best.sort_values(["_pord", "whole_FET"])
+    ordered = best[sa].tolist()
+    # any scaffold that didn't get a partner row keeps a deterministic
+    # tail position so we don't drop it from the plot.
+    leftover = [s for s in rbhdf[sa].unique() if s not in set(ordered)]
+    return ordered + leftover
+
+
+def _scaffold_anchor_positions(rbhdf, this_scaf_col, ref_scaf_col,
+                               ref_chromorder, this_chromIx_col=None,
+                               ref_chromIx_col=None):
+    """Return a dict scaf -> sorted list of float positions of this
+    scaffold's orthologs as seen on the reference (already-ordered)
+    species, where a float position is (ref_chrom_slot + within-chrom
+    fraction). If chromIx columns are absent, falls back to using the
+    chrom slot only (no within-chrom resolution)."""
+    sub = rbhdf[rbhdf[ref_scaf_col].isin(ref_chromorder)].copy()
+    if sub.empty:
+        return {}
+    sub["_ref_slot"] = sub[ref_scaf_col].map(ref_chromorder).astype(float)
+    if ref_chromIx_col is not None and ref_chromIx_col in sub.columns:
+        sizes = sub.groupby(ref_scaf_col)[ref_chromIx_col].transform("max").replace(0, 1) + 1
+        sub["_ref_pos"] = sub["_ref_slot"] + sub[ref_chromIx_col] / sizes
+    else:
+        sub["_ref_pos"] = sub["_ref_slot"]
+    out = {}
+    for scaf, grp in sub.groupby(this_scaf_col, sort=False):
+        out[scaf] = grp["_ref_pos"].tolist()
+    return out
+
+
+def _detangle_one_side(sp, ref_sp, rbhdf, sp_to_chromorder, sp_to_genesdfs,
+                       method, kept_scafs):
+    """Decide the order of *sp*'s scaffolds using anchor positions on
+    *ref_sp* (already ordered). Returns a list of sp's scaffolds in the
+    chosen order. `method` is one of:
+      barycenter    - sort by mean ref position
+      median        - sort by median ref position
+    `kept_scafs` restricts the result to that set (used for parity with
+    _quality_check_chromosome_list, which filters by minscafsize)."""
+    this_scaf_col = "{}_scaf".format(sp)
+    ref_scaf_col  = "{}_scaf".format(ref_sp)
+    ref_chromIx_col = "{}_chromIx".format(ref_sp) if "{}_chromIx".format(ref_sp) in rbhdf.columns else None
+    df = rbhdf[[this_scaf_col, ref_scaf_col]].copy()
+    if ref_chromIx_col is None:
+        # Recover ref-side rank from the genesdf if present.
+        gdf = sp_to_genesdfs.get(ref_sp)
+        if gdf is not None and "{}_chromIx".format(ref_sp) in gdf.columns:
+            gene_col = "{}_gene".format(ref_sp)
+            if gene_col in rbhdf.columns:
+                df[gene_col] = rbhdf[gene_col]
+                df = df.merge(gdf[[gene_col, "{}_chromIx".format(ref_sp)]],
+                              on=gene_col, how="left")
+                ref_chromIx_col = "{}_chromIx".format(ref_sp)
+    anchors = _scaffold_anchor_positions(
+        df, this_scaf_col, ref_scaf_col, sp_to_chromorder[ref_sp],
+        ref_chromIx_col=ref_chromIx_col)
+
+    import statistics
+    scores = {}
+    for scaf, positions in anchors.items():
+        if not positions:
+            continue
+        if method == "median":
+            scores[scaf] = statistics.median(positions)
+        else:  # barycenter / mean
+            scores[scaf] = sum(positions) / len(positions)
+    # scaffolds with no orthologs on the reference get pushed to the end,
+    # preserving their relative order among themselves.
+    ordered  = sorted(scores.keys(), key=lambda s: (scores[s], s))
+    leftover = [s for s in rbhdf[this_scaf_col].unique() if s not in scores]
+    candidates = ordered + leftover
+    return [s for s in candidates if s in kept_scafs]
+
+
+def _crossings_between(sp_top, sp_bot, rbhdf, sp_to_chromorder,
+                       sp_to_genesdfs):
+    """Total bezier-line crossings between two species given their
+    current sp_to_chromorder. Inversion count between top-x and bottom-x
+    ranks of every line, ordering within a chromosome resolved by the
+    gene-rank (chromIx) so two lines on the same top scaffold don't tie."""
+    tcol = "{}_scaf".format(sp_top); bcol = "{}_scaf".format(sp_bot)
+    tg   = "{}_gene".format(sp_top); bg   = "{}_gene".format(sp_bot)
+    df = rbhdf[[tcol, bcol, tg, bg]].copy()
+    df = df[df[tcol].isin(sp_to_chromorder[sp_top])
+            & df[bcol].isin(sp_to_chromorder[sp_bot])]
+    if df.empty:
+        return 0
+    t_rank = dict(zip(sp_to_genesdfs[sp_top][tg],
+                      sp_to_genesdfs[sp_top]["{}_chromIx".format(sp_top)]))
+    b_rank = dict(zip(sp_to_genesdfs[sp_bot][bg],
+                      sp_to_genesdfs[sp_bot]["{}_chromIx".format(sp_bot)]))
+    t_sz = sp_to_genesdfs[sp_top].groupby(tcol).size().to_dict()
+    b_sz = sp_to_genesdfs[sp_bot].groupby(bcol).size().to_dict()
+    df["_tr"] = df[tg].map(t_rank); df["_br"] = df[bg].map(b_rank)
+    df = df.dropna(subset=["_tr", "_br"])
+    df["_tp"] = df[tcol].map(sp_to_chromorder[sp_top]).astype(float) \
+                + df["_tr"] / df[tcol].map(t_sz)
+    df["_bp"] = df[bcol].map(sp_to_chromorder[sp_bot]).astype(float) \
+                + df["_br"] / df[bcol].map(b_sz)
+    df = df.sort_values("_tp", kind="mergesort")
+    return _count_inversions(df["_bp"].tolist())
+
+
+def _greedy_swap_polish(species_order, rbh_df_list,
+                        sp_pair_to_rbh_df_list_index,
+                        sp_to_chromorder, sp_to_genesdfs,
+                        max_passes=6):
+    """Adjacent-swap polish over every species. For each row, try
+    swapping every pair of neighboring chromosomes; if the sum of
+    crossings against the row above and the row below drops, keep the
+    swap. Repeat until a pass yields no improvement or max_passes."""
+    def pair_crossings(sp, neighbor):
+        if neighbor is None:
+            return 0
+        lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([sp, neighbor]))]
+        return _crossings_between(neighbor, sp, rbh_df_list[lookup],
+                                  sp_to_chromorder, sp_to_genesdfs) \
+               if neighbor == species_order[species_order.index(sp) - 1] \
+               else _crossings_between(sp, neighbor, rbh_df_list[lookup],
+                                       sp_to_chromorder, sp_to_genesdfs)
+
+    for _ in range(max_passes):
+        improved = False
+        for i, sp in enumerate(species_order):
+            above = species_order[i - 1] if i > 0 else None
+            below = species_order[i + 1] if i + 1 < len(species_order) else None
+            order = sorted(sp_to_chromorder[sp].keys(),
+                           key=lambda s: sp_to_chromorder[sp][s])
+            j = 0
+            while j < len(order) - 1:
+                a, b = order[j], order[j + 1]
+                cur = pair_crossings(sp, above) + pair_crossings(sp, below)
+                sp_to_chromorder[sp][a] = j + 1
+                sp_to_chromorder[sp][b] = j
+                new = pair_crossings(sp, above) + pair_crossings(sp, below)
+                if new < cur:
+                    order[j], order[j + 1] = b, a
+                    improved = True
+                else:
+                    sp_to_chromorder[sp][a] = j
+                    sp_to_chromorder[sp][b] = j + 1
+                j += 1
+        if not improved:
+            break
+    return sp_to_chromorder
 
 
 def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy):
@@ -391,9 +606,19 @@ def ribbon_plot(species_order, rbh_filelist,
                     templist = sorted(list(rbh_df_list[i]["{}_scaf".format(sp)].unique()))
                 else:
                     templist = sp_to_gene_order[sp]
-            elif chr_sort_order in ["optimal-size", "optimal-random"]:
-                # make a sort of descending size of genes on the pairwise comparisons
-                templist = list(rbh_df_list[i]["{}_scaf".format(sp)].value_counts().index)
+            elif chr_sort_order in ["optimal-size", "optimal-random"] \
+                  or chr_sort_order in _DETANGLE_MODES:
+                # Top species seed. Plain value_counts() ignores partner
+                # identity, so two top-row chromosomes that both map to
+                # the same row-2 chromosome could end up scattered, and
+                # the cascade below can't fix that. Seed the top row
+                # from FET-significant best-partner clusters in row 2
+                # instead (odp issue #127).
+                if len(species_order) > 1:
+                    templist = _seed_top_order_from_partner(
+                        sp, species_order[1], rbh_df_list[i])
+                else:
+                    templist = list(rbh_df_list[i]["{}_scaf".format(sp)].value_counts().index)
                 if sp in sp_to_gene_order:
                     # append the chromosomes that are in the config file but not in the rbh file
                     for x in sp_to_gene_order[sp]:
@@ -417,6 +642,17 @@ def ribbon_plot(species_order, rbh_filelist,
                     templist = sp_to_gene_order[sp]
             elif (chr_sort_order == "optimal-chr-or") and (sp in sp_to_gene_order):
                     templist = sp_to_gene_order[sp]
+            elif chr_sort_order in _DETANGLE_MODES:
+                # detangle by anchor position on the species directly above
+                prevsp = species_order[i - 1]
+                method = ("median" if chr_sort_order == "optimal-median"
+                          else "barycenter")
+                kept = set(rbh_df_list[lookup_index]["{}_scaf".format(sp)].unique())
+                if sp in sp_to_gene_order:
+                    kept |= set(sp_to_gene_order[sp])
+                templist = _detangle_one_side(sp, prevsp, rbh_df_list[lookup_index],
+                                              sp_to_chromorder, sp_to_genesdfs,
+                                              method, kept)
             else:
                 # we optimize every other case
                 prevsp = species_order[i-1]
@@ -428,6 +664,41 @@ def ribbon_plot(species_order, rbh_filelist,
                                                   sp_to_gene_order, sp_min_chr_size)
         sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
         #print(sp, sp_to_chromorder)
+
+    # Iterated barycenter / median sweeps. The top-down pass above already
+    # set an initial ordering. Now we sweep bottom-up and top-down again
+    # using the *neighbor* row's positions, alternating until no change
+    # or max_passes. Each species's first scaffold is held to the row's
+    # current top so we don't drift the whole plot sideways.
+    if chr_sort_order == "optimal-barycenter-iter":
+        for _ in range(8):
+            changed = False
+            for direction in (-1, +1):
+                rng = range(len(species_order) - 2, 0, -1) if direction == -1 \
+                      else range(1, len(species_order) - 1)
+                for i in rng:
+                    sp = species_order[i]
+                    ref = species_order[i + direction]
+                    lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([sp, ref]))]
+                    new = _detangle_one_side(sp, ref, rbh_df_list[lookup],
+                                             sp_to_chromorder, sp_to_genesdfs,
+                                             "barycenter",
+                                             set(sp_to_chromorder[sp].keys()))
+                    cur = sorted(sp_to_chromorder[sp].keys(),
+                                 key=lambda s: sp_to_chromorder[sp][s])
+                    if new != cur:
+                        changed = True
+                        sp_to_chromorder[sp] = {s: k for k, s in enumerate(new)}
+            if not changed:
+                break
+
+    # Greedy adjacent-swap polish. Runs on top of whichever method built
+    # the ordering. Keeps swaps that reduce the sum of crossings against
+    # the row above and the row below.
+    if chr_sort_order == "optimal-swap":
+        sp_to_chromorder = _greedy_swap_polish(species_order, rbh_df_list,
+                                               sp_pair_to_rbh_df_list_index,
+                                               sp_to_chromorder, sp_to_genesdfs)
 
     # There is an edge case where, if we used option "optimal-chr-or", but the 0th through nth species weren't
     #  in the chromosome order, we need to optimize the species in reverse order
@@ -780,32 +1051,43 @@ def ribbon_plot(species_order, rbh_filelist,
                          tr["alpha"],
                          i, i+1)
 
-    # Now we plot all the chroms
+    # Now we plot all the chroms. Each chromosome is drawn as a chevron-
+    # tipped bar (when show_orientation_marks is True): the bar IS the
+    # arrow rather than a bar + separate triangle, so dense plots stay
+    # readable. Labels are rotated 90 degrees and trimmed to drop the
+    # long common prefix shared by an assembly's scaffolds (e.g. all
+    # "NC_05" prefix), so the distinguishing tail is left.
     for i in range(len(species_order)):
         sp = species_order[i]
         flip_map = sp_to_chrom_flip.get(sp, {})
+        all_chroms = list(sp_to_chromdf[sp]["chrom"])
+        short_label = _shorten_chrom_labels(all_chroms)
         for index, row in sp_to_chromdf[sp].iterrows():
             flipped = bool(flip_map.get(row["chrom"], False))
-            # plot the line and the text
+            label   = short_label.get(row["chrom"], row["chrom"])
+            # chromosome-coordinate panel
             x1 = row["chrPlotOffset"]
             x2 = row["chrPlotOffset"] + row["chrPlotPercent"]
-            pChr.plot([x1,x2],[i,i],'k-')
-            pChr.text(x1, i-0.03, row["chrom"],  ha="left", va = "bottom", fontsize =5)
             if show_orientation_marks:
-                # Triangle at the fasta-3' end of the chromosome. Pointing
-                # right => scaffold drawn in fasta-forward direction.
-                # Pointing left => scaffold drawn reversed. Lets a viewer
-                # tell plot orientation from fasta orientation at a glance
-                # (odp issue #127).
-                _draw_orientation_arrow(pChr, x1, x2, i, flipped)
+                _draw_oriented_bar(pChr, x1, x2, i, flipped)
+            else:
+                pChr.plot([x1, x2], [i, i], "k-")
+            # Label anchored left-of and just above the chromosome bar's
+            # left end, rotated 90 degrees CCW. With rotation_mode='anchor'
+            # the rotated bbox's bottom-left sits at the anchor, so the
+            # label extends up-and-to-the-right above the bar.
+            pChr.text(x1 - 0.008, i - 0.05, label, ha="left", va="top",
+                      fontsize=5, rotation=90, rotation_mode="anchor")
 
-            # plot the line and text for the index plot
+            # rbh-gene-coordinate panel
             x1 = row["ixPlotOffset"]
             x2 = row["ixPlotOffset"] + row["ixPlotPercent"]
-            pIx.plot([x1,x2],[i,i],'k-')
-            pIx.text(x1, i-0.03, row["chrom"], ha="left", va = "bottom", fontsize = 4)
             if show_orientation_marks:
-                _draw_orientation_arrow(pIx, x1, x2, i, flipped)
+                _draw_oriented_bar(pIx, x1, x2, i, flipped)
+            else:
+                pIx.plot([x1, x2], [i, i], "k-")
+            pIx.text(x1 - 0.008, i - 0.05, label, ha="left", va="top",
+                     fontsize=4, rotation=90, rotation_mode="anchor")
 
     # flip the y axes
     for p in [pChr, pIx]:
@@ -814,7 +1096,8 @@ def ribbon_plot(species_order, rbh_filelist,
             p.spines[side].set_visible(False)
         # set the limits
         p.set_xlim([-0.02,1.02])
-        p.set_ylim([-0.03,len(species_order)-1+0.03])
+        # Extra slack at top and bottom for rotated scaffold labels.
+        p.set_ylim([-0.03, len(species_order) - 1 + 0.55])
         # flip the axes
         p.set_ylim(p.get_ylim()[::-1])
         # set the axis labels
