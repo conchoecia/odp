@@ -273,6 +273,329 @@ _DETANGLE_MODES = {"optimal-barycenter", "optimal-barycenter-iter",
                    "optimal-median", "optimal-swap"}
 
 
+def _build_fet_lg_clusters(species_order, rbh_df_list, top_k=1):
+    """Build a chromosome-level graph from every adjacent-row RBH:
+    nodes are (species, scaffold) tuples, edges are kept only when
+    they are *mutual best* (each side's top-k FET-strongest partner
+    list contains the other) AND have whole_FET <= 0.05. With top_k=1
+    each chrom links to at most one chrom per neighboring species,
+    which keeps the graph sparse enough that one homology block per
+    component falls out cleanly even on data with universal trace
+    similarity. top_k>1 accommodates fission events where a single
+    ancestral chrom split into k pieces in one lineage.
+
+    Returns
+        node_to_cluster : {(sp, scaf): cluster_id}
+        cluster_size    : {cluster_id: int}
+        cluster_weight  : {cluster_id: total edge weight}
+    where clusters are connected components ordered by total weight
+    descending.
+
+    Two Cydia chroms whose only sharp link is to the same Bombyx
+    chrom (an in-Bombyx fusion of two ancestral LGs) end up in the
+    same component via that Bombyx node, even though their dominant
+    ALG labels differ. This is the case the per-scaffold
+    gene_group-mode approach misses; the FET-graph captures it.
+    """
+    from collections import defaultdict
+    adj = defaultdict(set)
+    edge_w = {}
+    # Per-pair top-K partner table, kept for the orphan-rescue pass.
+    per_pair_data = []
+    all_nodes = set()
+    for df in rbh_df_list:
+        if "whole_FET" not in df.columns:
+            continue
+        species_scaf_cols = [c for c in df.columns if c.endswith("_scaf")]
+        sps = [c[:-5] for c in species_scaf_cols]
+        if len(sps) != 2:
+            continue
+        sa, sb = sps
+        sca, scb = "{}_scaf".format(sa), "{}_scaf".format(sb)
+        sig = df[df["whole_FET"] <= 0.05]
+        if sig.empty:
+            continue
+        grp = sig.groupby([sca, scb]).agg(
+            count=("whole_FET", "size"),
+            best_FET=("whole_FET", "min")).reset_index()
+        a_top = (grp.sort_values([sca, "best_FET"])
+                    .groupby(sca, sort=False).head(top_k))
+        b_top = (grp.sort_values([scb, "best_FET"])
+                    .groupby(scb, sort=False).head(top_k))
+        a_pairs = set(zip(a_top[sca], a_top[scb]))
+        b_pairs = set(zip(b_top[sca], b_top[scb]))
+        # Strict mutual best (intersection of top-1 lists).
+        edges = a_pairs & b_pairs
+        for (ca, cb) in edges:
+            na = (sa, ca); nb = (sb, cb)
+            adj[na].add(nb); adj[nb].add(na)
+            cnt = int(grp.loc[(grp[sca] == ca) & (grp[scb] == cb), "count"].iloc[0])
+            edge_w[(na, nb)] = edge_w[(nb, na)] = cnt
+        for s in set(grp[sca].unique()):
+            all_nodes.add((sa, s))
+        for s in set(grp[scb].unique()):
+            all_nodes.add((sb, s))
+        per_pair_data.append((sa, sb, grp, a_top, b_top))
+
+    # Global orphan rescue: chromosomes that received no mutual-best
+    # edge anywhere in the graph need one attachment so they don't
+    # form singleton "clusters" placed far from their biological
+    # siblings. Restricting the rescue to fully-orphan nodes (no
+    # edges in any pair) prevents a chrom that already lives in an
+    # LG component on one side of the plot from accidentally
+    # bridging two distinct LG components on the other side via a
+    # fusion hub. Each orphan gets a single edge to its single
+    # FET-strongest partner observed across all adjacent-pair RBHs.
+    connected = set(adj.keys())
+    orphans = all_nodes - connected
+    for sp, scaf in orphans:
+        best = None  # (count, FET, partner_sp, partner_scaf)
+        for (sa, sb, grp, a_top, b_top) in per_pair_data:
+            if sp == sa:
+                row = a_top[a_top["{}_scaf".format(sa)] == scaf]
+                if row.empty:
+                    continue
+                partner = row["{}_scaf".format(sb)].iloc[0]
+                cnt = int(grp.loc[(grp["{}_scaf".format(sa)] == scaf)
+                                  & (grp["{}_scaf".format(sb)] == partner),
+                                  "count"].iloc[0])
+                fet = float(grp.loc[(grp["{}_scaf".format(sa)] == scaf)
+                                    & (grp["{}_scaf".format(sb)] == partner),
+                                    "best_FET"].iloc[0])
+                if best is None or fet < best[1]:
+                    best = (cnt, fet, sb, partner)
+            elif sp == sb:
+                row = b_top[b_top["{}_scaf".format(sb)] == scaf]
+                if row.empty:
+                    continue
+                partner = row["{}_scaf".format(sa)].iloc[0]
+                cnt = int(grp.loc[(grp["{}_scaf".format(sa)] == partner)
+                                  & (grp["{}_scaf".format(sb)] == scaf),
+                                  "count"].iloc[0])
+                fet = float(grp.loc[(grp["{}_scaf".format(sa)] == partner)
+                                    & (grp["{}_scaf".format(sb)] == scaf),
+                                    "best_FET"].iloc[0])
+                if best is None or fet < best[1]:
+                    best = (cnt, fet, sa, partner)
+        if best is None:
+            continue
+        cnt, _, partner_sp, partner_scaf = best
+        na = (sp, scaf); nb = (partner_sp, partner_scaf)
+        adj[na].add(nb); adj[nb].add(na)
+        edge_w[(na, nb)] = edge_w[(nb, na)] = cnt
+    visited = set()
+    clusters = []
+    for node in adj:
+        if node in visited:
+            continue
+        stack = [node]
+        comp = []
+        while stack:
+            n = stack.pop()
+            if n in visited:
+                continue
+            visited.add(n)
+            comp.append(n)
+            stack.extend(adj[n])
+        clusters.append(comp)
+
+    def cluster_weight(c):
+        s = set(c)
+        return sum(w for (a, b), w in edge_w.items()
+                   if a in s and b in s) // 2
+
+    clusters.sort(key=cluster_weight, reverse=True)
+    raw_node_to_cluster = {}
+    for i, c in enumerate(clusters):
+        for n in c:
+            raw_node_to_cluster[n] = i
+
+    # Cross-cluster edge weights, built from EVERY FET-significant
+    # pair (not just mutual-best). This is what surfaces fusion /
+    # fission relationships: two Cydia chroms in different clusters
+    # that both link to the same Bombyx chrom will have a strong
+    # cross-cluster signal via that Bombyx node, which gets used by
+    # the cluster ordering below to keep them plot-adjacent.
+    from collections import Counter
+    cross = Counter()
+    for df in rbh_df_list:
+        if "whole_FET" not in df.columns:
+            continue
+        scaf_cols = [c for c in df.columns if c.endswith("_scaf")]
+        sps = [c[:-5] for c in scaf_cols]
+        if len(sps) != 2:
+            continue
+        sa, sb = sps
+        sca, scb = "{}_scaf".format(sa), "{}_scaf".format(sb)
+        sig = df[df["whole_FET"] <= 0.05]
+        if sig.empty:
+            continue
+        grp = sig.groupby([sca, scb]).size().reset_index(name="count")
+        for _, r in grp.iterrows():
+            na = (sa, r[sca]); nb = (sb, r[scb])
+            ca = raw_node_to_cluster.get(na)
+            cb = raw_node_to_cluster.get(nb)
+            if ca is None or cb is None or ca == cb:
+                continue
+            key = (min(ca, cb), max(ca, cb))
+            cross[key] += int(r["count"])
+
+    # Greedy nearest-neighbor cluster ordering: start from the largest
+    # cluster, append the unselected cluster with the strongest edge
+    # to the most-recently-placed cluster (cluster-weight tiebreak).
+    # This puts clusters that share fusion/fission links next to each
+    # other in the final plot.
+    cluster_ids = list(range(len(clusters)))
+    cw = {i: cluster_weight(c) for i, c in enumerate(clusters)}
+    if cluster_ids:
+        ordered_ids = [max(cluster_ids, key=lambda i: cw[i])]
+        remaining = set(cluster_ids) - {ordered_ids[0]}
+        while remaining:
+            last = ordered_ids[-1]
+            def score(j):
+                key = (min(last, j), max(last, j))
+                return (cross.get(key, 0), cw[j])
+            nxt = max(remaining, key=score)
+            ordered_ids.append(nxt)
+            remaining.discard(nxt)
+        # remap to dense ids in plot order
+        remap = {old: new for new, old in enumerate(ordered_ids)}
+    else:
+        remap = {}
+
+    node_to_cluster = {n: remap[c] for n, c in raw_node_to_cluster.items()}
+    cluster_size = {remap[i]: len(clusters[i]) for i in range(len(clusters))}
+    cluster_wt   = {remap[i]: cw[i] for i in range(len(clusters))}
+    return node_to_cluster, cluster_size, cluster_wt
+
+
+def _order_by_lg(species_order, rbh_df_list, sp_to_chr_to_size,
+                 sp_min_chr_size, sp_to_gene_order, sp_pair_to_rbh_df_list_index):
+    """Per-species scaffold ordering built from a global FET-graph LG
+    assignment (_build_fet_lg_clusters) PLUS a within-cluster cascade
+    that uses FET-best-partner so siblings sharing a downstream chrom
+    stay adjacent. Cluster id is the primary sort key (so all members
+    of one synteny linkage group share an x-region across every row);
+    within a cluster, ordering is the same FET-best-partner heuristic
+    the row-by-row cascade uses, but restricted to that cluster's
+    chromosomes so it can't pull partners from a different LG.
+
+    Scaffolds with no FET-significant edges fall to the end, sorted
+    by chrom size descending.
+    """
+    node_to_cluster, cluster_size, cluster_weight = \
+        _build_fet_lg_clusters(species_order, rbh_df_list)
+    cluster_ids_sorted = sorted(cluster_size.keys())
+
+    def all_scafs_of(sp):
+        out = set()
+        for df in rbh_df_list:
+            sc = "{}_scaf".format(sp)
+            if sc in df.columns:
+                out.update(df[sc].unique())
+        return out
+
+    sp_to_chromorder = {}
+    for i, sp in enumerate(species_order):
+        # bucket this species' scaffolds by cluster id
+        by_cluster = {cid: [] for cid in cluster_ids_sorted}
+        untagged = []
+        for s in all_scafs_of(sp):
+            cid = node_to_cluster.get((sp, s))
+            if cid is None:
+                untagged.append(s)
+            else:
+                by_cluster[cid].append(s)
+
+        # for each cluster, run the FET-best-partner cascade restricted
+        # to that cluster's chromosomes. The top row uses row 1 as the
+        # anchor; every other row uses the row directly above (already
+        # ordered).
+        ordered_in_clusters = []
+        for cid in cluster_ids_sorted:
+            members = set(by_cluster[cid])
+            if not members:
+                continue
+            if i == 0 and len(species_order) > 1:
+                ref_sp = species_order[1]
+                ref_members = {s for s in all_scafs_of(ref_sp)
+                               if node_to_cluster.get((ref_sp, s)) == cid}
+                sub = _seed_top_order_within(
+                    sp, ref_sp, rbh_df_list[0], members, ref_members)
+            elif i == 0:
+                sub = sorted(members)
+            else:
+                prev_sp = species_order[i - 1]
+                lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([sp, prev_sp]))]
+                prev_members = {s for s in all_scafs_of(prev_sp)
+                                if node_to_cluster.get((prev_sp, s)) == cid}
+                sub = _cascade_within(
+                    sp, prev_sp, rbh_df_list[lookup],
+                    members, prev_members, sp_to_chromorder)
+            ordered_in_clusters.extend(sub)
+
+        # untagged scaffolds sit at the tail, sorted by chromsize desc
+        sized = sp_to_chr_to_size.get(sp, {})
+        untagged.sort(key=lambda s: -sized.get(s, 0))
+        ordered = ordered_in_clusters + untagged
+        ordered = _quality_check_chromosome_list(
+            sp, ordered, sp_to_chr_to_size,
+            sp_to_gene_order, sp_min_chr_size)
+        sp_to_chromorder[sp] = {s: k for k, s in enumerate(ordered)}
+    return sp_to_chromorder
+
+
+def _seed_top_order_within(sp, partner_sp, rbhdf, members, partner_members):
+    """Within-cluster top-row seeding. Same idea as
+    _seed_top_order_from_partner but restricted to a specific subset
+    of `sp` and `partner_sp` chromosomes (one cluster). Groups sp
+    members by best partner_sp partner; orders partner groups by total
+    shared ortholog count desc; within a group, by FET asc."""
+    sa = "{}_scaf".format(sp)
+    sb = "{}_scaf".format(partner_sp)
+    df = rbhdf[rbhdf[sa].isin(members) & rbhdf[sb].isin(partner_members)]
+    if df.empty:
+        return sorted(members)
+    counts = df.groupby([sa, sb]).size().reset_index(name="_count")
+    fets   = df.groupby([sa, sb])["whole_FET"].min().reset_index() \
+             if "whole_FET" in df.columns else None
+    if fets is None:
+        counts["whole_FET"] = 0.0
+        pairs = counts
+    else:
+        pairs = counts.merge(fets, on=[sa, sb])
+    best = pairs.sort_values([sa, "whole_FET"]).drop_duplicates(subset=[sa])
+    partner_totals = pairs.groupby(sb)["_count"].sum().sort_values(ascending=False)
+    partner_pos = {p: i for i, p in enumerate(partner_totals.index)}
+    best["_pord"] = best[sb].map(partner_pos)
+    best = best.sort_values(["_pord", "whole_FET"])
+    ordered = best[sa].tolist()
+    leftover = [s for s in members if s not in set(ordered)]
+    return ordered + leftover
+
+
+def _cascade_within(sp, prev_sp, rbhdf, members, prev_members, sp_to_chromorder):
+    """Within-cluster cascade for non-top rows. For each sp chromosome
+    in `members`, pick its FET-best partner among prev_sp's
+    `prev_members`; order sp members by that partner's position in
+    sp_to_chromorder[prev_sp], tiebreak by FET. Mirrors
+    _optimize_spA_based_on_rbh, but restricted to one cluster on each
+    side so it cannot drag siblings across LG boundaries."""
+    sa = "{}_scaf".format(sp)
+    sb = "{}_scaf".format(prev_sp)
+    df = rbhdf[rbhdf[sa].isin(members) & rbhdf[sb].isin(prev_members)]
+    if df.empty:
+        return sorted(members)
+    df = df[[sa, sb, "whole_FET"]].copy()
+    df = df.sort_values([sa, "whole_FET"]).drop_duplicates(subset=[sa])
+    df["_pos"] = df[sb].map(sp_to_chromorder[prev_sp])
+    df = df.dropna(subset=["_pos"])
+    df = df.sort_values(["_pos", "whole_FET"]).reset_index(drop=True)
+    ordered = df[sa].tolist()
+    leftover = [s for s in members if s not in set(ordered)]
+    return ordered + leftover
+
+
 def _seed_top_order_from_partner(sp, partner_sp, rbhdf):
     """Top-row ordering that respects FET-significant chromosome
     relationships with the second species. Chromosomes of the top
@@ -449,6 +772,90 @@ def _greedy_swap_polish(species_order, rbh_df_list,
     return sp_to_chromorder
 
 
+def _iterative_order_propagation(species_order, rbh_df_list,
+                                 sp_pair_to_rbh_df_list_index,
+                                 sp_to_chromorder, sp_to_gene_order,
+                                 sp_to_chr_to_size, sp_min_chr_size,
+                                 sp_to_genesdfs, max_passes=10):
+    """Bidirectional FET-best-partner sweep over the whole stack.
+    The one-pass top-down cascade fixes only the relationship between
+    each row and the row directly above it. A change in row k that
+    needs to propagate up to row 0 (or vice versa) is invisible to it
+    — exactly the case the user pointed out: CM/518.1 / CM/525.1 line
+    up for the top three species but diverge by row 4, and fixing it
+    means dragging row-4 scaffolds, flipping one, then propagating
+    rows 3 -> 2 -> 1.
+
+    Each pass alternates direction. Within a direction, every interior
+    row is re-ordered with `_optimize_spA_based_on_rbh` using the
+    currently-pinned neighbor on the other side as anchor; the top
+    row is re-seeded with `_seed_top_order_from_partner` using row 1
+    as anchor. We score after each pass with the same crossing-count
+    metric the flip optimizer uses and keep the best-seen ordering,
+    so an oscillation between two equally-good orderings doesn't
+    leave us worse off.
+    """
+    def order_list(sp):
+        return [s for s, _ in sorted(sp_to_chromorder[sp].items(),
+                                     key=lambda x: x[1])]
+    def total_crossings():
+        total = 0
+        for k in range(len(species_order) - 1):
+            a, b = species_order[k], species_order[k + 1]
+            lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([a, b]))]
+            total += _crossings_between(a, b, rbh_df_list[lookup],
+                                        sp_to_chromorder, sp_to_genesdfs)
+        return total
+    best_orders = {sp: dict(sp_to_chromorder[sp]) for sp in species_order}
+    best_score  = total_crossings()
+    no_improve  = 0
+    for _ in range(max_passes):
+        any_change = False
+        for direction in (-1, +1):
+            rng = (range(len(species_order) - 2, 0, -1) if direction == -1
+                   else range(1, len(species_order)))
+            for i in rng:
+                sp = species_order[i]
+                ref_idx = i + direction
+                if not (0 <= ref_idx < len(species_order)):
+                    continue
+                ref = species_order[ref_idx]
+                lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([sp, ref]))]
+                new = _optimize_spA_based_on_rbh(
+                    sp, ref, rbh_df_list[lookup],
+                    sp_to_chromorder, sp_to_gene_order)
+                new = _quality_check_chromosome_list(
+                    sp, new, sp_to_chr_to_size,
+                    sp_to_gene_order, sp_min_chr_size)
+                if new != order_list(sp):
+                    sp_to_chromorder[sp] = {s: k for k, s in enumerate(new)}
+                    any_change = True
+            # re-seed the top row from row 1 every sub-sweep so a row-1
+            # reordering propagates to the very top.
+            if len(species_order) > 1:
+                top = species_order[0]
+                new_top = _seed_top_order_from_partner(
+                    top, species_order[1], rbh_df_list[0])
+                new_top = _quality_check_chromosome_list(
+                    top, new_top, sp_to_chr_to_size,
+                    sp_to_gene_order, sp_min_chr_size)
+                if new_top != order_list(top):
+                    sp_to_chromorder[top] = {s: k for k, s in enumerate(new_top)}
+                    any_change = True
+        cur = total_crossings()
+        if cur < best_score:
+            best_score  = cur
+            best_orders = {sp: dict(sp_to_chromorder[sp]) for sp in species_order}
+            no_improve = 0
+        else:
+            no_improve += 1
+        if not any_change or no_improve >= 2:
+            break
+    for sp in species_order:
+        sp_to_chromorder[sp] = best_orders[sp]
+    return sp_to_chromorder
+
+
 def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy):
     """
     Plot bezier curves between chromosome coordinates of different species.
@@ -590,10 +997,32 @@ def ribbon_plot(species_order, rbh_filelist,
             "{}_scaf".format(thissp)).cumcount()
         #print(sp_to_genesdfs[thissp])
 
+    # FET-graph LG mode short-circuits the row-by-row cascade. It
+    # builds one global synteny linkage graph from every adjacent-row
+    # RBH, partitions chromosomes into connected components, and
+    # orders each row by component id. Members of the same linkage
+    # group share an x-region across every species so ribbons run
+    # straight down. Handles in-row fusions/fissions correctly (two
+    # chroms of one species linked to the same chrom in another
+    # species end up in the same component even when their dominant
+    # ALG labels differ).
+    if chr_sort_order == "optimal-lg":
+        sp_to_chromorder = _order_by_lg(
+            species_order, rbh_df_list, sp_to_chr_to_size,
+            sp_min_chr_size, sp_to_gene_order,
+            sp_pair_to_rbh_df_list_index)
+        # iterate / cascade blocks below are bypassed by this early
+        # exit from the order-decision stage; pad sp_to_chromorder
+        # below for completeness.
     # This block is used for determining the chromosome order for the figure
-    sp_to_chromorder     = {}
+    sp_to_chromorder     = sp_to_chromorder if chr_sort_order == "optimal-lg" else {}
     print("species_order: {}".format(species_order))
-    for i in range(0, len(species_order)):
+    if chr_sort_order == "optimal-lg":
+        # skip the row-by-row cascade entirely
+        species_loop_range = []
+    else:
+        species_loop_range = range(0, len(species_order))
+    for i in species_loop_range:
         sp = species_order[i]
 
         templist = [] # templist is used to hold the chromosome order
@@ -720,6 +1149,19 @@ def ribbon_plot(species_order, rbh_filelist,
                 templist = _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size, sp_to_gene_order, sp_min_chr_size)
                 sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
                 first_optimized -= 1
+
+    # Iterative bidirectional FET-best-partner propagation. The plain
+    # top-down cascade above only relates each row to the row directly
+    # above it; chains of dependencies further down can't propagate up.
+    # We sweep top-down and bottom-up to fixed point (or best-seen, in
+    # case of oscillation between two equally good orderings). Runs
+    # only when an "optimal-*" sort mode is selected — the "custom"
+    # path is left untouched so user-supplied orderings stick.
+    if chr_sort_order not in ("custom", "optimal-lg") and len(species_order) > 1:
+        sp_to_chromorder = _iterative_order_propagation(
+            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+            sp_to_chromorder, sp_to_gene_order, sp_to_chr_to_size,
+            sp_min_chr_size, sp_to_genesdfs)
 
     # Decide per-scaffold plot direction (issue #127). The chromosome
     # ordering is now fixed; we only choose, for each scaffold, whether to
@@ -1072,11 +1514,9 @@ def ribbon_plot(species_order, rbh_filelist,
                 _draw_oriented_bar(pChr, x1, x2, i, flipped)
             else:
                 pChr.plot([x1, x2], [i, i], "k-")
-            # Label anchored left-of and just above the chromosome bar's
-            # left end, rotated 90 degrees CCW. With rotation_mode='anchor'
-            # the rotated bbox's bottom-left sits at the anchor, so the
-            # label extends up-and-to-the-right above the bar.
-            pChr.text(x1 - 0.008, i - 0.05, label, ha="left", va="top",
+            # Label anchored just left of and above the chromosome
+            # bar's left end, rotated 90 degrees CCW.
+            pChr.text(x1 - 0.005, i - 0.03, label, ha="left", va="top",
                       fontsize=5, rotation=90, rotation_mode="anchor")
 
             # rbh-gene-coordinate panel
@@ -1086,7 +1526,7 @@ def ribbon_plot(species_order, rbh_filelist,
                 _draw_oriented_bar(pIx, x1, x2, i, flipped)
             else:
                 pIx.plot([x1, x2], [i, i], "k-")
-            pIx.text(x1 - 0.008, i - 0.05, label, ha="left", va="top",
+            pIx.text(x1 - 0.005, i - 0.03, label, ha="left", va="top",
                      fontsize=4, rotation=90, rotation_mode="anchor")
 
     # flip the y axes

@@ -110,7 +110,7 @@ else:
     _allowed_chr_sort = ["custom", "optimal-top", "optimal-size",
                          "optimal-chr-or", "optimal-random",
                          "optimal-barycenter", "optimal-barycenter-iter",
-                         "optimal-median", "optimal-swap"]
+                         "optimal-median", "optimal-swap", "optimal-lg"]
     if config["chr_sort_order"] not in _allowed_chr_sort:
         sys.exit("ERROR: chr_sort_order must be one of < {} >. You provided {}.".format(
             " | ".join(_allowed_chr_sort), config["chr_sort_order"]))
