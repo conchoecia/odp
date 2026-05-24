@@ -44,7 +44,8 @@ def _count_inversions(seq):
 def _optimize_chrom_flips_top_down(species_order, rbh_df_list,
                                    sp_pair_to_rbh_df_list_index,
                                    sp_to_chromorder, sp_to_genesdfs,
-                                   max_passes=8, verbose=False):
+                                   max_passes=8, verbose=False,
+                                   initial_flip=None):
     """Decide, for every scaffold of every species, whether to plot it in the
     fasta-forward direction or reversed, so that the total number of
     ribbon-line crossings between each adjacent pair of species is
@@ -66,8 +67,19 @@ def _optimize_chrom_flips_top_down(species_order, rbh_df_list,
     Inter-scaffold crossings are dominated by chromosome *order*, not
     rotation, so the greedy global pass usually converges in 1–3 sweeps.
     """
-    sp_to_flip = {sp: {scaf: False for scaf in sp_to_chromorder[sp]}
-                  for sp in species_order}
+    # If the caller supplied an initial flip state, honor it (esp.
+    # the top row, which the rest of this function does NOT re-decide
+    # -- it only optimizes rows 1+). Otherwise start everything at
+    # False.
+    if initial_flip is not None:
+        sp_to_flip = {sp: dict(initial_flip.get(sp, {}))
+                      for sp in species_order}
+        for sp in species_order:
+            for scaf in sp_to_chromorder[sp]:
+                sp_to_flip[sp].setdefault(scaf, False)
+    else:
+        sp_to_flip = {sp: {scaf: False for scaf in sp_to_chromorder[sp]}
+                      for sp in species_order}
 
     for i in range(1, len(species_order)):
         topsp = species_order[i - 1]
@@ -150,6 +162,71 @@ def _optimize_chrom_flips_top_down(species_order, rbh_df_list,
             print("flip cascade {} -> {}: crossings={}, flipped={}".format(
                 topsp, botsp, cur,
                 sum(1 for v in flips.values() if v)))
+
+    # Final boundary pass: revisit EVERY chromosome in EVERY row
+    # (including row 0, which the cascade above skips) and try
+    # flipping it against the full crossing count. Row 0 was
+    # otherwise pinned forward forever -- if e.g. Plutella CM/509.1
+    # would reduce total crossings when flipped, this is where we
+    # catch it. We also re-visit the inner rows because the
+    # cascade-greedy order may have missed flips that only pay off
+    # once the rows below have settled into their final order.
+    def _eval_pair(top_sp, bot_sp):
+        lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([top_sp, bot_sp]))]
+        df_in = rbh_df_list[lookup]
+        tc, bc = "{}_scaf".format(top_sp), "{}_scaf".format(bot_sp)
+        tg, bg = "{}_gene".format(top_sp), "{}_gene".format(bot_sp)
+        m = df_in[tc].isin(sp_to_chromorder[top_sp]) & df_in[bc].isin(sp_to_chromorder[bot_sp])
+        d = df_in.loc[m].copy()
+        trk = dict(zip(sp_to_genesdfs[top_sp][tg],
+                       sp_to_genesdfs[top_sp]["{}_chromIx".format(top_sp)]))
+        brk = dict(zip(sp_to_genesdfs[bot_sp][bg],
+                       sp_to_genesdfs[bot_sp]["{}_chromIx".format(bot_sp)]))
+        tsz = sp_to_genesdfs[top_sp].groupby(tc).size().to_dict()
+        bsz = sp_to_genesdfs[bot_sp].groupby(bc).size().to_dict()
+        d["_tr"] = d[tg].map(trk); d["_br"] = d[bg].map(brk)
+        d = d.dropna(subset=["_tr", "_br"])
+        if d.empty:
+            return 0.0
+        t_flip = sp_to_flip[top_sp]; b_flip = sp_to_flip[bot_sp]
+        d["_tsz"] = d[tc].map(tsz).astype(float)
+        d["_bsz"] = d[bc].map(bsz).astype(float)
+        d["_te"] = d.apply(lambda r: (r["_tsz"] - 1 - r["_tr"])
+                           if t_flip.get(r[tc], False) else r["_tr"], axis=1)
+        d["_be"] = d.apply(lambda r: (r["_bsz"] - 1 - r["_br"])
+                           if b_flip.get(r[bc], False) else r["_br"], axis=1)
+        d["_tp"] = d[tc].map(sp_to_chromorder[top_sp]).astype(float) + d["_te"] / d["_tsz"]
+        d["_bp"] = d[bc].map(sp_to_chromorder[bot_sp]).astype(float) + d["_be"] / d["_bsz"]
+        d = d.sort_values("_tp", kind="mergesort")
+        return _count_inversions(d["_bp"].tolist())
+
+    pair_cache = {k: _eval_pair(species_order[k], species_order[k + 1])
+                  for k in range(len(species_order) - 1)}
+
+    def _rescore_neighbors(sp_idx):
+        if sp_idx > 0:
+            pair_cache[sp_idx - 1] = _eval_pair(species_order[sp_idx - 1],
+                                                species_order[sp_idx])
+        if sp_idx < len(species_order) - 1:
+            pair_cache[sp_idx] = _eval_pair(species_order[sp_idx],
+                                            species_order[sp_idx + 1])
+
+    cur_score = sum(pair_cache.values())
+    for _ in range(max_passes):
+        any_improvement = False
+        for sp_idx, sp in enumerate(species_order):
+            for scaf in list(sp_to_flip[sp].keys()):
+                sp_to_flip[sp][scaf] = not sp_to_flip[sp][scaf]
+                _rescore_neighbors(sp_idx)
+                new_score = sum(pair_cache.values())
+                if new_score < cur_score - 1e-9:
+                    cur_score = new_score
+                    any_improvement = True
+                else:
+                    sp_to_flip[sp][scaf] = not sp_to_flip[sp][scaf]
+                    _rescore_neighbors(sp_idx)
+        if not any_improvement:
+            break
 
     return sp_to_flip
 
@@ -922,6 +999,353 @@ def _score_pair_lines(records, top_order, bot_order, top_flip, bot_flip):
     return _fenwick_weighted_inversion(sorted_bot, sorted_w)
 
 
+def _brushing_sweep(species_order, rbh_df_list,
+                    sp_pair_to_rbh_df_list_index,
+                    sp_to_chromorder, sp_to_chrom_flip,
+                    sp_to_genesdfs, max_iters=50, verbose=False,
+                    snapshot_fn=None, patience=4,
+                    top_moves_per_iter=15,
+                    top_move_offsets=(1, 2, 3, 5),
+                    enable_bottom_up=True,
+                    bottom_moves_per_iter=15):
+    """Modified Sugiyama: FET-weighted barycenter sweeps alternating
+    top-down and bottom-up. After each direction the per-scaffold
+    flip cascade is re-run so chromosome orientation is re-checked
+    in the new positional context. The total bezier-crossing count
+    is logged after each direction, with flush so the user can see
+    convergence live.
+
+    Only FET-significant orthologs (whole_FET <= 0.05) contribute to
+    each barycenter; trace homology is ignored. A chromosome with no
+    significant partners keeps its existing position.
+
+    Best-seen state is tracked because the two directions can
+    disagree on a chromosome's ideal position (top says near anchor
+    X, bottom says near anchor Y). The function returns whichever
+    state had the lowest crossing count across all sweeps.
+
+    snapshot_fn, if supplied, is called as
+        snapshot_fn(gen, direction, sp_to_chromorder, sp_to_chrom_flip, crossings)
+    after each direction. Callers use this to render a PDF per brush
+    stroke so the convergence is visually inspectable.
+    """
+    line_data = _build_pair_anchor_data(
+        species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+        sp_to_genesdfs, fet_weight=1000.0)
+
+    def total_crossings():
+        total = 0.0
+        for k in range(len(species_order) - 1):
+            total += _score_pair_lines(
+                line_data[k],
+                sp_to_chromorder[species_order[k]],
+                sp_to_chromorder[species_order[k + 1]],
+                sp_to_chrom_flip[species_order[k]],
+                sp_to_chrom_flip[species_order[k + 1]])
+        return total
+
+    def barycenter_position(sp, anchor_sp, lookup_idx):
+        df = rbh_df_list[lookup_idx]
+        if "whole_FET" not in df.columns:
+            return {}
+        sa = "{}_scaf".format(sp); sb = "{}_scaf".format(anchor_sp)
+        ag = "{}_gene".format(anchor_sp)
+        sig = df[(df["whole_FET"] <= 0.05)
+                 & df[sa].isin(sp_to_chromorder[sp])
+                 & df[sb].isin(sp_to_chromorder[anchor_sp])]
+        if sig.empty:
+            return {}
+        anchor_rank = dict(zip(
+            sp_to_genesdfs[anchor_sp][ag],
+            sp_to_genesdfs[anchor_sp]["{}_chromIx".format(anchor_sp)]))
+        anchor_sz = sp_to_genesdfs[anchor_sp].groupby(sb).size().to_dict()
+        anchor_flip = sp_to_chrom_flip[anchor_sp]
+        anchor_pos_lookup = sp_to_chromorder[anchor_sp]
+        rows = sig.assign(
+            _ank=sig[ag].map(anchor_rank),
+            _asz=sig[sb].map(anchor_sz).astype(float),
+            _aslot=sig[sb].map(anchor_pos_lookup).astype(float))
+        rows = rows.dropna(subset=["_ank", "_asz", "_aslot"])
+        if rows.empty:
+            return {}
+        rows["_aeff"] = rows.apply(
+            lambda r: (r["_asz"] - 1 - r["_ank"])
+                      if anchor_flip.get(r[sb], False) else r["_ank"], axis=1)
+        rows["_apos"] = rows["_aslot"] + rows["_aeff"] / rows["_asz"]
+        return rows.groupby(sa)["_apos"].mean().to_dict()
+
+    initial = total_crossings()
+    if verbose:
+        print("brushing seed crossings: {:.0f}".format(initial), flush=True)
+    if snapshot_fn is not None:
+        snapshot_fn(0, "seed", sp_to_chromorder, sp_to_chrom_flip, initial)
+
+    best_score  = initial
+    best_orders = {sp: dict(sp_to_chromorder[sp]) for sp in species_order}
+    best_flips  = {sp: dict(sp_to_chrom_flip[sp]) for sp in species_order}
+
+    def snapshot_if_best(score):
+        nonlocal best_score, best_orders, best_flips
+        if score < best_score:
+            best_score = score
+            best_orders = {sp: dict(sp_to_chromorder[sp]) for sp in species_order}
+            best_flips  = {sp: dict(sp_to_chrom_flip[sp]) for sp in species_order}
+
+    prev = initial
+    stagnation = 0
+
+    def top_row_tension():
+        """Per-top-row-chrom score: sum of weights of lines emerging
+        from each top chrom into row 1, multiplied by the number of
+        crossings each line participates in. Heavy crossings on
+        bezier paths leaving a particular top chrom show up here -
+        the "knot" anchored at that chrom."""
+        top_sp = species_order[0]
+        recs = line_data[0]
+        top_order = sp_to_chromorder[top_sp]
+        bot_order = sp_to_chromorder[species_order[1]]
+        # gather (top_chrom, t_pos, b_pos, w)
+        items = []
+        for tchrom, bchrom, trk, brk, tsz, bsz, w in recs:
+            if tchrom not in top_order or bchrom not in bot_order:
+                continue
+            t_eff = (tsz - 1 - trk) if sp_to_chrom_flip[top_sp].get(tchrom, False) else trk
+            b_eff = (bsz - 1 - brk) if sp_to_chrom_flip[species_order[1]].get(bchrom, False) else brk
+            items.append((tchrom, top_order[tchrom] + t_eff/tsz,
+                          bot_order[bchrom] + b_eff/bsz, w))
+        items.sort(key=lambda x: x[1])
+        # for each item, count crossings = pairs (j<i with bot_j > bot_i)
+        tension = {tc: 0.0 for tc in top_order}
+        # naive O(L^2) is fine here (anchor data ~200 lines per pair)
+        for i in range(len(items)):
+            ti_c, ti_t, ti_b, ti_w = items[i]
+            for j in range(i):
+                tj_c, tj_t, tj_b, tj_w = items[j]
+                if tj_b > ti_b:
+                    tension[ti_c] += ti_w * tj_w
+                    tension[tj_c] += ti_w * tj_w
+        return tension
+
+    def try_top_moves():
+        """Greedy moves on the top row, prioritised by tension. Returns
+        True if any move was accepted."""
+        if top_moves_per_iter <= 0:
+            return False
+        top_sp = species_order[0]
+        tension = top_row_tension()
+        order_by_tension = sorted(tension, key=lambda c: -tension[c])
+        top_targets = order_by_tension[:top_moves_per_iter]
+        cur_score = total_crossings()
+        any_move = False
+        for chrom in top_targets:
+            # 1) flip
+            sp_to_chrom_flip[top_sp][chrom] = not sp_to_chrom_flip[top_sp][chrom]
+            new_score = total_crossings()
+            if new_score < cur_score - 1e-9:
+                cur_score = new_score
+                any_move = True
+            else:
+                sp_to_chrom_flip[top_sp][chrom] = not sp_to_chrom_flip[top_sp][chrom]
+            # 2) swap with chrom at offset (1,2,3,5)
+            for off in top_move_offsets:
+                cur_pos = sp_to_chromorder[top_sp][chrom]
+                other = next((c for c, p in sp_to_chromorder[top_sp].items()
+                              if p == cur_pos + off), None)
+                if other is None:
+                    continue
+                sp_to_chromorder[top_sp][chrom], sp_to_chromorder[top_sp][other] = \
+                    sp_to_chromorder[top_sp][other], sp_to_chromorder[top_sp][chrom]
+                new_score = total_crossings()
+                if new_score < cur_score - 1e-9:
+                    cur_score = new_score
+                    any_move = True
+                else:
+                    sp_to_chromorder[top_sp][chrom], sp_to_chromorder[top_sp][other] = \
+                        sp_to_chromorder[top_sp][other], sp_to_chromorder[top_sp][chrom]
+        return any_move
+
+    def bottom_row_tension():
+        """Symmetric to top_row_tension but for the last species row,
+        scoring tension from the last adjacent pair (N-2, N-1)."""
+        if len(species_order) < 2:
+            return {}
+        bot_sp = species_order[-1]
+        recs = line_data[-1]
+        top_order = sp_to_chromorder[species_order[-2]]
+        bot_order = sp_to_chromorder[bot_sp]
+        items = []
+        for tchrom, bchrom, trk, brk, tsz, bsz, w in recs:
+            if tchrom not in top_order or bchrom not in bot_order:
+                continue
+            t_eff = (tsz - 1 - trk) if sp_to_chrom_flip[species_order[-2]].get(tchrom, False) else trk
+            b_eff = (bsz - 1 - brk) if sp_to_chrom_flip[bot_sp].get(bchrom, False) else brk
+            items.append((bchrom, top_order[tchrom] + t_eff / tsz,
+                          bot_order[bchrom] + b_eff / bsz, w))
+        items.sort(key=lambda x: x[1])
+        tension = {bc: 0.0 for bc in bot_order}
+        for i in range(len(items)):
+            bi_c, bi_t, bi_b, bi_w = items[i]
+            for j in range(i):
+                bj_c, bj_t, bj_b, bj_w = items[j]
+                if bj_b > bi_b:
+                    tension[bi_c] += bi_w * bj_w
+                    tension[bj_c] += bi_w * bj_w
+        return tension
+
+    def try_bottom_moves():
+        """Symmetric to try_top_moves: greedy moves on the last row
+        prioritised by tension from the last pair. Helps after a bu
+        sweep the same way try_top_moves helps after a td sweep."""
+        if bottom_moves_per_iter <= 0 or len(species_order) < 2:
+            return False
+        bot_sp = species_order[-1]
+        tension = bottom_row_tension()
+        order_by_tension = sorted(tension, key=lambda c: -tension[c])
+        targets = order_by_tension[:bottom_moves_per_iter]
+        cur_score = total_crossings()
+        any_move = False
+        for chrom in targets:
+            sp_to_chrom_flip[bot_sp][chrom] = not sp_to_chrom_flip[bot_sp][chrom]
+            new_score = total_crossings()
+            if new_score < cur_score - 1e-9:
+                cur_score = new_score
+                any_move = True
+            else:
+                sp_to_chrom_flip[bot_sp][chrom] = not sp_to_chrom_flip[bot_sp][chrom]
+            for off in top_move_offsets:
+                cur_pos = sp_to_chromorder[bot_sp][chrom]
+                other = next((c for c, p in sp_to_chromorder[bot_sp].items()
+                              if p == cur_pos + off), None)
+                if other is None:
+                    continue
+                sp_to_chromorder[bot_sp][chrom], sp_to_chromorder[bot_sp][other] = \
+                    sp_to_chromorder[bot_sp][other], sp_to_chromorder[bot_sp][chrom]
+                new_score = total_crossings()
+                if new_score < cur_score - 1e-9:
+                    cur_score = new_score
+                    any_move = True
+                else:
+                    sp_to_chromorder[bot_sp][chrom], sp_to_chromorder[bot_sp][other] = \
+                        sp_to_chromorder[bot_sp][other], sp_to_chromorder[bot_sp][chrom]
+        return any_move
+
+    for it in range(max_iters):
+        # top-down brush
+        for i in range(1, len(species_order)):
+            sp = species_order[i]
+            anchor = species_order[i - 1]
+            lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([sp, anchor]))]
+            pos = barycenter_position(sp, anchor, lookup)
+            if not pos:
+                continue
+            chroms = list(sp_to_chromorder[sp].keys())
+            chroms.sort(key=lambda c: (pos.get(c, sp_to_chromorder[sp][c]),
+                                       sp_to_chromorder[sp][c]))
+            sp_to_chromorder[sp] = {c: k for k, c in enumerate(chroms)}
+        sp_to_chrom_flip = _optimize_chrom_flips_top_down(
+            species_order, rbh_df_list,
+            sp_pair_to_rbh_df_list_index,
+            sp_to_chromorder, sp_to_genesdfs,
+            initial_flip=sp_to_chrom_flip)
+        td = total_crossings()
+        if verbose:
+            print("  gen {} top-down  crossings: {:.0f}  (delta {:+.0f})".format(
+                it + 1, td, td - prev), flush=True)
+        improved_best = td < best_score
+        snapshot_if_best(td)
+        if snapshot_fn is not None:
+            snapshot_fn(it + 1, "td", sp_to_chromorder, sp_to_chrom_flip, td)
+        stagnation = 0 if improved_best else stagnation + 1
+        prev = td
+
+        # Downstream-feedback: after the comb stroke settles every row
+        # below the top, the remaining tangles reveal where the *top*
+        # row was wrong. Try a small set of moves on the highest-
+        # tension top-row chromosomes; accept any that drop the global
+        # score. The next td sweep starts from this corrected top.
+        if try_top_moves():
+            ts = total_crossings()
+            if verbose:
+                print("  gen {} top-moves crossings: {:.0f}  (delta {:+.0f})".format(
+                    it + 1, ts, ts - prev), flush=True)
+            improved_best = ts < best_score
+            snapshot_if_best(ts)
+            if snapshot_fn is not None:
+                snapshot_fn(it + 1, "tm", sp_to_chromorder, sp_to_chrom_flip, ts)
+            stagnation = 0 if improved_best else stagnation + 1
+            prev = ts
+
+        if not enable_bottom_up:
+            # Patience check based on top-down + top-moves cycles only.
+            if stagnation >= patience:
+                if verbose:
+                    print("  brushing converged at gen {} after {} stagnant sweeps"
+                          " (best {:.0f})".format(it + 1, patience, best_score),
+                          flush=True)
+                break
+            continue
+
+        # bottom-up brush
+        for i in range(len(species_order) - 2, -1, -1):
+            sp = species_order[i]
+            anchor = species_order[i + 1]
+            lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([sp, anchor]))]
+            pos = barycenter_position(sp, anchor, lookup)
+            if not pos:
+                continue
+            chroms = list(sp_to_chromorder[sp].keys())
+            chroms.sort(key=lambda c: (pos.get(c, sp_to_chromorder[sp][c]),
+                                       sp_to_chromorder[sp][c]))
+            sp_to_chromorder[sp] = {c: k for k, c in enumerate(chroms)}
+        sp_to_chrom_flip = _optimize_chrom_flips_top_down(
+            species_order, rbh_df_list,
+            sp_pair_to_rbh_df_list_index,
+            sp_to_chromorder, sp_to_genesdfs,
+            initial_flip=sp_to_chrom_flip)
+        bu = total_crossings()
+        if verbose:
+            print("  gen {} bottom-up crossings: {:.0f}  (delta {:+.0f})".format(
+                it + 1, bu, bu - prev), flush=True)
+        improved_best = bu < best_score
+        snapshot_if_best(bu)
+        if snapshot_fn is not None:
+            snapshot_fn(it + 1, "bu", sp_to_chromorder, sp_to_chrom_flip, bu)
+        stagnation = 0 if improved_best else stagnation + 1
+        prev = bu
+
+        # Symmetric bottom-row feedback after bu sweep. Tries moves on
+        # the last species row's chroms ordered by tension from the
+        # last adjacent pair. The next bu sweep starts from this
+        # corrected bottom.
+        if try_bottom_moves():
+            bs = total_crossings()
+            if verbose:
+                print("  gen {} bot-moves crossings: {:.0f}  (delta {:+.0f})".format(
+                    it + 1, bs, bs - prev), flush=True)
+            improved_best = bs < best_score
+            snapshot_if_best(bs)
+            if snapshot_fn is not None:
+                snapshot_fn(it + 1, "bm", sp_to_chromorder, sp_to_chrom_flip, bs)
+            stagnation = 0 if improved_best else stagnation + 1
+            prev = bs
+
+        if stagnation >= patience:
+            if verbose:
+                print("  brushing converged at gen {} after {} stagnant sweeps"
+                      " (best {:.0f})".format(it + 1, patience, best_score),
+                      flush=True)
+            break
+
+    for sp in species_order:
+        sp_to_chromorder[sp] = best_orders[sp]
+        sp_to_chrom_flip[sp] = best_flips[sp]
+    if verbose:
+        print("brushing total drop: {:.0f} -> {:.0f}  ({:+.2f}%)".format(
+            initial, best_score,
+            100.0 * (best_score - initial) / initial), flush=True)
+    return sp_to_chromorder, sp_to_chrom_flip
+
+
 def _crossing_local_search(species_order, rbh_df_list,
                            sp_pair_to_rbh_df_list_index,
                            sp_to_chromorder, sp_to_chrom_flip,
@@ -1362,302 +1786,15 @@ def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy):
         panel.add_patch(patch)
     return panel
 
-def ribbon_plot(species_order, rbh_filelist,
-                sp_to_chr_to_size,
-                sp_min_chr_size, outfile,
-                sp_to_gene_order = {},
-                chr_sort_order   = "custom",
-                plot_all = False,
-                optimize_chrom_rotation = True,
-                show_orientation_marks  = True,
-                species_labels = None):
-    """
-    Takes in a list of species as the plotting order,
-     a list of rbh files, and a dict of species_to_chr_to_sizes
-
-    In the future for the rbh file parse the headers.
-
-    There are several ways that the chromosomes can be sorted.
-      chr_sort_order < custom | optimal-top | optimal-size | optimal-random >
-        custom         - use the custom sorting order for EVERY species in chromorder
-        optimal-top    - use the custom order for the topmost species, then optimizes everything else
-        optimal-size   - sort the top species' chromosomes by number of genes, optimize everything else
-        optimal-chr-or - use `chromorder` when possible, optimize everything else
-        optimal-random - randomly sort the chromosomes of the top species, optimize everything else
-
-    optimize_chrom_rotation:
-        If True (default), every scaffold's plot direction is chosen
-        independently of the fasta orientation, cascading top-down, to
-        minimize ribbon-line crossings. See _optimize_chrom_flips_top_down.
-        Resolves the "twist" artefact described in odp issue #127.
-    show_orientation_marks:
-        If True (default), each chromosome bar gets a small triangle at
-        the fasta-3' end. The triangle points right (▶) for scaffolds
-        plotted forward and left (◀) for scaffolds plotted reversed,
-        so the viewer can tell the plot direction from the fasta
-        direction at a glance.
-    """
-
-    # check sp_to_gene_order. Reset to empty dict if None
-    if type(sp_to_gene_order) == type(None):
-        sp_to_gene_order = {}
-
-    import random
-
-    # make a list of the dataframes to open for these analyses
-    rbh_df_list = [pd.read_csv(x, sep = "\t",
-                   header = "infer",
-                   index_col = None) for x in rbh_filelist]
-    
-    # This list tells the program later which index of RBH files to look at.
-    # Useful for cases where we submit just one .rbh file with all of the entries
-    sp_pair_to_rbh_df_list_index = {}
-    for i in range(len(rbh_df_list)):
-        thisdf = rbh_df_list[i]
-        sp_list = [x.split("_")[0] for x in thisdf.columns if "_scaf" in x]
-        for j in range(len(sp_list)-1):
-            for k in range(j+1, len(sp_list)):
-                sp_combo = tuple(sorted([sp_list[j], sp_list[k]]))
-                if sp_combo not in sp_pair_to_rbh_df_list_index:
-                    sp_pair_to_rbh_df_list_index[sp_combo] = i
-
-    sp_to_genesdfs = {}
-    # make composite gene index dataframe for each species
-    #  we will use this later to plot by gene index
-    #  rather than the chromosome index
-
-    for thisrbh in rbh_df_list:
-        thesesp = [x.split("_")[0] for x in thisrbh.columns if "_scaf" in x]
-        for thissp in thesesp:
-            if thissp not in sp_to_genesdfs:
-                sp_to_genesdfs[thissp] = []
-                sp_to_genesdfs[thissp].append(thisrbh[[x for x in thisrbh.columns if thissp in x]])
-
-    # we now concat and deduplicate the gene index dfs
-    for thissp in sp_to_genesdfs:
-        sp_to_genesdfs[thissp] = pd.concat(sp_to_genesdfs[thissp]
-                                  ).sort_values(by=["{}_gene".format(thissp)]
-                                  ).drop_duplicates(subset=["{}_gene".format(thissp)]
-                                  ).sort_values(by=["{}_scaf".format(thissp),
-                                                    "{}_pos".format(thissp)],
-                                                ascending=[True, True]
-                                  ).reset_index(drop=True)
-        sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp][["{}_gene".format(thissp),
-                                                         "{}_scaf".format(thissp),
-                                                         "{}_pos".format(thissp)]]
-        # Assign within-scaffold index (chromIx). Replaces a pandas-version-
-        # fragile groupby().apply().reset_index() pattern with a direct
-        # cumcount, which is the same operation expressed plainly.
-        sp_to_genesdfs[thissp]["{}_chromIx".format(thissp)] = sp_to_genesdfs[thissp].groupby(
-            "{}_scaf".format(thissp)).cumcount()
-        #print(sp_to_genesdfs[thissp])
-
-    # FET-graph LG mode short-circuits the row-by-row cascade. It
-    # builds one global synteny linkage graph from every adjacent-row
-    # RBH, partitions chromosomes into connected components, and
-    # orders each row by component id. Members of the same linkage
-    # group share an x-region across every species so ribbons run
-    # straight down. Handles in-row fusions/fissions correctly (two
-    # chroms of one species linked to the same chrom in another
-    # species end up in the same component even when their dominant
-    # ALG labels differ).
-    if chr_sort_order == "optimal-lg":
-        sp_to_chromorder = _order_by_lg(
-            species_order, rbh_df_list, sp_to_chr_to_size,
-            sp_min_chr_size, sp_to_gene_order,
-            sp_pair_to_rbh_df_list_index)
-        # iterate / cascade blocks below are bypassed by this early
-        # exit from the order-decision stage; pad sp_to_chromorder
-        # below for completeness.
-    # This block is used for determining the chromosome order for the figure
-    sp_to_chromorder     = sp_to_chromorder if chr_sort_order == "optimal-lg" else {}
-    print("species_order: {}".format(species_order))
-    if chr_sort_order == "optimal-lg":
-        # skip the row-by-row cascade entirely
-        species_loop_range = []
-    else:
-        species_loop_range = range(0, len(species_order))
-    for i in species_loop_range:
-        sp = species_order[i]
-
-        templist = [] # templist is used to hold the chromosome order
-        if i == 0:
-            # This is the first species, there is a special case for it
-            #      chr_sort_order < custom | optimal-top | optimal-size | optimal-random >
-            if chr_sort_order in ["custom", "optimal-top", "optimal-chr-or"]:
-                # in this case we use the custom order or take the order from the file
-                if not sp_to_gene_order or (sp not in sp_to_gene_order):
-                    templist = sorted(list(rbh_df_list[i]["{}_scaf".format(sp)].unique()))
-                else:
-                    templist = sp_to_gene_order[sp]
-            elif chr_sort_order in ["optimal-size", "optimal-random"] \
-                  or chr_sort_order in _DETANGLE_MODES:
-                # Top species seed. Plain value_counts() ignores partner
-                # identity, so two top-row chromosomes that both map to
-                # the same row-2 chromosome could end up scattered, and
-                # the cascade below can't fix that. Seed the top row
-                # from FET-significant best-partner clusters in row 2
-                # instead (odp issue #127).
-                if len(species_order) > 1:
-                    templist = _seed_top_order_from_partner(
-                        sp, species_order[1], rbh_df_list[i])
-                else:
-                    templist = list(rbh_df_list[i]["{}_scaf".format(sp)].value_counts().index)
-                if sp in sp_to_gene_order:
-                    # append the chromosomes that are in the config file but not in the rbh file
-                    for x in sp_to_gene_order[sp]:
-                        if x not in templist:
-                            templist.append(x)
-                if chr_sort_order == "optimal-random":
-                    random.shuffle(templist)
-        else:
-            # we construct this variable to lookup the species in sp_pair_to_rbh_df_list_index
-            sp_pair_lookup = tuple(sorted([species_order[i-1], sp])) 
-            lookup_index = sp_pair_to_rbh_df_list_index[sp_pair_lookup]
-
-            # this is the second or later species, change sort order depending on what was there
-            if chr_sort_order == "custom":
-                # in this case we use the custom order or take the order from the file
-                if not sp_to_gene_order or (sp not in sp_to_gene_order):
-                    # This is the case where we don't have a custom order for this species
-                    #templist = sorted(list(rbh_df_list[i]["{}_scaf".format(sp)].unique()))
-                    templist = sorted(list(rbh_df_list[lookup_index]["{}_scaf".format(sp)].unique()))
-                else:
-                    templist = sp_to_gene_order[sp]
-            elif (chr_sort_order == "optimal-chr-or") and (sp in sp_to_gene_order):
-                    templist = sp_to_gene_order[sp]
-            elif chr_sort_order in _DETANGLE_MODES:
-                # detangle by anchor position on the species directly above
-                prevsp = species_order[i - 1]
-                method = ("median" if chr_sort_order == "optimal-median"
-                          else "barycenter")
-                kept = set(rbh_df_list[lookup_index]["{}_scaf".format(sp)].unique())
-                if sp in sp_to_gene_order:
-                    kept |= set(sp_to_gene_order[sp])
-                templist = _detangle_one_side(sp, prevsp, rbh_df_list[lookup_index],
-                                              sp_to_chromorder, sp_to_genesdfs,
-                                              method, kept)
-            else:
-                # we optimize every other case
-                prevsp = species_order[i-1]
-                templist = _optimize_spA_based_on_rbh(sp, prevsp, rbh_df_list[lookup_index],
-                                                      sp_to_chromorder, sp_to_gene_order)
-        # Now we perform some checks on the list of chromosomes and add them to the dict
-        # check here to make sure that there aren't duplicate entries in the chromosomes
-        templist = _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size,
-                                                  sp_to_gene_order, sp_min_chr_size)
-        sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
-        #print(sp, sp_to_chromorder)
-
-    # Iterated barycenter / median sweeps. The top-down pass above already
-    # set an initial ordering. Now we sweep bottom-up and top-down again
-    # using the *neighbor* row's positions, alternating until no change
-    # or max_passes. Each species's first scaffold is held to the row's
-    # current top so we don't drift the whole plot sideways.
-    if chr_sort_order == "optimal-barycenter-iter":
-        for _ in range(8):
-            changed = False
-            for direction in (-1, +1):
-                rng = range(len(species_order) - 2, 0, -1) if direction == -1 \
-                      else range(1, len(species_order) - 1)
-                for i in rng:
-                    sp = species_order[i]
-                    ref = species_order[i + direction]
-                    lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([sp, ref]))]
-                    new = _detangle_one_side(sp, ref, rbh_df_list[lookup],
-                                             sp_to_chromorder, sp_to_genesdfs,
-                                             "barycenter",
-                                             set(sp_to_chromorder[sp].keys()))
-                    cur = sorted(sp_to_chromorder[sp].keys(),
-                                 key=lambda s: sp_to_chromorder[sp][s])
-                    if new != cur:
-                        changed = True
-                        sp_to_chromorder[sp] = {s: k for k, s in enumerate(new)}
-            if not changed:
-                break
-
-    # Greedy adjacent-swap polish. Runs on top of whichever method built
-    # the ordering. Keeps swaps that reduce the sum of crossings against
-    # the row above and the row below.
-    if chr_sort_order == "optimal-swap":
-        sp_to_chromorder = _greedy_swap_polish(species_order, rbh_df_list,
-                                               sp_pair_to_rbh_df_list_index,
-                                               sp_to_chromorder, sp_to_genesdfs)
-
-    # There is an edge case where, if we used option "optimal-chr-or", but the 0th through nth species weren't
-    #  in the chromosome order, we need to optimize the species in reverse order
-    if chr_sort_order == "optimal-chr-or":
-        # If someone uses this option when there is no chromosome order
-        #  we just skip this step
-        if len(sp_to_gene_order) > 0:
-            first_optimized = 99999999
-            for i in range(len(species_order)):
-                sp = species_order[i]
-                if sp in sp_to_gene_order:
-                    first_optimized = i
-                    break
-            while first_optimized != 0:
-                sp = species_order[first_optimized - 1]
-                prevsp = species_order[first_optimized]
-                # optimize the chromosome order
-                templist = _optimize_spA_based_on_rbh(sp, prevsp, rbh_df_list[first_optimized - 1], sp_to_chromorder, sp_to_gene_order)
-                templist = _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size, sp_to_gene_order, sp_min_chr_size)
-                sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
-                first_optimized -= 1
-
-    # Iterative bidirectional FET-best-partner propagation. The plain
-    # top-down cascade above only relates each row to the row directly
-    # above it; chains of dependencies further down can't propagate up.
-    # We sweep top-down and bottom-up to fixed point (or best-seen, in
-    # case of oscillation between two equally good orderings). Runs
-    # only when an "optimal-*" sort mode is selected — the "custom"
-    # path is left untouched so user-supplied orderings stick.
-    if chr_sort_order not in ("custom", "optimal-lg") and len(species_order) > 1:
-        sp_to_chromorder = _iterative_order_propagation(
-            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
-            sp_to_chromorder, sp_to_gene_order, sp_to_chr_to_size,
-            sp_min_chr_size, sp_to_genesdfs)
-
-    # Decide per-scaffold plot direction (issue #127). The chromosome
-    # ordering is now fixed; we only choose, for each scaffold, whether to
-    # display it in the fasta-forward direction or reversed. Cascades
-    # top-down so a flip on row i is judged against the already-pinned
-    # row i-1.
-    if optimize_chrom_rotation:
-        sp_to_chrom_flip = _optimize_chrom_flips_top_down(
-            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
-            sp_to_chromorder, sp_to_genesdfs)
-    else:
-        sp_to_chrom_flip = {sp: {scaf: False for scaf in sp_to_chromorder[sp]}
-                            for sp in species_order}
-
-    # Crossing-count local search refinement. Takes whatever the order
-    # cascade + flip cascade produced and improves it by directly
-    # minimizing the global weighted crossing count -- the very thing
-    # the plot reader sees. Moves are (a) flip a chromosome, (b) swap
-    # adjacent chromosomes in a row. Every accepted move strictly
-    # reduces the score, so iteration is improvement-monotone. The
-    # search visits the worst-rearranged species first, then radiates
-    # outward. FET-significant orthologs are weighted 1000x faint ones
-    # so the bold ribbons drive the optimization. Skipped when the
-    # caller turned the flip optimizer off (the search would then
-    # explore a degenerate subset).
-    if optimize_chrom_rotation and len(species_order) > 1:
-        # Two-stage refinement: a fast coarse-scoring pass converges
-        # to the right neighborhood quickly, then a per-ortholog pass
-        # captures the within-chrom detail the coarse anchors flatten
-        # out. Both stages share the same move set, so the user can
-        # follow the score across stages.
-        sp_to_chromorder, sp_to_chrom_flip = _crossing_local_search(
-            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
-            sp_to_chromorder, sp_to_chrom_flip, sp_to_genesdfs,
-            fet_weight=1000.0, coarse=True, verbose=True)
-        sp_to_chromorder, sp_to_chrom_flip = _crossing_local_search(
-            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
-            sp_to_chromorder, sp_to_chrom_flip, sp_to_genesdfs,
-            fet_weight=1000.0, coarse=False, max_passes=15,
-            verbose=True)
-
+def _render_ribbon_figure(species_order, sp_to_chromorder, sp_to_chrom_flip,
+                          sp_to_chr_to_size, sp_to_genesdfs,
+                          sp_pair_to_rbh_df_list_index, rbh_df_list,
+                          outfile, plot_all=True,
+                          show_orientation_marks=True,
+                          species_labels=None):
+    """Render the ribbon plot to `outfile`. Extracted from
+    ribbon_plot() so brushing can snapshot the layout after every
+    sweep."""
     # now construct dataframes describing how to plot the chromosomes based on
     #  gene index or on chromosome coordinate
     sp_to_chrom_to_order = {}
@@ -1746,7 +1883,7 @@ def ribbon_plot(species_order, rbh_filelist,
     # Panel width leaves room for two-line italic species + grey accession
     # labels on the y-axis. Total figure width is 180 mm (7.087"); the
     # left margin holds the labels.
-    panelWidth = 5.4
+    panelWidth = 6.3
 
     #           two panels        top, bottom, middle
     bufferHeight = 1.5
@@ -1760,7 +1897,7 @@ def ribbon_plot(species_order, rbh_filelist,
     bottomMargin = bufferHeight
     # pChr will host the chrom coordinate plots
     plt.gcf().text(leftStart/figWidth + (panelWidth/figWidth)/2,
-                   (bottomMargin+panelHeight+0.03)/figHeight,
+                   (bottomMargin+panelHeight+0.8)/figHeight,
                    "p<=0.05 RBH results (Chr-coords)",
                    fontsize = 10, ha = "center", va = "bottom")
     pChr = plt.axes([leftStart/figWidth, #left
@@ -1774,7 +1911,7 @@ def ribbon_plot(species_order, rbh_filelist,
                    top=False, labeltop=False)
     # pIx title
     plt.gcf().text(leftStart/figWidth + (panelWidth/figWidth)/2,
-                   ((bottomMargin*2)+(panelHeight*2)+0.03)/figHeight,
+                   ((bottomMargin*2)+(panelHeight*2)+0.8)/figHeight,
                    "p<=0.05 RBH results (RBH-gene-coords)",
                    fontsize = 10, ha = "center", va = "bottom")
     pIx = plt.axes([leftStart/figWidth, #left
@@ -2056,4 +2193,426 @@ def ribbon_plot(species_order, rbh_filelist,
                        fontsize=6, color="#888888")
 
     plt.savefig(outfile)
+    plt.close('all')
+
+
+def ribbon_plot(species_order, rbh_filelist,
+                sp_to_chr_to_size,
+                sp_min_chr_size, outfile,
+                sp_to_gene_order = {},
+                chr_sort_order   = "custom",
+                plot_all = False,
+                optimize_chrom_rotation = True,
+                show_orientation_marks  = True,
+                species_labels = None):
+    """
+    Takes in a list of species as the plotting order,
+     a list of rbh files, and a dict of species_to_chr_to_sizes
+
+    In the future for the rbh file parse the headers.
+
+    There are several ways that the chromosomes can be sorted.
+      chr_sort_order < custom | optimal-top | optimal-size | optimal-random >
+        custom         - use the custom sorting order for EVERY species in chromorder
+        optimal-top    - use the custom order for the topmost species, then optimizes everything else
+        optimal-size   - sort the top species' chromosomes by number of genes, optimize everything else
+        optimal-chr-or - use `chromorder` when possible, optimize everything else
+        optimal-random - randomly sort the chromosomes of the top species, optimize everything else
+
+    optimize_chrom_rotation:
+        If True (default), every scaffold's plot direction is chosen
+        independently of the fasta orientation, cascading top-down, to
+        minimize ribbon-line crossings. See _optimize_chrom_flips_top_down.
+        Resolves the "twist" artefact described in odp issue #127.
+    show_orientation_marks:
+        If True (default), each chromosome bar gets a small triangle at
+        the fasta-3' end. The triangle points right (▶) for scaffolds
+        plotted forward and left (◀) for scaffolds plotted reversed,
+        so the viewer can tell the plot direction from the fasta
+        direction at a glance.
+    """
+
+    # check sp_to_gene_order. Reset to empty dict if None
+    if type(sp_to_gene_order) == type(None):
+        sp_to_gene_order = {}
+
+    import random
+
+    # make a list of the dataframes to open for these analyses
+    rbh_df_list = [pd.read_csv(x, sep = "\t",
+                   header = "infer",
+                   index_col = None) for x in rbh_filelist]
+    
+    # This list tells the program later which index of RBH files to look at.
+    # Useful for cases where we submit just one .rbh file with all of the entries
+    sp_pair_to_rbh_df_list_index = {}
+    for i in range(len(rbh_df_list)):
+        thisdf = rbh_df_list[i]
+        sp_list = [x.split("_")[0] for x in thisdf.columns if "_scaf" in x]
+        for j in range(len(sp_list)-1):
+            for k in range(j+1, len(sp_list)):
+                sp_combo = tuple(sorted([sp_list[j], sp_list[k]]))
+                if sp_combo not in sp_pair_to_rbh_df_list_index:
+                    sp_pair_to_rbh_df_list_index[sp_combo] = i
+
+    sp_to_genesdfs = {}
+    # make composite gene index dataframe for each species
+    #  we will use this later to plot by gene index
+    #  rather than the chromosome index
+
+    for thisrbh in rbh_df_list:
+        thesesp = [x.split("_")[0] for x in thisrbh.columns if "_scaf" in x]
+        for thissp in thesesp:
+            if thissp not in sp_to_genesdfs:
+                sp_to_genesdfs[thissp] = []
+                sp_to_genesdfs[thissp].append(thisrbh[[x for x in thisrbh.columns if thissp in x]])
+
+    # we now concat and deduplicate the gene index dfs
+    for thissp in sp_to_genesdfs:
+        sp_to_genesdfs[thissp] = pd.concat(sp_to_genesdfs[thissp]
+                                  ).sort_values(by=["{}_gene".format(thissp)]
+                                  ).drop_duplicates(subset=["{}_gene".format(thissp)]
+                                  ).sort_values(by=["{}_scaf".format(thissp),
+                                                    "{}_pos".format(thissp)],
+                                                ascending=[True, True]
+                                  ).reset_index(drop=True)
+        sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp][["{}_gene".format(thissp),
+                                                         "{}_scaf".format(thissp),
+                                                         "{}_pos".format(thissp)]]
+        # Assign within-scaffold index (chromIx). Replaces a pandas-version-
+        # fragile groupby().apply().reset_index() pattern with a direct
+        # cumcount, which is the same operation expressed plainly.
+        sp_to_genesdfs[thissp]["{}_chromIx".format(thissp)] = sp_to_genesdfs[thissp].groupby(
+            "{}_scaf".format(thissp)).cumcount()
+        #print(sp_to_genesdfs[thissp])
+
+    # FET-graph LG mode short-circuits the row-by-row cascade. It
+    # builds one global synteny linkage graph from every adjacent-row
+    # RBH, partitions chromosomes into connected components, and
+    # orders each row by component id. Members of the same linkage
+    # group share an x-region across every species so ribbons run
+    # straight down. Handles in-row fusions/fissions correctly (two
+    # chroms of one species linked to the same chrom in another
+    # species end up in the same component even when their dominant
+    # ALG labels differ).
+    if chr_sort_order == "optimal-lg":
+        sp_to_chromorder = _order_by_lg(
+            species_order, rbh_df_list, sp_to_chr_to_size,
+            sp_min_chr_size, sp_to_gene_order,
+            sp_pair_to_rbh_df_list_index)
+        # iterate / cascade blocks below are bypassed by this early
+        # exit from the order-decision stage; pad sp_to_chromorder
+        # below for completeness.
+    # This block is used for determining the chromosome order for the figure
+    sp_to_chromorder     = sp_to_chromorder if chr_sort_order == "optimal-lg" else {}
+    print("species_order: {}".format(species_order))
+    if chr_sort_order == "optimal-lg":
+        # skip the row-by-row cascade entirely
+        species_loop_range = []
+    else:
+        species_loop_range = range(0, len(species_order))
+    for i in species_loop_range:
+        sp = species_order[i]
+
+        templist = [] # templist is used to hold the chromosome order
+        if i == 0:
+            # This is the first species, there is a special case for it
+            #      chr_sort_order < custom | optimal-top | optimal-size | optimal-random >
+            if chr_sort_order in ["custom", "optimal-top", "optimal-chr-or"]:
+                # in this case we use the custom order or take the order from the file
+                if not sp_to_gene_order or (sp not in sp_to_gene_order):
+                    templist = sorted(list(rbh_df_list[i]["{}_scaf".format(sp)].unique()))
+                else:
+                    templist = sp_to_gene_order[sp]
+            elif chr_sort_order in ["optimal-size", "optimal-random"] \
+                  or chr_sort_order in _DETANGLE_MODES:
+                # Top species seed. Plain value_counts() ignores partner
+                # identity, so two top-row chromosomes that both map to
+                # the same row-2 chromosome could end up scattered, and
+                # the cascade below can't fix that. Seed the top row
+                # from FET-significant best-partner clusters in row 2
+                # instead (odp issue #127).
+                if len(species_order) > 1:
+                    templist = _seed_top_order_from_partner(
+                        sp, species_order[1], rbh_df_list[i])
+                else:
+                    templist = list(rbh_df_list[i]["{}_scaf".format(sp)].value_counts().index)
+                if sp in sp_to_gene_order:
+                    # append the chromosomes that are in the config file but not in the rbh file
+                    for x in sp_to_gene_order[sp]:
+                        if x not in templist:
+                            templist.append(x)
+                if chr_sort_order == "optimal-random":
+                    random.shuffle(templist)
+        else:
+            # we construct this variable to lookup the species in sp_pair_to_rbh_df_list_index
+            sp_pair_lookup = tuple(sorted([species_order[i-1], sp])) 
+            lookup_index = sp_pair_to_rbh_df_list_index[sp_pair_lookup]
+
+            # this is the second or later species, change sort order depending on what was there
+            if chr_sort_order == "custom":
+                # in this case we use the custom order or take the order from the file
+                if not sp_to_gene_order or (sp not in sp_to_gene_order):
+                    # This is the case where we don't have a custom order for this species
+                    #templist = sorted(list(rbh_df_list[i]["{}_scaf".format(sp)].unique()))
+                    templist = sorted(list(rbh_df_list[lookup_index]["{}_scaf".format(sp)].unique()))
+                else:
+                    templist = sp_to_gene_order[sp]
+            elif (chr_sort_order == "optimal-chr-or") and (sp in sp_to_gene_order):
+                    templist = sp_to_gene_order[sp]
+            elif chr_sort_order in _DETANGLE_MODES:
+                # detangle by anchor position on the species directly above
+                prevsp = species_order[i - 1]
+                method = ("median" if chr_sort_order == "optimal-median"
+                          else "barycenter")
+                kept = set(rbh_df_list[lookup_index]["{}_scaf".format(sp)].unique())
+                if sp in sp_to_gene_order:
+                    kept |= set(sp_to_gene_order[sp])
+                templist = _detangle_one_side(sp, prevsp, rbh_df_list[lookup_index],
+                                              sp_to_chromorder, sp_to_genesdfs,
+                                              method, kept)
+            else:
+                # we optimize every other case
+                prevsp = species_order[i-1]
+                templist = _optimize_spA_based_on_rbh(sp, prevsp, rbh_df_list[lookup_index],
+                                                      sp_to_chromorder, sp_to_gene_order)
+        # Now we perform some checks on the list of chromosomes and add them to the dict
+        # check here to make sure that there aren't duplicate entries in the chromosomes
+        templist = _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size,
+                                                  sp_to_gene_order, sp_min_chr_size)
+        sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
+        #print(sp, sp_to_chromorder)
+
+    # Iterated barycenter / median sweeps. The top-down pass above already
+    # set an initial ordering. Now we sweep bottom-up and top-down again
+    # using the *neighbor* row's positions, alternating until no change
+    # or max_passes. Each species's first scaffold is held to the row's
+    # current top so we don't drift the whole plot sideways.
+    if chr_sort_order == "optimal-barycenter-iter":
+        for _ in range(8):
+            changed = False
+            for direction in (-1, +1):
+                rng = range(len(species_order) - 2, 0, -1) if direction == -1 \
+                      else range(1, len(species_order) - 1)
+                for i in rng:
+                    sp = species_order[i]
+                    ref = species_order[i + direction]
+                    lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([sp, ref]))]
+                    new = _detangle_one_side(sp, ref, rbh_df_list[lookup],
+                                             sp_to_chromorder, sp_to_genesdfs,
+                                             "barycenter",
+                                             set(sp_to_chromorder[sp].keys()))
+                    cur = sorted(sp_to_chromorder[sp].keys(),
+                                 key=lambda s: sp_to_chromorder[sp][s])
+                    if new != cur:
+                        changed = True
+                        sp_to_chromorder[sp] = {s: k for k, s in enumerate(new)}
+            if not changed:
+                break
+
+    # Greedy adjacent-swap polish. Runs on top of whichever method built
+    # the ordering. Keeps swaps that reduce the sum of crossings against
+    # the row above and the row below.
+    if chr_sort_order == "optimal-swap":
+        sp_to_chromorder = _greedy_swap_polish(species_order, rbh_df_list,
+                                               sp_pair_to_rbh_df_list_index,
+                                               sp_to_chromorder, sp_to_genesdfs)
+
+    # There is an edge case where, if we used option "optimal-chr-or", but the 0th through nth species weren't
+    #  in the chromosome order, we need to optimize the species in reverse order
+    if chr_sort_order == "optimal-chr-or":
+        # If someone uses this option when there is no chromosome order
+        #  we just skip this step
+        if len(sp_to_gene_order) > 0:
+            first_optimized = 99999999
+            for i in range(len(species_order)):
+                sp = species_order[i]
+                if sp in sp_to_gene_order:
+                    first_optimized = i
+                    break
+            while first_optimized != 0:
+                sp = species_order[first_optimized - 1]
+                prevsp = species_order[first_optimized]
+                # optimize the chromosome order
+                templist = _optimize_spA_based_on_rbh(sp, prevsp, rbh_df_list[first_optimized - 1], sp_to_chromorder, sp_to_gene_order)
+                templist = _quality_check_chromosome_list(sp, templist, sp_to_chr_to_size, sp_to_gene_order, sp_min_chr_size)
+                sp_to_chromorder[sp] = {templist[i]: i for i in range(len(templist))}
+                first_optimized -= 1
+
+    # Iterative bidirectional FET-best-partner propagation. The plain
+    # top-down cascade above only relates each row to the row directly
+    # above it; chains of dependencies further down can't propagate up.
+    # We sweep top-down and bottom-up to fixed point (or best-seen, in
+    # case of oscillation between two equally good orderings). Runs
+    # only when an "optimal-*" sort mode is selected — the "custom"
+    # path is left untouched so user-supplied orderings stick.
+    if chr_sort_order not in ("custom", "optimal-lg") and len(species_order) > 1:
+        sp_to_chromorder = _iterative_order_propagation(
+            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+            sp_to_chromorder, sp_to_gene_order, sp_to_chr_to_size,
+            sp_min_chr_size, sp_to_genesdfs)
+
+    # Decide per-scaffold plot direction (issue #127). The chromosome
+    # ordering is now fixed; we only choose, for each scaffold, whether to
+    # display it in the fasta-forward direction or reversed. Cascades
+    # top-down so a flip on row i is judged against the already-pinned
+    # row i-1.
+    if optimize_chrom_rotation:
+        sp_to_chrom_flip = _optimize_chrom_flips_top_down(
+            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+            sp_to_chromorder, sp_to_genesdfs)
+    else:
+        sp_to_chrom_flip = {sp: {scaf: False for scaf in sp_to_chromorder[sp]}
+                            for sp in species_order}
+
+    # Brushing sweep (FET-weighted barycenter) + per-direction flip
+    # cascade. Snapshot a PDF after every brush stroke so the user can
+    # watch the layout evolve. Local search disabled for this run --
+    # brushing is the sole optimizer so its effect is visible without
+    # being masked by subsequent refinement passes.
+    if optimize_chrom_rotation and len(species_order) > 1:
+        import os as _os
+        import glob as _glob
+        out_dir = _os.path.dirname(_os.path.abspath(outfile))
+        base = _os.path.splitext(_os.path.basename(outfile))[0]
+        # Pre-run cleanup: delete snapshot PDFs from any prior run so
+        # the user only sees this run's progression. The final
+        # PDF is overwritten by the last _render_ribbon_figure call.
+        for _stale in _glob.glob(_os.path.join(
+                out_dir, base + "_brush_gen*.pdf")):
+            try:
+                _os.remove(_stale)
+            except OSError:
+                pass
+
+        def _snapshot(gen, direction, order_state, flip_state, crossings):
+            # Sweep ordinal within gen for alphabetical sort = run
+            # order: seed=00, td=01, tm=02, bu=03, bm=04.
+            sub = {"seed": "00", "td": "01", "tm": "02",
+                   "bu": "03", "bm": "04"}.get(direction, direction)
+            snap_path = _os.path.join(
+                out_dir, "{}_brush_gen{:02d}_{}_{}.pdf".format(
+                    base, gen, sub, direction))
+            _render_ribbon_figure(
+                species_order, order_state, flip_state,
+                sp_to_chr_to_size, sp_to_genesdfs,
+                sp_pair_to_rbh_df_list_index, rbh_df_list,
+                snap_path, plot_all=plot_all,
+                show_orientation_marks=show_orientation_marks,
+                species_labels=species_labels)
+            print("wrote snapshot {}  crossings: {:.0f}".format(
+                snap_path, crossings), flush=True)
+
+        # Iterated local search with random restarts. Each restart
+        # perturbs the best-seen state and re-runs the full brushing
+        # sweep; the brushing's own best-seen tracking handles each
+        # local descent. Across restarts we keep the global best.
+        # The perturbation is a random shuffle of a few chromosomes in
+        # randomly chosen rows -- enough to break out of the current
+        # local minimum, small enough that the next brushing can
+        # recover quickly.
+        import random as _random
+        import copy as _copy
+        n_restarts = 8
+        perturb_rows = 3
+        perturb_chroms_per_row = 5
+        _random.seed(42)
+
+        def _save_state():
+            return ({sp: dict(sp_to_chromorder[sp]) for sp in species_order},
+                    {sp: dict(sp_to_chrom_flip[sp]) for sp in species_order})
+
+        def _restore_state(saved):
+            ords, flps = saved
+            for sp in species_order:
+                sp_to_chromorder[sp] = dict(ords[sp])
+                sp_to_chrom_flip[sp] = dict(flps[sp])
+
+        def _perturb():
+            """Randomly shuffle a window of chromosomes within a few
+            randomly chosen rows. Each chosen row picks a window of
+            perturb_chroms_per_row consecutive slots and shuffles."""
+            rows = _random.sample(species_order, k=min(perturb_rows, len(species_order)))
+            for sp in rows:
+                chroms_by_pos = sorted(sp_to_chromorder[sp].items(),
+                                       key=lambda x: x[1])
+                ids = [c for c, _ in chroms_by_pos]
+                n = len(ids)
+                k = min(perturb_chroms_per_row, n)
+                if k < 2:
+                    continue
+                start = _random.randint(0, n - k)
+                window = ids[start:start + k]
+                _random.shuffle(window)
+                ids = ids[:start] + window + ids[start + k:]
+                sp_to_chromorder[sp] = {c: i for i, c in enumerate(ids)}
+
+        # initial descent
+        sp_to_chromorder, sp_to_chrom_flip = _brushing_sweep(
+            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+            sp_to_chromorder, sp_to_chrom_flip, sp_to_genesdfs,
+            max_iters=50, verbose=True, snapshot_fn=_snapshot)
+        # score after first descent
+        _ld0 = _build_pair_anchor_data(
+            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+            sp_to_genesdfs, fet_weight=1000.0)
+        def _total_now():
+            return sum(_score_pair_lines(
+                _ld0[k],
+                sp_to_chromorder[species_order[k]],
+                sp_to_chromorder[species_order[k + 1]],
+                sp_to_chrom_flip[species_order[k]],
+                sp_to_chrom_flip[species_order[k + 1]])
+                for k in range(len(species_order) - 1))
+        global_best = _total_now()
+        global_best_state = _save_state()
+        print("[restart] initial descent best: {:.0f}".format(global_best),
+              flush=True)
+
+        for r in range(1, n_restarts + 1):
+            _restore_state(global_best_state)
+            _perturb()
+            print("[restart {}/{}] perturbed; brushing again..."
+                  .format(r, n_restarts), flush=True)
+
+            def _restart_snapshot(gen, direction, order_state, flip_state, crossings):
+                sub = {"seed": "00", "td": "01", "tm": "02",
+                       "bu": "03", "bm": "04"}.get(direction, direction)
+                sp = _os.path.join(
+                    out_dir, "{}_brush_rest{:02d}_gen{:02d}_{}_{}.pdf".format(
+                        base, r, gen, sub, direction))
+                _render_ribbon_figure(
+                    species_order, order_state, flip_state,
+                    sp_to_chr_to_size, sp_to_genesdfs,
+                    sp_pair_to_rbh_df_list_index, rbh_df_list,
+                    sp, plot_all=plot_all,
+                    show_orientation_marks=show_orientation_marks,
+                    species_labels=species_labels)
+                print("wrote snapshot {}  crossings: {:.0f}".format(
+                    sp, crossings), flush=True)
+
+            sp_to_chromorder, sp_to_chrom_flip = _brushing_sweep(
+                species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+                sp_to_chromorder, sp_to_chrom_flip, sp_to_genesdfs,
+                max_iters=50, verbose=True, snapshot_fn=_restart_snapshot)
+            score = _total_now()
+            if score < global_best:
+                print("[restart {}/{}] NEW global best {:.0f} (was {:.0f})".format(
+                    r, n_restarts, score, global_best), flush=True)
+                global_best = score
+                global_best_state = _save_state()
+            else:
+                print("[restart {}/{}] no improvement ({:.0f} vs best {:.0f})"
+                      .format(r, n_restarts, score, global_best), flush=True)
+
+        _restore_state(global_best_state)
+        print("[restart] global best across {} restarts: {:.0f}".format(
+            n_restarts, global_best), flush=True)
+
+    _render_ribbon_figure(species_order, sp_to_chromorder, sp_to_chrom_flip,
+                          sp_to_chr_to_size, sp_to_genesdfs,
+                          sp_pair_to_rbh_df_list_index, rbh_df_list,
+                          outfile, plot_all=plot_all,
+                          show_orientation_marks=show_orientation_marks,
+                          species_labels=species_labels)
     return sp_to_chromorder
