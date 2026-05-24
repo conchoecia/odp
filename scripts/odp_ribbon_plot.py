@@ -949,6 +949,18 @@ def _crossing_local_search(species_order, rbh_df_list,
             species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
             sp_to_genesdfs, fet_weight=fet_weight)
 
+    # Build FET-graph cluster membership for the sticky LG-block move:
+    # when we move a chromosome in one row we also move every other
+    # chromosome that shares its synteny linkage group to the same
+    # slot in its own row. This pulls a whole LG block sideways in
+    # one step, letting the search escape the local minimum where a
+    # single-row move would be uphill but a coordinated multi-row
+    # move is downhill.
+    node_to_cluster, _, _ = _build_fet_lg_clusters(species_order, rbh_df_list)
+    cluster_members = {}
+    for (sp, scaf), cid in node_to_cluster.items():
+        cluster_members.setdefault(cid, []).append((sp, scaf))
+
     def pair_score(k):
         return _score_pair_lines(
             line_data[k],
@@ -1100,6 +1112,72 @@ def _crossing_local_search(species_order, rbh_df_list,
                     # Update the local chroms list so the next iter sees
                     # the new order.
                     chroms = list(new_order)
+            # 4) Sticky LG-block move: for each chrom whose FET cluster
+            #    has members in other species, try moving the entire
+            #    cluster as one block to a small set of candidate
+            #    slots in each row simultaneously. Pulls a syntenic
+            #    block sideways together rather than letting one row
+            #    drift away from its partners.
+            tried_clusters = set()
+            for chrom in list(chroms):
+                cid = node_to_cluster.get((sp, chrom))
+                if cid is None or cid in tried_clusters:
+                    continue
+                tried_clusters.add(cid)
+                members = cluster_members.get(cid, [])
+                if len(members) < 2:
+                    continue
+                # Candidate destination slots: the current slot of any
+                # member chrom in any row. These are the realistic
+                # places the block could go.
+                cand_slots = sorted({
+                    sp_to_chromorder[m_sp].get(m_scaf)
+                    for m_sp, m_scaf in members
+                    if m_scaf in sp_to_chromorder.get(m_sp, {})
+                })
+                cand_slots = [s for s in cand_slots if s is not None]
+                if not cand_slots:
+                    continue
+                # save current state for revert
+                saved_orders = {sp_n: dict(sp_to_chromorder[sp_n])
+                                for sp_n in species_order}
+                # Try each candidate slot for the block
+                for dst in cand_slots:
+                    # restore from saved
+                    for sp_n in species_order:
+                        sp_to_chromorder[sp_n] = dict(saved_orders[sp_n])
+                    # Move every member chrom to slot `dst` in its row
+                    for m_sp, m_scaf in members:
+                        if m_scaf not in sp_to_chromorder.get(m_sp, {}):
+                            continue
+                        row_chroms = sorted(sp_to_chromorder[m_sp].items(),
+                                            key=lambda x: x[1])
+                        ids = [c for c, _ in row_chroms]
+                        if m_scaf not in ids:
+                            continue
+                        ids.remove(m_scaf)
+                        dst_clamped = min(max(dst, 0), len(ids))
+                        ids.insert(dst_clamped, m_scaf)
+                        sp_to_chromorder[m_sp] = {c: k for k, c in enumerate(ids)}
+                    # rescore all pairs (block move touches many)
+                    for k in range(len(species_order) - 1):
+                        pair_cache[k] = pair_score(k)
+                    new = total_score()
+                    if new < cur - 1e-9:
+                        cur = new
+                        improved_pass = True
+                        # accept this candidate; refresh saved baseline
+                        saved_orders = {sp_n: dict(sp_to_chromorder[sp_n])
+                                        for sp_n in species_order}
+                    else:
+                        # revert
+                        for sp_n in species_order:
+                            sp_to_chromorder[sp_n] = dict(saved_orders[sp_n])
+                        for k in range(len(species_order) - 1):
+                            pair_cache[k] = pair_score(k)
+                # refresh chroms list for next outer iter
+                chroms = [c for c, _ in sorted(
+                    sp_to_chromorder[sp].items(), key=lambda x: x[1])]
         if verbose:
             print("  pass {} done, score={:.0f}".format(pass_num, cur))
         if not improved_pass:
@@ -1665,10 +1743,10 @@ def ribbon_plot(species_order, rbh_filelist,
     #  Just make it the number of samples times the space, plus the buffer
     interspeciesHeight = 0.5
     panelHeight = interspeciesHeight * len(species_order)
-    # Panel width leaves room for two-line species labels on the y-axis
-    # (species + assembly accession). Total figure width is 180 mm
-    # (7.087"); the left margin holds the labels.
-    panelWidth = 4.6
+    # Panel width leaves room for two-line italic species + grey accession
+    # labels on the y-axis. Total figure width is 180 mm (7.087"); the
+    # left margin holds the labels.
+    panelWidth = 5.4
 
     #           two panels        top, bottom, middle
     bufferHeight = 1.5
@@ -1681,10 +1759,10 @@ def ribbon_plot(species_order, rbh_filelist,
     leftStart = figWidth - panelWidth - 0.3  # 0.3" right margin
     bottomMargin = bufferHeight
     # pChr will host the chrom coordinate plots
-    plt.gcf().text((leftStart + (figWidth/2))/figWidth,
-                   (bottomMargin+panelHeight+0.25)/figHeight,
+    plt.gcf().text(leftStart/figWidth + (panelWidth/figWidth)/2,
+                   (bottomMargin+panelHeight+0.03)/figHeight,
                    "p<=0.05 RBH results (Chr-coords)",
-                   fontsize = 12, ha = "center", va = "bottom")
+                   fontsize = 10, ha = "center", va = "bottom")
     pChr = plt.axes([leftStart/figWidth, #left
                    bottomMargin/figHeight,    #bottom
                    panelWidth/figWidth,   #width
@@ -1694,11 +1772,11 @@ def ribbon_plot(species_order, rbh_filelist,
                    left=False, labelleft=True,
                    right=False, labelright=False,
                    top=False, labeltop=False)
-    # pChr will host the chrom coordinate plots
-    plt.gcf().text((leftStart + (figWidth/2))/figWidth,
-                   ((bottomMargin*2)+(panelHeight*2)+0.25)/figHeight,
+    # pIx title
+    plt.gcf().text(leftStart/figWidth + (panelWidth/figWidth)/2,
+                   ((bottomMargin*2)+(panelHeight*2)+0.03)/figHeight,
                    "p<=0.05 RBH results (RBH-gene-coords)",
-                   fontsize = 12, ha = "center", va = "bottom")
+                   fontsize = 10, ha = "center", va = "bottom")
     pIx = plt.axes([leftStart/figWidth, #left
                    ((bottomMargin*2)+panelHeight)/figHeight,    #bottom
                    panelWidth/figWidth,   #width
@@ -1949,21 +2027,33 @@ def ribbon_plot(species_order, rbh_filelist,
         p.set_ylim(p.get_ylim()[::-1])
         # set the axis labels
         p.set_yticks(list(range(len(species_order))))
-        # Two-line y-axis labels: species name on top, assembly accession
-        # below. species_labels dict (typically from
-        # config["tree"]["tip_label_map"]) supplies the human-friendly
-        # name; if absent, we fall back to stripping the "-taxid-GCxxx"
-        # suffix off the species id.
+        # Custom two-line y-axis labels: species name (italic) on top,
+        # assembly accession (grey) below. Matplotlib doesn't support
+        # mixed styling inside a single tick label, so we suppress the
+        # default tick labels and draw each row's label with two
+        # Text() artists at the same y. Robust to missing inputs --
+        # species_labels may be None or have only some entries, and
+        # the species id may or may not contain a GC[AF] accession.
         import re as _re
-        def _disp(sp):
+        p.set_yticklabels([""] * len(species_order))
+        for i, sp in enumerate(species_order):
             if species_labels and sp in species_labels:
                 primary = species_labels[sp]
             else:
+                # primary fallback: strip -taxid-GC...xxx if present,
+                # otherwise just use the species id as-is.
                 primary = _re.sub(r"-\d+-GC[AF]\d+\.\d+$", "", sp)
+                if primary == sp:
+                    primary = sp  # unchanged
             acc_m = _re.search(r"(GC[AF]\d+\.\d+)$", sp)
             acc = acc_m.group(1) if acc_m else ""
-            return "{}\n{}".format(primary, acc) if acc else primary
-        p.set_yticklabels([_disp(s) for s in species_order], fontsize=7)
+            # x at the left edge of the panel data area
+            x_anchor = p.get_xlim()[0] - 0.005
+            p.text(x_anchor, i - 0.06, primary, ha="right", va="bottom",
+                   fontsize=7, fontstyle="italic")
+            if acc:
+                p.text(x_anchor, i + 0.06, acc, ha="right", va="top",
+                       fontsize=6, color="#888888")
 
     plt.savefig(outfile)
     return sp_to_chromorder
