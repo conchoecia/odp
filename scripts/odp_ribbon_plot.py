@@ -172,6 +172,15 @@ def _optimize_chrom_flips_top_down(species_order, rbh_df_list,
     # cascade-greedy order may have missed flips that only pay off
     # once the rows below have settled into their final order.
     def _eval_pair(top_sp, bot_sp):
+        """FET-weighted crossing count for a single adjacent species
+        pair. Uses the same multiplicative weighting the brushing
+        optimizer minimizes (1000x for whole_FET <= 0.05 lines, 1x
+        otherwise) so the boundary flip pass agrees with the score
+        brushing was driving toward. An earlier version of this
+        function used the unweighted _count_inversions, which caused
+        flips that would have helped FET-significant ribbons (e.g.
+        CM/509.1 on Plutella) to be rejected because the raw count
+        didn't change much."""
         lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([top_sp, bot_sp]))]
         df_in = rbh_df_list[lookup]
         tc, bc = "{}_scaf".format(top_sp), "{}_scaf".format(bot_sp)
@@ -197,8 +206,12 @@ def _optimize_chrom_flips_top_down(species_order, rbh_df_list,
                            if b_flip.get(r[bc], False) else r["_br"], axis=1)
         d["_tp"] = d[tc].map(sp_to_chromorder[top_sp]).astype(float) + d["_te"] / d["_tsz"]
         d["_bp"] = d[bc].map(sp_to_chromorder[bot_sp]).astype(float) + d["_be"] / d["_bsz"]
+        if "whole_FET" in d.columns:
+            d["_w"] = d["whole_FET"].apply(lambda x: 1000.0 if x <= 0.05 else 1.0)
+        else:
+            d["_w"] = 1.0
         d = d.sort_values("_tp", kind="mergesort")
-        return _count_inversions(d["_bp"].tolist())
+        return _fenwick_weighted_inversion(d["_bp"].tolist(), d["_w"].tolist())
 
     pair_cache = {k: _eval_pair(species_order[k], species_order[k + 1])
                   for k in range(len(species_order) - 1)}
@@ -1339,6 +1352,17 @@ def _brushing_sweep(species_order, rbh_df_list,
     for sp in species_order:
         sp_to_chromorder[sp] = best_orders[sp]
         sp_to_chrom_flip[sp] = best_flips[sp]
+    # Final flip cascade on the best-seen state. best_flips was
+    # captured at the moment best_score was first reached -- those
+    # flips were optimal w.r.t. the anchor-coarse metric brushing
+    # uses internally, but the per-ortholog FET-weighted score may
+    # disagree (e.g. flipping CM/509.1 looks neutral in anchor space
+    # but improves per-ortholog crossings by ~3.7 billion). Running
+    # the cascade once more on the restored best order lets its
+    # boundary pass (which uses the per-ortholog score) catch these.
+    sp_to_chrom_flip = _optimize_chrom_flips_top_down(
+        species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+        sp_to_chromorder, sp_to_genesdfs, initial_flip=sp_to_chrom_flip)
     if verbose:
         print("brushing total drop: {:.0f} -> {:.0f}  ({:+.2f}%)".format(
             initial, best_score,
@@ -1883,7 +1907,7 @@ def _render_ribbon_figure(species_order, sp_to_chromorder, sp_to_chrom_flip,
     # Panel width leaves room for two-line italic species + grey accession
     # labels on the y-axis. Total figure width is 180 mm (7.087"); the
     # left margin holds the labels.
-    panelWidth = 6.3
+    panelWidth = 5.6
 
     #           two panels        top, bottom, middle
     bufferHeight = 1.5
@@ -2606,6 +2630,12 @@ def ribbon_plot(species_order, rbh_filelist,
                       .format(r, n_restarts, score, global_best), flush=True)
 
         _restore_state(global_best_state)
+        # Final flip cascade on the global-best state so the per-ortholog
+        # boundary pass gets a chance to refine flips that the anchor-
+        # coarse brushing left at suboptimal positions.
+        sp_to_chrom_flip = _optimize_chrom_flips_top_down(
+            species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
+            sp_to_chromorder, sp_to_genesdfs, initial_flip=sp_to_chrom_flip)
         print("[restart] global best across {} restarts: {:.0f}".format(
             n_restarts, global_best), flush=True)
 
@@ -2615,4 +2645,22 @@ def ribbon_plot(species_order, rbh_filelist,
                           outfile, plot_all=plot_all,
                           show_orientation_marks=show_orientation_marks,
                           species_labels=species_labels)
+    # Persist the final optimization state alongside the PDF so a
+    # downstream diagnostic ("why wasn't chrom X flipped?") can be
+    # answered without re-running the whole 30+ minute optimization
+    # pipeline. The JSON contains the chromosome ordering and the
+    # per-scaffold flip state for every species in plot order.
+    try:
+        import json as _json
+        import os as _os_save
+        state_path = _os_save.path.splitext(outfile)[0] + "_state.json"
+        with open(state_path, "w") as _fh:
+            _json.dump({
+                "species_order": species_order,
+                "chromorder": sp_to_chromorder,
+                "chromflip": {sp: {s: bool(v) for s, v in d.items()}
+                              for sp, d in sp_to_chrom_flip.items()},
+            }, _fh, indent=2)
+    except Exception:
+        pass
     return sp_to_chromorder
