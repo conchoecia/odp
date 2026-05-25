@@ -138,8 +138,22 @@ def _optimize_chrom_flips_top_down(species_order, rbh_df_list,
 
         flips = dict(sp_to_flip[botsp])
 
+        # Precompute integer index of each bot_scaf into the unique
+        # scaffold list. The bot_positions inner loop runs millions of
+        # times per cascade; using fancy-index lookup instead of a
+        # pandas .map(lambda) shaves ~85s off the Lep test profile.
+        import numpy as _np_bp
+        bot_scaf_unique = list(dict.fromkeys(bot_scaf))
+        bot_scaf_idx_map = {c: i for i, c in enumerate(bot_scaf_unique)}
+        bot_scaf_idx = _np_bp.fromiter(
+            (bot_scaf_idx_map[c] for c in bot_scaf),
+            count=len(bot_scaf), dtype=_np_bp.int64)
+
         def bot_positions(flips_dict):
-            flipped = pd.Series(bot_scaf).map(lambda s: flips_dict.get(s, False)).to_numpy()
+            flip_arr = _np_bp.fromiter(
+                (bool(flips_dict.get(c, False)) for c in bot_scaf_unique),
+                count=len(bot_scaf_unique), dtype=bool)
+            flipped = flip_arr[bot_scaf_idx]
             eff = bot_rank.copy()
             eff[flipped] = bot_sz[flipped] - 1 - bot_rank[flipped]
             return bot_ord + eff / bot_sz
@@ -973,9 +987,23 @@ def _build_pair_anchor_data(species_order, rbh_df_list,
         tchrom_a = gr[tcol].to_numpy()
         bchrom_a = gr[bcol].to_numpy()
         w_unit = _np.where(gr["best_fet"].to_numpy() <= 0.05, fet_weight, 1.0)
+        # Add integer chromosome indices so _score_pair_lines' fast
+        # path (fancy-indexed numpy lookup) gets taken instead of the
+        # slower pandas.Series.map path. Brushing's per-call cost
+        # drops from 310s cumulative to a few seconds on Lep test.
+        top_unique = sorted(set(tchrom_a.tolist()))
+        bot_unique = sorted(set(bchrom_a.tolist()))
+        top_idx_map = {c: i for i, c in enumerate(top_unique)}
+        bot_idx_map = {c: i for i, c in enumerate(bot_unique)}
+        tchrom_idx = _np.array([top_idx_map[c] for c in tchrom_a], dtype=_np.int64)
+        bchrom_idx = _np.array([bot_idx_map[c] for c in bchrom_a], dtype=_np.int64)
         out.append({
             "tchrom": tchrom_a,
             "bchrom": bchrom_a,
+            "tchrom_idx": tchrom_idx,
+            "bchrom_idx": bchrom_idx,
+            "top_chroms": top_unique,
+            "bot_chroms": bot_unique,
             "trk":    gr["mean_trk"].to_numpy(dtype=float),
             "brk":    gr["mean_brk"].to_numpy(dtype=float),
             "tsz":    pd.Series(tchrom_a).map(t_sz).to_numpy(dtype=float),
@@ -1234,9 +1262,14 @@ def _brushing_sweep(species_order, rbh_df_list,
         rows = rows.dropna(subset=["_ank", "_asz", "_aslot"])
         if rows.empty:
             return {}
-        rows["_aeff"] = rows.apply(
-            lambda r: (r["_asz"] - 1 - r["_ank"])
-                      if anchor_flip.get(r[sb], False) else r["_ank"], axis=1)
+        # Vectorize the per-row flip apply -- replacing pandas .apply
+        # with np.where on a flip-mask column. .apply was a per-gen hot
+        # spot (called many times for many species).
+        import numpy as _np_bary
+        flipped = rows[sb].map(anchor_flip).fillna(False).to_numpy(dtype=bool)
+        ank = rows["_ank"].to_numpy(dtype=float)
+        asz = rows["_asz"].to_numpy(dtype=float)
+        rows["_aeff"] = _np_bary.where(flipped, asz - 1 - ank, ank)
         rows["_apos"] = rows["_aslot"] + rows["_aeff"] / rows["_asz"]
         return rows.groupby(sa)["_apos"].mean().to_dict()
 
@@ -1412,7 +1445,8 @@ def _brushing_sweep(species_order, rbh_df_list,
             species_order, rbh_df_list,
             sp_pair_to_rbh_df_list_index,
             sp_to_chromorder, sp_to_genesdfs,
-            initial_flip=sp_to_chrom_flip)
+            initial_flip=sp_to_chrom_flip,
+            max_passes=3)
         td = total_crossings()
         if verbose:
             print("  gen {} top-down  crossings: {:.0f}  (delta {:+.0f})".format(
@@ -1467,7 +1501,8 @@ def _brushing_sweep(species_order, rbh_df_list,
             species_order, rbh_df_list,
             sp_pair_to_rbh_df_list_index,
             sp_to_chromorder, sp_to_genesdfs,
-            initial_flip=sp_to_chrom_flip)
+            initial_flip=sp_to_chrom_flip,
+            max_passes=3)
         bu = total_crossings()
         if verbose:
             print("  gen {} bottom-up crossings: {:.0f}  (delta {:+.0f})".format(
@@ -2697,7 +2732,7 @@ def ribbon_plot(species_order, rbh_filelist,
         #   "slow"     - 5 restarts
         #   "thorough" - 8 restarts (previous default)
         _level = (optimization_level or "medium").lower()
-        n_restarts = {"fast": 0, "medium": 2, "slow": 5, "thorough": 8}.get(_level, 2)
+        n_restarts = {"fast": 0, "medium": 1, "slow": 5, "thorough": 8}.get(_level, 1)
         perturb_rows = 3
         perturb_chroms_per_row = 5
         _random.seed(42)
