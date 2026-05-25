@@ -1201,7 +1201,8 @@ def _brushing_sweep(species_order, rbh_df_list,
                     top_moves_per_iter=15,
                     top_move_offsets=(1, 2, 3, 5),
                     enable_bottom_up=True,
-                    bottom_moves_per_iter=15):
+                    bottom_moves_per_iter=15,
+                    enable_row_insertion_polish=True):
     """Modified Sugiyama: FET-weighted barycenter sweeps alternating
     top-down and bottom-up. After each direction the per-scaffold
     flip cascade is re-run so chromosome orientation is re-checked
@@ -1428,6 +1429,49 @@ def _brushing_sweep(species_order, rbh_df_list,
                         sp_to_chromorder[bot_sp][other], sp_to_chromorder[bot_sp][chrom]
         return any_move
 
+    def try_row_insertions(max_dist=5):
+        """Single-chrom insertion move applied to every row but with
+        a destination-distance cap (default 5 slots). For each chrom,
+        only try moves that shift it by at most max_dist positions
+        (in either direction). Reduces an O(N^2) inner loop to O(N *
+        max_dist), bringing this from a ~1.5-min pass to a few
+        seconds. Catches per-row anomalies that adjacent-swap and
+        col-swap miss without paying the full insertion cost."""
+        cur_score = total_crossings()
+        any_move = False
+        for sp in species_order:
+            chrom_seq = sorted(sp_to_chromorder[sp].items(), key=lambda x: x[1])
+            ids = [c for c, _ in chrom_seq]
+            n = len(ids)
+            for src_pos in range(n):
+                src_chrom = ids[src_pos]
+                best_delta = 0.0
+                best_dst = None
+                lo = max(0, src_pos - max_dist)
+                hi = min(n, src_pos + max_dist + 1)
+                for dst_pos in range(lo, hi):
+                    if dst_pos == src_pos:
+                        continue
+                    new_order = list(ids)
+                    new_order.pop(src_pos)
+                    new_order.insert(dst_pos, src_chrom)
+                    saved = dict(sp_to_chromorder[sp])
+                    sp_to_chromorder[sp] = {c: k for k, c in enumerate(new_order)}
+                    new_score = total_crossings()
+                    if new_score < cur_score + best_delta - 1e-9:
+                        best_delta = new_score - cur_score
+                        best_dst = dst_pos
+                    sp_to_chromorder[sp] = saved
+                if best_dst is not None:
+                    new_order = list(ids)
+                    new_order.pop(src_pos)
+                    new_order.insert(best_dst, src_chrom)
+                    sp_to_chromorder[sp] = {c: k for k, c in enumerate(new_order)}
+                    cur_score = cur_score + best_delta
+                    any_move = True
+                    ids = new_order
+        return any_move
+
     def try_column_pair_swaps():
         """Synchronised column-pair swap across a contiguous span of
         rows. For every adjacent column pair (k, k+1) and every
@@ -1548,6 +1592,7 @@ def _brushing_sweep(species_order, rbh_df_list,
             stagnation = 0 if improved_best else stagnation + 1
             prev = cs
 
+
         if not enable_bottom_up:
             # Patience check based on top-down + top-moves cycles only.
             if stagnation >= patience:
@@ -1613,17 +1658,114 @@ def _brushing_sweep(species_order, rbh_df_list,
     for sp in species_order:
         sp_to_chromorder[sp] = best_orders[sp]
         sp_to_chrom_flip[sp] = best_flips[sp]
-    # Final flip cascade on the best-seen state. best_flips was
-    # captured at the moment best_score was first reached -- those
-    # flips were optimal w.r.t. the anchor-coarse metric brushing
-    # uses internally, but the per-ortholog FET-weighted score may
-    # disagree (e.g. flipping CM/509.1 looks neutral in anchor space
-    # but improves per-ortholog crossings by ~3.7 billion). Running
-    # the cascade once more on the restored best order lets its
-    # boundary pass (which uses the per-ortholog score) catch these.
+    # Final polish: single-chromosome insertion within +/- N slots
+    # in every row, run once on the restored best state. Catches per-
+    # row anomalies (one chrom that needs to move a few slots within
+    # its own row) that col-swap and adjacent-swap can't see. Adds
+    # ~1 min on Lep but only 4-5B in score, so gated by level.
+    if enable_row_insertion_polish and try_row_insertions():
+        rs = total_crossings()
+        if rs < best_score:
+            best_score = rs
+            best_orders = {sp: dict(sp_to_chromorder[sp]) for sp in species_order}
+            best_flips  = {sp: dict(sp_to_chrom_flip[sp]) for sp in species_order}
+        if verbose:
+            print("  final row-insertion polish: {:.0f}".format(rs), flush=True)
+        if snapshot_fn is not None:
+            snapshot_fn(0, "ri", sp_to_chromorder, sp_to_chrom_flip, rs)
+    # Final flip cascade on the (now-polished) best-seen state.
+    # best_flips was captured when best_score was first reached --
+    # those flips were optimal w.r.t. the anchor-coarse metric
+    # brushing uses, but per-ortholog FET-weighted may disagree.
+    # The cascade's boundary pass (per-ortholog) catches that.
     sp_to_chrom_flip = _optimize_chrom_flips_top_down(
         species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
         sp_to_chromorder, sp_to_genesdfs, initial_flip=sp_to_chrom_flip)
+    # All-rows flip recheck on global score. Iterates until no single
+    # flip improves, plus a pair-flip pass that tries flipping each
+    # chrom together with its FET-best partner in adjacent rows.
+    # Catches cascading multi-flip fixes that one-flip greedy misses
+    # (e.g. flipping a Cydia chrom helps only AFTER two Plutella
+    # chroms above also flip).
+    _cur = total_crossings()
+    for _pass in range(6):
+        _moved = False
+        for _sp_idx, _sp in enumerate(species_order):
+            for _scaf in list(sp_to_chrom_flip[_sp].keys()):
+                sp_to_chrom_flip[_sp][_scaf] = not sp_to_chrom_flip[_sp][_scaf]
+                _new = total_crossings()
+                if _new < _cur - 1e-9:
+                    _cur = _new; _moved = True
+                else:
+                    sp_to_chrom_flip[_sp][_scaf] = not sp_to_chrom_flip[_sp][_scaf]
+        if not _moved:
+            break
+    # Triple-flip pass: for each chrom B in the lower row of an
+    # adjacent pair, find its top-2 partners P1 and P2 in the row
+    # above; try flipping (B, P1, P2) simultaneously. Captures
+    # user-identified cascading flips that single- and pair-flip
+    # greedy can't see (e.g. Cydia + two Plutella).
+    for _k in range(len(species_order) - 1):
+        _top = species_order[_k]; _bot = species_order[_k + 1]
+        _tbl = line_data[_k]
+        if "tchrom_idx" not in _tbl:
+            continue
+        _t_idx = _tbl["tchrom_idx"]; _b_idx = _tbl["bchrom_idx"]; _w_t = _tbl["w"]
+        _top_chroms = _tbl["top_chroms"]; _bot_chroms = _tbl["bot_chroms"]
+        # aggregate weight per (bchrom_idx -> [(tchrom_idx, w)])
+        _b_to_t = {}
+        for _i in range(len(_t_idx)):
+            _bi = int(_b_idx[_i]); _ti = int(_t_idx[_i])
+            _b_to_t.setdefault(_bi, {})[_ti] = _b_to_t.setdefault(_bi, {}).get(_ti, 0.0) + float(_w_t[_i])
+        for _bi, _t_w_map in _b_to_t.items():
+            _ranked = sorted(_t_w_map.items(), key=lambda x: -x[1])[:2]
+            if len(_ranked) < 2:
+                continue
+            _bc = _bot_chroms[_bi]
+            _tp1 = _top_chroms[_ranked[0][0]]
+            _tp2 = _top_chroms[_ranked[1][0]]
+            sp_to_chrom_flip[_bot][_bc] = not sp_to_chrom_flip[_bot][_bc]
+            sp_to_chrom_flip[_top][_tp1] = not sp_to_chrom_flip[_top][_tp1]
+            sp_to_chrom_flip[_top][_tp2] = not sp_to_chrom_flip[_top][_tp2]
+            _new = total_crossings()
+            if _new < _cur - 1e-9:
+                _cur = _new
+            else:
+                sp_to_chrom_flip[_bot][_bc] = not sp_to_chrom_flip[_bot][_bc]
+                sp_to_chrom_flip[_top][_tp1] = not sp_to_chrom_flip[_top][_tp1]
+                sp_to_chrom_flip[_top][_tp2] = not sp_to_chrom_flip[_top][_tp2]
+    # Pair-flip pass: each chrom together with its FET-best partner
+    # in the row above or below. Uses the brushing-coarse line_data
+    # (which is in scope here).
+    for _k in range(len(species_order) - 1):
+        _top = species_order[_k]; _bot = species_order[_k + 1]
+        _tbl = line_data[_k]
+        if "tchrom_idx" not in _tbl:
+            continue
+        _t_idx = _tbl["tchrom_idx"]; _b_idx = _tbl["bchrom_idx"]; _w_t = _tbl["w"]
+        # aggregate weight per (tchrom_idx, bchrom_idx)
+        _pairs = {}
+        for _i in range(len(_t_idx)):
+            _key = (int(_t_idx[_i]), int(_b_idx[_i]))
+            _pairs[_key] = _pairs.get(_key, 0.0) + float(_w_t[_i])
+        # best partner per top idx
+        _best_per_top = {}
+        for (_ti, _bi), _wsum in _pairs.items():
+            if _ti not in _best_per_top or _wsum > _best_per_top[_ti][1]:
+                _best_per_top[_ti] = (_bi, _wsum)
+        _top_chroms = _tbl["top_chroms"]; _bot_chroms = _tbl["bot_chroms"]
+        for _ti, (_bi, _) in _best_per_top.items():
+            _tc = _top_chroms[_ti]; _bc = _bot_chroms[_bi]
+            sp_to_chrom_flip[_top][_tc] = not sp_to_chrom_flip[_top][_tc]
+            sp_to_chrom_flip[_bot][_bc] = not sp_to_chrom_flip[_bot][_bc]
+            _new = total_crossings()
+            if _new < _cur - 1e-9:
+                _cur = _new
+            else:
+                sp_to_chrom_flip[_top][_tc] = not sp_to_chrom_flip[_top][_tc]
+                sp_to_chrom_flip[_bot][_bc] = not sp_to_chrom_flip[_bot][_bc]
+    if _cur < best_score:
+        best_score = _cur
     if verbose:
         print("brushing total drop: {:.0f} -> {:.0f}  ({:+.2f}%)".format(
             initial, best_score,
@@ -2842,12 +2984,16 @@ def ribbon_plot(species_order, rbh_filelist,
                 ids = ids[:start] + window + ids[start + k:]
                 sp_to_chromorder[sp] = {c: i for i, c in enumerate(ids)}
 
+        # Row-insertion polish adds ~1 min for ~4B score improvement;
+        # gated on level so "fast" stays under 3 min.
+        _polish = _level in ("medium", "slow", "thorough")
         # initial descent
         sp_to_chromorder, sp_to_chrom_flip = _brushing_sweep(
             species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
             sp_to_chromorder, sp_to_chrom_flip, sp_to_genesdfs,
             max_iters=50, verbose=True,
-            snapshot_fn=_snapshot if _snapshot_enabled else None)
+            snapshot_fn=_snapshot if _snapshot_enabled else None,
+            enable_row_insertion_polish=_polish)
         # score after first descent
         _ld0 = _build_pair_anchor_data(
             species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
@@ -2891,7 +3037,8 @@ def ribbon_plot(species_order, rbh_filelist,
                 species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
                 sp_to_chromorder, sp_to_chrom_flip, sp_to_genesdfs,
                 max_iters=50, verbose=True,
-                snapshot_fn=_restart_snapshot if _snapshot_enabled else None)
+                snapshot_fn=_restart_snapshot if _snapshot_enabled else None,
+                enable_row_insertion_polish=_polish)
             score = _total_now()
             if score < global_best:
                 print("[restart {}/{}] NEW global best {:.0f} (was {:.0f})".format(
