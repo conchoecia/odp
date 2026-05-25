@@ -1428,6 +1428,63 @@ def _brushing_sweep(species_order, rbh_df_list,
                         sp_to_chromorder[bot_sp][other], sp_to_chromorder[bot_sp][chrom]
         return any_move
 
+    def try_column_pair_swaps():
+        """Synchronised column-pair swap across a contiguous span of
+        rows. For every adjacent column pair (k, k+1) and every
+        contiguous row span [r0, r1], try swapping the chromosomes at
+        column k and k+1 in *every* row of [r0..r1] at the same time.
+        Single-row swaps can't find this because moving just one row's
+        pair makes that row worse against its neighbor; the entire
+        block has to move together. Found cases on Lep that medium
+        only catches via random-restart.
+
+        Accept the move if it strictly reduces the global crossing
+        score. The candidate set is O(K * N^2) per call (K = max
+        column count, N = species count); each candidate is one
+        score recompute. On Lep that's ~30 * 78 = ~2300 candidates;
+        each ~3ms = 7 sec total. Worth it if it finds even one fix.
+        """
+        max_cols = max(len(sp_to_chromorder[sp]) for sp in species_order)
+        cur_score = total_crossings()
+        any_move = False
+        for k in range(max_cols - 1):
+            # try all contiguous row spans [r0, r1] that have a chrom
+            # at both columns k and k+1 in every row.
+            for r0 in range(len(species_order)):
+                for r1 in range(r0 + 1, len(species_order) + 1):
+                    rows = species_order[r0:r1]
+                    # collect chrom-at-k, chrom-at-k+1 per row in span
+                    pairs = []
+                    ok = True
+                    for sp in rows:
+                        ord_ = sp_to_chromorder[sp]
+                        # invert dict: pos -> chrom
+                        # cheaper: iterate
+                        cka = ckb = None
+                        for c, p in ord_.items():
+                            if p == k: cka = c
+                            elif p == k + 1: ckb = c
+                            if cka is not None and ckb is not None: break
+                        if cka is None or ckb is None:
+                            ok = False; break
+                        pairs.append((sp, cka, ckb))
+                    if not ok:
+                        continue
+                    # apply swap to all rows in span
+                    for sp, cka, ckb in pairs:
+                        sp_to_chromorder[sp][cka], sp_to_chromorder[sp][ckb] = \
+                            sp_to_chromorder[sp][ckb], sp_to_chromorder[sp][cka]
+                    new_score = total_crossings()
+                    if new_score < cur_score - 1e-9:
+                        cur_score = new_score
+                        any_move = True
+                    else:
+                        # revert
+                        for sp, cka, ckb in pairs:
+                            sp_to_chromorder[sp][cka], sp_to_chromorder[sp][ckb] = \
+                                sp_to_chromorder[sp][ckb], sp_to_chromorder[sp][cka]
+        return any_move
+
     for it in range(max_iters):
         # top-down brush
         for i in range(1, len(species_order)):
@@ -1474,6 +1531,22 @@ def _brushing_sweep(species_order, rbh_df_list,
                 snapshot_fn(it + 1, "tm", sp_to_chromorder, sp_to_chrom_flip, ts)
             stagnation = 0 if improved_best else stagnation + 1
             prev = ts
+
+        # Synchronised column-pair block swap. Captures multi-row
+        # coordinated moves that single-row swap/insertion can't see
+        # (e.g. swapping the rightmost two chromosomes across an
+        # entire top-of-plot region at once).
+        if try_column_pair_swaps():
+            cs = total_crossings()
+            if verbose:
+                print("  gen {} col-swap   crossings: {:.0f}  (delta {:+.0f})".format(
+                    it + 1, cs, cs - prev), flush=True)
+            improved_best = cs < best_score
+            snapshot_if_best(cs)
+            if snapshot_fn is not None:
+                snapshot_fn(it + 1, "cs", sp_to_chromorder, sp_to_chrom_flip, cs)
+            stagnation = 0 if improved_best else stagnation + 1
+            prev = cs
 
         if not enable_bottom_up:
             # Patience check based on top-down + top-moves cycles only.
