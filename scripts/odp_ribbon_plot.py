@@ -26,12 +26,23 @@ import sys
 
 
 def _count_inversions(seq):
-    """Number of pairs (i,j) with i<j and seq[i]>seq[j]. O(n log n) via
-    bisect into a sorted side buffer. Used to score ribbon crossings: lay
-    out line endpoints sorted by the top species' x, then count inversions
-    in the bottom species' x — each inversion is one crossing of bezier
-    paths in plot_bezier_lines (paths are monotonic in y, so two paths
-    cross iff their endpoint orderings flip)."""
+    """Number of pairs (i,j) with i<j and seq[i]>seq[j]. O(n log n).
+    If numba is available we route through a JIT'd Fenwick implementation
+    (~50x faster than the bisect-based fallback)."""
+    if len(seq) == 0:
+        return 0
+    try:
+        import numpy as _np
+        arr = _np.asarray(list(seq), dtype=_np.float64)
+        if _HAVE_NUMBA:
+            sorted_unique = _np.unique(arr)
+            ranks = (_np.searchsorted(sorted_unique, arr) + 1).astype(_np.int64)
+            ones = _np.ones(arr.shape[0], dtype=_np.float64)
+            return int(_fenwick_weighted_inversion_jit(
+                ranks, ones, int(len(sorted_unique))))
+    except Exception:
+        pass
+    # Bisect-based fallback (still O(n log n)).
     side = []
     inv = 0
     for x in reversed(list(seq)):
@@ -171,47 +182,30 @@ def _optimize_chrom_flips_top_down(species_order, rbh_df_list,
     # catch it. We also re-visit the inner rows because the
     # cascade-greedy order may have missed flips that only pay off
     # once the rows below have settled into their final order.
+    # Pre-compute per-pair line tables ONCE per cascade call. The
+    # tables (numpy arrays) are reused for every flip-attempt scoring
+    # inside the cascade, replacing a slow pandas-.apply hot loop.
+    _pair_tables = {}
+    for _k in range(len(species_order) - 1):
+        _top = species_order[_k]; _bot = species_order[_k + 1]
+        _lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([_top, _bot]))]
+        _pair_tables[_k] = _build_pair_line_table(
+            _top, _bot, rbh_df_list[_lookup], sp_to_genesdfs, fet_weight=1000.0)
+
     def _eval_pair(top_sp, bot_sp):
-        """FET-weighted crossing count for a single adjacent species
-        pair. Uses the same multiplicative weighting the brushing
-        optimizer minimizes (1000x for whole_FET <= 0.05 lines, 1x
-        otherwise) so the boundary flip pass agrees with the score
-        brushing was driving toward. An earlier version of this
-        function used the unweighted _count_inversions, which caused
-        flips that would have helped FET-significant ribbons (e.g.
-        CM/509.1 on Plutella) to be rejected because the raw count
-        didn't change much."""
-        lookup = sp_pair_to_rbh_df_list_index[tuple(sorted([top_sp, bot_sp]))]
-        df_in = rbh_df_list[lookup]
-        tc, bc = "{}_scaf".format(top_sp), "{}_scaf".format(bot_sp)
-        tg, bg = "{}_gene".format(top_sp), "{}_gene".format(bot_sp)
-        m = df_in[tc].isin(sp_to_chromorder[top_sp]) & df_in[bc].isin(sp_to_chromorder[bot_sp])
-        d = df_in.loc[m].copy()
-        trk = dict(zip(sp_to_genesdfs[top_sp][tg],
-                       sp_to_genesdfs[top_sp]["{}_chromIx".format(top_sp)]))
-        brk = dict(zip(sp_to_genesdfs[bot_sp][bg],
-                       sp_to_genesdfs[bot_sp]["{}_chromIx".format(bot_sp)]))
-        tsz = sp_to_genesdfs[top_sp].groupby(tc).size().to_dict()
-        bsz = sp_to_genesdfs[bot_sp].groupby(bc).size().to_dict()
-        d["_tr"] = d[tg].map(trk); d["_br"] = d[bg].map(brk)
-        d = d.dropna(subset=["_tr", "_br"])
-        if d.empty:
-            return 0.0
-        t_flip = sp_to_flip[top_sp]; b_flip = sp_to_flip[bot_sp]
-        d["_tsz"] = d[tc].map(tsz).astype(float)
-        d["_bsz"] = d[bc].map(bsz).astype(float)
-        d["_te"] = d.apply(lambda r: (r["_tsz"] - 1 - r["_tr"])
-                           if t_flip.get(r[tc], False) else r["_tr"], axis=1)
-        d["_be"] = d.apply(lambda r: (r["_bsz"] - 1 - r["_br"])
-                           if b_flip.get(r[bc], False) else r["_br"], axis=1)
-        d["_tp"] = d[tc].map(sp_to_chromorder[top_sp]).astype(float) + d["_te"] / d["_tsz"]
-        d["_bp"] = d[bc].map(sp_to_chromorder[bot_sp]).astype(float) + d["_be"] / d["_bsz"]
-        if "whole_FET" in d.columns:
-            d["_w"] = d["whole_FET"].apply(lambda x: 1000.0 if x <= 0.05 else 1.0)
-        else:
-            d["_w"] = 1.0
-        d = d.sort_values("_tp", kind="mergesort")
-        return _fenwick_weighted_inversion(d["_bp"].tolist(), d["_w"].tolist())
+        """Vectorized FET-weighted crossing count for a single adjacent
+        species pair. Same metric as before (1000x for whole_FET <=
+        0.05 lines, 1x otherwise) but operates on the precomputed
+        numpy table -- ~50x faster than the prior pandas-.apply
+        version on Lep-scale data."""
+        for _k in range(len(species_order) - 1):
+            if (species_order[_k] == top_sp
+                    and species_order[_k + 1] == bot_sp):
+                return _score_pair_lines(
+                    _pair_tables[_k],
+                    sp_to_chromorder[top_sp], sp_to_chromorder[bot_sp],
+                    sp_to_flip[top_sp], sp_to_flip[bot_sp])
+        return 0.0
 
     pair_cache = {k: _eval_pair(species_order[k], species_order[k + 1])
                   for k in range(len(species_order) - 1)}
@@ -862,32 +856,69 @@ def _greedy_swap_polish(species_order, rbh_df_list,
     return sp_to_chromorder
 
 
+try:
+    import numpy as _np_jit
+    import numba as _numba
+    @_numba.njit(cache=True, fastmath=True)
+    def _fenwick_weighted_inversion_jit(ranks_1based, weights, n_ranks):
+        """Numba-JIT'd Fenwick weighted inversion count. ~50x faster
+        than the pure-Python version. ranks_1based: int64 array of
+        ranks in [1, n_ranks]. weights: float64 array. Returns the
+        total weighted inversion count."""
+        fen = _np_jit.zeros(n_ranks + 1, dtype=_np_jit.float64)
+        inv = 0.0
+        total = 0.0
+        n = ranks_1based.shape[0]
+        for i in range(n):
+            r = ranks_1based[i]
+            w = weights[i]
+            s = 0.0
+            idx = r
+            while idx > 0:
+                s += fen[idx]
+                idx -= idx & -idx
+            inv += w * (total - s)
+            idx = r
+            while idx <= n_ranks:
+                fen[idx] += w
+                idx += idx & -idx
+            total += w
+        return inv
+    _HAVE_NUMBA = True
+except ImportError:
+    _HAVE_NUMBA = False
+
+
 def _fenwick_weighted_inversion(values, weights):
     """Weighted inversion count. For every pair (i < j) with values[i] >
     values[j], adds weights[i] * weights[j] to the total. O(n log n)
-    using a Fenwick tree over the unique values seen in `values`. This
-    is the scoring kernel for the crossing-count local search: each
-    bezier-line pair is one potential crossing, weighted by the
-    importance of the two lines."""
+    via a Fenwick tree. The hot inner loop is JIT-compiled by numba
+    when available (~50x speedup vs the Python fallback)."""
+    import numpy as np
     if not values:
         return 0.0
+    if _HAVE_NUMBA:
+        arr_v = np.asarray(values, dtype=np.float64)
+        arr_w = np.asarray(weights, dtype=np.float64)
+        sorted_unique = np.unique(arr_v)
+        ranks_1based = (np.searchsorted(sorted_unique, arr_v) + 1).astype(np.int64)
+        return float(_fenwick_weighted_inversion_jit(
+            ranks_1based, arr_w, int(len(sorted_unique))))
+    # Pure-Python fallback
     sorted_unique = sorted(set(values))
     rank = {v: i + 1 for i, v in enumerate(sorted_unique)}
     n = len(sorted_unique)
     fen = [0.0] * (n + 1)
-
     def update(i, w):
         while i <= n:
             fen[i] += w
             i += i & -i
-
     def query(i):
         s = 0.0
         while i > 0:
             s += fen[i]
             i -= i & -i
         return s
-
     inv = 0.0
     total = 0.0
     for v, w in zip(values, weights):
@@ -936,16 +967,21 @@ def _build_pair_anchor_data(species_order, rbh_df_list,
             best_fet=("whole_FET", "min"),
             mean_trk=("_trk", "mean"),
             mean_brk=("_brk", "mean")).reset_index()
-        records = []
-        for tchrom, bchrom, count, best_fet, mtrk, mbrk in zip(
-                gr[tcol].values, gr[bcol].values,
-                gr["count"].values, gr["best_fet"].values,
-                gr["mean_trk"].values, gr["mean_brk"].values):
-            w_unit = fet_weight if best_fet <= 0.05 else 1.0
-            records.append((tchrom, bchrom, float(mtrk), float(mbrk),
-                            int(t_sz[tchrom]), int(b_sz[bchrom]),
-                            float(w_unit * count)))
-        out.append(records)
+        # Return as a numpy-array dict so _score_pair_lines takes its
+        # fast path (~50x speedup vs list-of-tuples on Lep-scale data).
+        import numpy as _np
+        tchrom_a = gr[tcol].to_numpy()
+        bchrom_a = gr[bcol].to_numpy()
+        w_unit = _np.where(gr["best_fet"].to_numpy() <= 0.05, fet_weight, 1.0)
+        out.append({
+            "tchrom": tchrom_a,
+            "bchrom": bchrom_a,
+            "trk":    gr["mean_trk"].to_numpy(dtype=float),
+            "brk":    gr["mean_brk"].to_numpy(dtype=float),
+            "tsz":    pd.Series(tchrom_a).map(t_sz).to_numpy(dtype=float),
+            "bsz":    pd.Series(bchrom_a).map(b_sz).to_numpy(dtype=float),
+            "w":      (w_unit * gr["count"].to_numpy()).astype(float),
+        })
     return out
 
 
@@ -971,28 +1007,96 @@ def _build_pair_line_data(species_order, rbh_df_list,
                           sp_to_genesdfs[top_sp]["{}_chromIx".format(top_sp)]))
         b_rank = dict(zip(sp_to_genesdfs[bot_sp][bg],
                           sp_to_genesdfs[bot_sp]["{}_chromIx".format(bot_sp)]))
-        t_sz = sp_to_genesdfs[top_sp].groupby(tcol).size().to_dict()
-        b_sz = sp_to_genesdfs[bot_sp].groupby(bcol).size().to_dict()
-        records = []
-        for tchrom, bchrom, trk, brk, fet in zip(
-                df[tcol].values, df[bcol].values,
-                df[tg].map(t_rank).values,
-                df[bg].map(b_rank).values,
-                df.get("whole_FET", pd.Series([1.0] * len(df))).values):
-            if trk is None or brk is None or pd.isna(trk) or pd.isna(brk):
-                continue
-            w = fet_weight if fet <= 0.05 else 1.0
-            records.append((tchrom, bchrom, int(trk), int(brk),
-                            int(t_sz[tchrom]), int(b_sz[bchrom]), w))
-        line_data_per_pair.append(records)
+        # Return as a numpy-array dict so _score_pair_lines fast-paths.
+        line_data_per_pair.append(_build_pair_line_table(
+            top_sp, bot_sp, df, sp_to_genesdfs, fet_weight=fet_weight))
     return line_data_per_pair
+
+
+def _iter_records(records):
+    """Yield (tchrom, bchrom, trk, brk, tsz, bsz, w) for either the
+    legacy list-of-tuples format or the new numpy-array dict format.
+    Lets call sites that haven't been vectorized still work."""
+    if isinstance(records, dict):
+        tchrom = records["tchrom"]; bchrom = records["bchrom"]
+        trk = records["trk"]; brk = records["brk"]
+        tsz = records["tsz"]; bsz = records["bsz"]; w = records["w"]
+        for i in range(len(tchrom)):
+            yield (tchrom[i], bchrom[i], trk[i], brk[i],
+                   tsz[i], bsz[i], w[i])
+    else:
+        for r in records:
+            yield r
 
 
 def _score_pair_lines(records, top_order, bot_order, top_flip, bot_flip):
     """Weighted crossing count for one adjacent species pair given
-    current chrom orders and per-chrom flips. Lines whose endpoints
-    sit on chroms not in `top_order`/`bot_order` are ignored
-    (typical when a scaffold is filtered out by minscafsize)."""
+    current chrom orders and per-chrom flips. Accepts records either
+    as a list of tuples (legacy) or a dict of numpy arrays produced
+    by _build_pair_line_table (vectorized fast path). The numpy path
+    is ~50x faster on Lep-scale data, used by the optimizer's hot
+    inner loop."""
+    import numpy as np
+    # Fast numpy path
+    if isinstance(records, dict):
+        # Preferred fast path: tables built by _build_pair_line_table
+        # also include integer chrom indices, so a position lookup is
+        # one fancy-index instead of an O(n) pandas Series.map.
+        if "tchrom_idx" in records:
+            top_chroms = records["top_chroms"]; bot_chroms = records["bot_chroms"]
+            t_pos_arr = np.fromiter(
+                (top_order.get(c, np.nan) for c in top_chroms),
+                count=len(top_chroms), dtype=np.float64)
+            b_pos_arr = np.fromiter(
+                (bot_order.get(c, np.nan) for c in bot_chroms),
+                count=len(bot_chroms), dtype=np.float64)
+            t_fl_arr  = np.fromiter(
+                (bool(top_flip.get(c, False)) for c in top_chroms),
+                count=len(top_chroms), dtype=bool)
+            b_fl_arr  = np.fromiter(
+                (bool(bot_flip.get(c, False)) for c in bot_chroms),
+                count=len(bot_chroms), dtype=bool)
+            tci = records["tchrom_idx"]; bci = records["bchrom_idx"]
+            t_pos = t_pos_arr[tci]; b_pos = b_pos_arr[bci]
+            t_fl  = t_fl_arr[tci];  b_fl  = b_fl_arr[bci]
+            keep = ~(np.isnan(t_pos) | np.isnan(b_pos))
+            if not np.any(keep):
+                return 0.0
+            trk_k = records["trk"][keep]; brk_k = records["brk"][keep]
+            tsz_k = records["tsz"][keep]; bsz_k = records["bsz"][keep]
+            w_k   = records["w"][keep]
+            t_pos = t_pos[keep]; b_pos = b_pos[keep]
+            t_fl  = t_fl[keep];  b_fl  = b_fl[keep]
+            t_eff = np.where(t_fl, tsz_k - 1 - trk_k, trk_k)
+            b_eff = np.where(b_fl, bsz_k - 1 - brk_k, brk_k)
+            tp = t_pos + t_eff / tsz_k
+            bp = b_pos + b_eff / bsz_k
+            order = np.argsort(tp, kind="mergesort")
+            return _fenwick_weighted_inversion(bp[order].tolist(), w_k[order].tolist())
+        # Legacy fast path (kept for older callers / smaller tables)
+        tchrom = records["tchrom"]; bchrom = records["bchrom"]
+        trk = records["trk"]; brk = records["brk"]
+        tsz = records["tsz"]; bsz = records["bsz"]; w = records["w"]
+        if len(tchrom) == 0:
+            return 0.0
+        t_pos = pd.Series(tchrom).map(top_order).to_numpy(dtype=float)
+        b_pos = pd.Series(bchrom).map(bot_order).to_numpy(dtype=float)
+        t_fl  = pd.Series(tchrom).map(top_flip).fillna(False).to_numpy(dtype=bool)
+        b_fl  = pd.Series(bchrom).map(bot_flip).fillna(False).to_numpy(dtype=bool)
+        keep  = ~(np.isnan(t_pos) | np.isnan(b_pos))
+        if not np.any(keep):
+            return 0.0
+        t_pos = t_pos[keep]; b_pos = b_pos[keep]
+        t_fl  = t_fl[keep];  b_fl  = b_fl[keep]
+        trk_k = trk[keep]; brk_k = brk[keep]
+        tsz_k = tsz[keep]; bsz_k = bsz[keep]; w_k = w[keep]
+        t_eff = np.where(t_fl, tsz_k - 1 - trk_k, trk_k)
+        b_eff = np.where(b_fl, bsz_k - 1 - brk_k, brk_k)
+        tp = t_pos + t_eff / tsz_k
+        bp = b_pos + b_eff / bsz_k
+        order = np.argsort(tp, kind="mergesort")
+        return _fenwick_weighted_inversion(bp[order].tolist(), w_k[order].tolist())
+    # Legacy list-of-tuples path
     vals_top = []
     vals_bot = []
     weights = []
@@ -1010,6 +1114,55 @@ def _score_pair_lines(records, top_order, bot_order, top_flip, bot_flip):
     sorted_bot = [vals_bot[i] for i in order]
     sorted_w   = [weights[i]  for i in order]
     return _fenwick_weighted_inversion(sorted_bot, sorted_w)
+
+
+def _build_pair_line_table(top_sp, bot_sp, rbh_df, sp_to_genesdfs,
+                           fet_weight=1000.0):
+    """Pre-compute one pair's line data as numpy arrays. Replaces the
+    list-of-tuples format produced by _build_pair_anchor_data and
+    _build_pair_line_data with column arrays so _score_pair_lines can
+    vectorize. Computed once per cascade call and reused for every
+    flip / move attempt inside it -- this is the main speedup vs the
+    prior pandas-.apply hot path."""
+    import numpy as np
+    tc = "{}_scaf".format(top_sp); bc = "{}_scaf".format(bot_sp)
+    tg = "{}_gene".format(top_sp); bg = "{}_gene".format(bot_sp)
+    g_to_trk = dict(zip(sp_to_genesdfs[top_sp][tg],
+                        sp_to_genesdfs[top_sp]["{}_chromIx".format(top_sp)]))
+    g_to_brk = dict(zip(sp_to_genesdfs[bot_sp][bg],
+                        sp_to_genesdfs[bot_sp]["{}_chromIx".format(bot_sp)]))
+    tsz_map = sp_to_genesdfs[top_sp].groupby(tc).size().to_dict()
+    bsz_map = sp_to_genesdfs[bot_sp].groupby(bc).size().to_dict()
+    tchrom = rbh_df[tc].to_numpy()
+    bchrom = rbh_df[bc].to_numpy()
+    trk = rbh_df[tg].map(g_to_trk).to_numpy(dtype=float)
+    brk = rbh_df[bg].map(g_to_brk).to_numpy(dtype=float)
+    keep = ~(np.isnan(trk) | np.isnan(brk))
+    tchrom = tchrom[keep]; bchrom = bchrom[keep]
+    trk = trk[keep]; brk = brk[keep]
+    tsz = pd.Series(tchrom).map(tsz_map).to_numpy(dtype=float)
+    bsz = pd.Series(bchrom).map(bsz_map).to_numpy(dtype=float)
+    if "whole_FET" in rbh_df.columns:
+        fet_arr = rbh_df["whole_FET"].to_numpy()[keep]
+        w = np.where(fet_arr <= 0.05, fet_weight, 1.0)
+    else:
+        w = np.ones(len(tchrom))
+    # Convert chrom names to dense integer indices so per-line
+    # position lookup becomes one numpy fancy-index instead of N
+    # pandas Series.map calls. The pandas Series.map was the #1
+    # cumulative cost in cProfile -- 387k calls / 1612s on the
+    # Lep test. Numpy integer indexing is ~100x faster.
+    top_unique = sorted(set(tchrom.tolist()))
+    bot_unique = sorted(set(bchrom.tolist()))
+    top_idx_map = {c: i for i, c in enumerate(top_unique)}
+    bot_idx_map = {c: i for i, c in enumerate(bot_unique)}
+    tchrom_idx = np.array([top_idx_map[c] for c in tchrom], dtype=np.int64)
+    bchrom_idx = np.array([bot_idx_map[c] for c in bchrom], dtype=np.int64)
+    return {"tchrom": tchrom, "bchrom": bchrom,
+            "tchrom_idx": tchrom_idx, "bchrom_idx": bchrom_idx,
+            "top_chroms": top_unique, "bot_chroms": bot_unique,
+            "trk": trk, "brk": brk,
+            "tsz": tsz, "bsz": bsz, "w": w}
 
 
 def _brushing_sweep(species_order, rbh_df_list,
@@ -1119,7 +1272,7 @@ def _brushing_sweep(species_order, rbh_df_list,
         bot_order = sp_to_chromorder[species_order[1]]
         # gather (top_chrom, t_pos, b_pos, w)
         items = []
-        for tchrom, bchrom, trk, brk, tsz, bsz, w in recs:
+        for tchrom, bchrom, trk, brk, tsz, bsz, w in _iter_records(recs):
             if tchrom not in top_order or bchrom not in bot_order:
                 continue
             t_eff = (tsz - 1 - trk) if sp_to_chrom_flip[top_sp].get(tchrom, False) else trk
@@ -1187,7 +1340,7 @@ def _brushing_sweep(species_order, rbh_df_list,
         top_order = sp_to_chromorder[species_order[-2]]
         bot_order = sp_to_chromorder[bot_sp]
         items = []
-        for tchrom, bchrom, trk, brk, tsz, bsz, w in recs:
+        for tchrom, bchrom, trk, brk, tsz, bsz, w in _iter_records(recs):
             if tchrom not in top_order or bchrom not in bot_order:
                 continue
             t_eff = (tsz - 1 - trk) if sp_to_chrom_flip[species_order[-2]].get(tchrom, False) else trk
@@ -1449,7 +1602,7 @@ def _crossing_local_search(species_order, rbh_df_list,
             top_flip  = sp_to_chrom_flip[top_sp]
             bot_flip  = sp_to_chrom_flip[bot_sp]
             this_is_top = (species_order[sp_idx] == top_sp)
-            for tchrom, bchrom, trk, brk, tsz, bsz, w in recs:
+            for tchrom, bchrom, trk, brk, tsz, bsz, w in _iter_records(recs):
                 if (this_is_top and tchrom != chrom) or \
                    (not this_is_top and bchrom != chrom):
                     continue
@@ -2228,7 +2381,8 @@ def ribbon_plot(species_order, rbh_filelist,
                 plot_all = False,
                 optimize_chrom_rotation = True,
                 show_orientation_marks  = True,
-                species_labels = None):
+                species_labels = None,
+                optimization_level = "medium"):
     """
     Takes in a list of species as the plotting order,
      a list of rbh files, and a dict of species_to_chr_to_sizes
@@ -2537,10 +2691,19 @@ def ribbon_plot(species_order, rbh_filelist,
         # recover quickly.
         import random as _random
         import copy as _copy
-        n_restarts = 8
+        # optimization_level controls how aggressive the search is:
+        #   "fast"     - no restarts, just optimal-lg + 1 brushing descent
+        #   "medium"   - 1 brushing descent + 2 restarts (default)
+        #   "slow"     - 5 restarts
+        #   "thorough" - 8 restarts (previous default)
+        _level = (optimization_level or "medium").lower()
+        n_restarts = {"fast": 0, "medium": 2, "slow": 5, "thorough": 8}.get(_level, 2)
         perturb_rows = 3
         perturb_chroms_per_row = 5
         _random.seed(42)
+        # Snapshots only at the most expensive level; otherwise skip
+        # for speed. Each snapshot is a full matplotlib render.
+        _snapshot_enabled = (_level == "thorough")
 
         def _save_state():
             return ({sp: dict(sp_to_chromorder[sp]) for sp in species_order},
@@ -2575,7 +2738,8 @@ def ribbon_plot(species_order, rbh_filelist,
         sp_to_chromorder, sp_to_chrom_flip = _brushing_sweep(
             species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
             sp_to_chromorder, sp_to_chrom_flip, sp_to_genesdfs,
-            max_iters=50, verbose=True, snapshot_fn=_snapshot)
+            max_iters=50, verbose=True,
+            snapshot_fn=_snapshot if _snapshot_enabled else None)
         # score after first descent
         _ld0 = _build_pair_anchor_data(
             species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
@@ -2618,7 +2782,8 @@ def ribbon_plot(species_order, rbh_filelist,
             sp_to_chromorder, sp_to_chrom_flip = _brushing_sweep(
                 species_order, rbh_df_list, sp_pair_to_rbh_df_list_index,
                 sp_to_chromorder, sp_to_chrom_flip, sp_to_genesdfs,
-                max_iters=50, verbose=True, snapshot_fn=_restart_snapshot)
+                max_iters=50, verbose=True,
+                snapshot_fn=_restart_snapshot if _snapshot_enabled else None)
             score = _total_now()
             if score < global_best:
                 print("[restart {}/{}] NEW global best {:.0f} (was {:.0f})".format(
