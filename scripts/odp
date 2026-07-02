@@ -323,24 +323,26 @@ rule filter_prots:
         {params.fainfo} {params.sample} {input.fasta} > {output.chromsize}
         """
 
-rule make_diamond_and_blast_db:
+rule make_diamond_db:
     """
-    We make both diamond and blastp databases for the proteins.
-    We only do this one the sample has passed the input QC checks.
+    Build the DIAMOND database for the proteins (only needed when
+    config["diamond_or_blastp"] == "diamond").
+
+    Because Snakemake is pull-based and diamond_blast only requests the DB it
+    actually reads (see diamond_blast_db_inputs), make_blast_db below is never
+    triggered in diamond mode - so we no longer emit the ~8 unused BLAST index
+    files per genome. The .dmnd is marked temp(): it is an intermediate consumed
+    only by diamond_blast and is auto-removed once the last blast of this sample
+    finishes.
     """
     input:
         pep = ancient(config["tool"] + "/db/{sample}_prots.pep.gz"),
     output:
-        dmnd = config["tool"] + "/db/dmnd/{sample}_prots.gz.dmnd",
-        phr  = config["tool"] + "/db/{sample}_prots.pep.gz.phr",
-        pin  = config["tool"] + "/db/{sample}_prots.pep.gz.pin",
-        psq  = config["tool"] + "/db/{sample}_prots.pep.gz.psq"
+        dmnd = temp(config["tool"] + "/db/dmnd/{sample}_prots.gz.dmnd"),
     params:
-        outprefix1 = config["tool"],
-        outprefix2 = config["tool"] + "/db",
-        outdir = config["tool"] + "/db/dmnd",
-        title  = "{sample}_prots.pep.gz"
-    benchmark: "benchmarks/make_diamond_and_blast_db/{sample}.make_diamond_and_blast_db.benchmark.txt"
+        outprefix = config["tool"],
+        outdir    = config["tool"] + "/db/dmnd",
+    benchmark: "benchmarks/make_diamond_db/{sample}.make_diamond_db.benchmark.txt"
     resources:
         io_slots = 1,
         mem_mb = 7999, # should be small
@@ -348,41 +350,88 @@ rule make_diamond_and_blast_db:
     threads: 1 # No reason to have more than one thread
     shell:
         """
-        mkdir -p {params.outprefix1}
-        mkdir -p {params.outprefix2}
+        mkdir -p {params.outprefix}
         mkdir -p {params.outdir}
         diamond makedb --in {input.pep} --db {output.dmnd}
-        gunzip -c {input.pep} | makeblastdb -in - -out {input.pep} -title {params.title} -dbtype prot
         """
+
+rule make_blast_db:
+    """
+    Build the NCBI BLAST+ database for the proteins (only needed when
+    config["diamond_or_blastp"] == "blastp").
+
+    makeblastdb (BLAST+ v5) emits ~8 index files per genome. We declare all of
+    them with multiext() so Snakemake tracks every one and can temp()-clean them
+    once the last blast that reads this DB finishes - previously only .phr/.pin/
+    .psq were declared and the rest (.pdb/.pjs/.pot/.ptf/.pto) leaked forever.
+    """
+    input:
+        pep = ancient(config["tool"] + "/db/{sample}_prots.pep.gz"),
+    output:
+        temp(multiext(config["tool"] + "/db/{sample}_prots.pep.gz",
+                      ".pdb", ".phr", ".pin", ".pjs", ".pot", ".psq", ".ptf", ".pto")),
+    params:
+        outprefix = config["tool"],
+        outdir    = config["tool"] + "/db",
+        dbout     = config["tool"] + "/db/{sample}_prots.pep.gz",
+        title     = "{sample}_prots.pep.gz",
+    benchmark: "benchmarks/make_blast_db/{sample}.make_blast_db.benchmark.txt"
+    resources:
+        io_slots = 1,
+        mem_mb = 7999, # should be small
+        runtime   = 10  # ten minutes
+    threads: 1 # No reason to have more than one thread
+    shell:
+        """
+        mkdir -p {params.outprefix}
+        mkdir -p {params.outdir}
+        gunzip -c {input.pep} | makeblastdb -in - -out {params.dbout} -title {params.title} -dbtype prot
+        """
+
+def diamond_blast_db_inputs(wildcards):
+    """
+    Only require the database that the selected search method actually reads:
+      - diamond mode -> {sample2}.dmnd  (so make_blast_db never runs)
+      - blastp  mode -> {sample2} BLAST index files (so make_diamond_db never runs)
+    pep1 (query) and pep2 (blastp -db prefix) are always required.
+    """
+    d = {
+        "pep1": ancient(config["tool"] + "/db/{}_prots.pep.gz".format(wildcards.sample1)),
+        "pep2": ancient(config["tool"] + "/db/{}_prots.pep.gz".format(wildcards.sample2)),
+    }
+    if config["diamond_or_blastp"] == "blastp":
+        for ext in ["phr", "pin", "psq"]:
+            d[ext] = ancient(config["tool"] + "/db/{}_prots.pep.gz.{}".format(wildcards.sample2, ext))
+    else:
+        d["dmnd2"] = ancient(config["tool"] + "/db/dmnd/{}_prots.gz.dmnd".format(wildcards.sample2))
+    return d
 
 rule diamond_blast:
     """
     This blasts the proteins against the proteins of another sample.
-    TODO: the blastp output needs to be switched to gzipped files to save space.
+    The blastp output is an intermediate consumed only by reciprocal_best_hits,
+    so it is temp() and auto-removed once RBH is computed.
+    (The former TODO to gzip these to save space is now moot - they no longer persist.)
     """
     input:
-        pep1  = ancient(config["tool"] + "/db/{sample1}_prots.pep.gz"),
-        pep2  = ancient(config["tool"] + "/db/{sample2}_prots.pep.gz"),
-        phr   = ancient(config["tool"] + "/db/{sample2}_prots.pep.gz.phr"),
-        pin   = ancient(config["tool"] + "/db/{sample2}_prots.pep.gz.pin"),
-        psq   = ancient(config["tool"] + "/db/{sample2}_prots.pep.gz.psq"),
-        dmnd2 = ancient(config["tool"] + "/db/dmnd/{sample2}_prots.gz.dmnd"),
+        unpack(diamond_blast_db_inputs)
     output:
-        blastp = config["tool"] + "/step0-blastp_results/{sample1}_against_{sample2}.blastp"
+        blastp = temp(config["tool"] + "/step0-blastp_results/{sample1}_against_{sample2}.blastp")
     benchmark: "benchmarks/diamond_blast/{sample1}_{sample2}_diamond_blast.benchmark.txt"
     resources:
         mem_mb = 2000, # 20231206 - I don't actually know how long this will take.
         runtime   = 20    # 20231206 - I don't actually know how long this will take. Currently 20 minutes in seconds.
     threads: 8
     params:
-        search_method = config["diamond_or_blastp"]
+        search_method = config["diamond_or_blastp"],
+        dmnd_db = lambda wildcards: config["tool"] + "/db/dmnd/{}_prots.gz.dmnd".format(wildcards.sample2),
     priority: 1
     shell:
         """
         if [ "{params.search_method}" = "blastp" ]; then
             gunzip -c {input.pep1} | blastp -db {input.pep2} -num_threads {threads} -evalue 1E-5 -outfmt 6 > {output.blastp}
         elif [ "{params.search_method}" = "diamond" ]; then
-            diamond blastp --query {input.pep1} --db {input.dmnd2} --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
+            diamond blastp --query {input.pep1} --db {params.dmnd_db} --threads {threads} --evalue 1E-5 --outfmt 6 --out {output.blastp}
         fi
         """
 
@@ -395,8 +444,8 @@ rule reciprocal_best_hits:
         blastp1to2 = config["tool"] + "/step0-blastp_results/{sample1}_against_{sample2}.blastp",
         blastp2to1 = config["tool"] + "/step0-blastp_results/{sample2}_against_{sample1}.blastp"
     output:
-        blastp1to2 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample1}_and_{sample2}_recip.temp.blastp",
-        blastp2to1 = config["tool"] + "/step0-blastp_results/reciprocal_best/{sample2}_and_{sample1}_recip.temp.blastp"
+        blastp1to2 = temp(config["tool"] + "/step0-blastp_results/reciprocal_best/{sample1}_and_{sample2}_recip.temp.blastp"),
+        blastp2to1 = temp(config["tool"] + "/step0-blastp_results/reciprocal_best/{sample2}_and_{sample1}_recip.temp.blastp")
     benchmark: "benchmarks/reciprocal_best_hits/{sample1}_{sample2}.reciprocal_best_hits.benchmark.txt"
     resources:
         mem_mb = 7999, # Should be small. 20251230 updated to about 8GB to ensure space.
@@ -427,8 +476,11 @@ rule n_ways_reciprocal_best:
                       config["analysispairs"][wildcards.analysis][0], config["analysispairs"][wildcards.analysis][1])],
         chrom      = lambda wildcards: [config["species"][x]["chrom"] for x in config["analysispairs"][wildcards.analysis]]
     output:
-        acceptable_prots = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_acceptable_prots.txt",
-        blast_network    = config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_edges.txt",
+        # acceptable_prots and blast_network (edges) are byproducts that no downstream
+        # rule reads, so they are temp() and removed once this job finishes. The .rbh is
+        # an explicit target (see file_targets) so it is kept.
+        acceptable_prots = temp(config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_acceptable_prots.txt"),
+        blast_network    = temp(config["tool"] + "/step0-blastp_results/reciprocal_best/{analysis}_edges.txt"),
         rbh              = config["tool"] + "/step1-rbh/{analysis}_reciprocal_best_hits.rbh"
     benchmark: "benchmarks/n_ways_reciprocal_best_hits/{analysis}.n_ways_reciprocal_best_hits.benchmark.txt"
     resources:
@@ -634,7 +686,9 @@ rule get_chromsize_of_analysis_pair:
         fastas = lambda wildcards: [config["tool"] + "/step0-chromsize/species/{}.chromsize".format(x)
                             for x in config["analysispairs"][wildcards.analysis]]
     output:
-        chromsize = config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize"
+        # A per-pair concatenation of two existing per-species .chromsize files; consumed
+        # only by analysis_D_and_FET / plot_synteny_* and cheaply regenerated, so temp().
+        chromsize = temp(config["tool"] + "/step0-chromsize/analyses/{analysis}.chromsize")
     benchmark: "benchmarks/get_chromsize_of_analysis_pair/{analysis}.get_chromsize_of_analysis_pair.benchmark.txt"
     resources:
         mem_mb = 500,  # 20231206 I don't actually know how much RAM this uses. But it probably is not much.
