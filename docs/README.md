@@ -103,6 +103,7 @@ diagrams of conserved linkages between genomes.
       - [ALGs part 7 - Plot mixing of select linkage groups](#plotmixing)
     - [Determine which clade is sister](#4speciesphylogeny)
 - [Citing odp](#cite)
+  - [Parts of odp that need an additional citation](#citesciadv)
 
 ## <a name="uguide"></a>Users' Guide
 
@@ -625,12 +626,39 @@ The output of this program is histograms showing the different measured paramete
 
 ## <a name="cite"></a>Citing odp
 
-If you use `odp` in your work, please cite the following papers:
+If you use `odp` in your work, please cite:
 
 > Schultz, D.T., Haddock, S.H.D., Bredeson, J.V., Green, R.E., Simakov, O & Rokhsar, D.S. (2023)
 > Ancient gene linkages support ctenophores as sister to other animals.
 > *Nature*, **618** (7963):110-117. [https://doi.org/10.1038/s41586-023-05936-6](https://www.nature.com/articles/s41586-023-05936-6)
 
-> Schultz, D.T., Blümel, A., Destanović, D., Sarigol, F., & Simakov, O. (2024).
+That paper describes `odp` itself, and is the correct citation for the great
+majority of the software: the pairwise dot plots, the ribbon diagrams, and the
+ALG-inference workflow (`odp_nway_rbh`, `odp_rbh_to_groupby`,
+`odp_groupby_filter`, `odp_groupby_to_rbh`, `odp_rbh_merge`, `odp_rbh_to_hmm`,
+`odp_rbh_plot_mixing`) and `odp_genome_rearrangement_simulation`.
+
+### <a name="citesciadv"></a>Parts of odp that need an additional citation
+
+Some parts of `odp` were written after the 2023 paper, and were first used and
+described in Schultz et al. (2026). If your work uses any of the entry points
+in the table below, please cite that paper **in addition to** the 2023 paper:
+
+> Schultz, D.T., Blümel, A., Destanović, D., Sarigol, F., & Simakov, O. (2026).
 > Topological mixing and irreversibility in animal chromosome evolution.
-> *bioRxiv*, 2024.07.29.605683. [https://doi.org/10.1101/2024.07.29.605683](https://doi.org/10.1101/2024.07.29.605683)
+> *Science Advances*, **12** (34):eadz5561. [https://doi.org/10.1126/sciadv.adz5561](https://doi.org/10.1126/sciadv.adz5561)
+
+| If you use… | …which lives in |
+|---|---|
+| **`plot_LG_decay: True`** — the ALG decay analysis, which splits the genes of each ALG into those on the orthologous chromosome and those scattered elsewhere, and the `step2-figures/ALG_decay_plots/*_ALG_decay.pdf` and `*_ALG_decay.tsv` files it writes | rule `ALG_decay_plot` in `scripts/odp`, and `plot_decay()` in `source/odp_plotting_functions.py` |
+| **`odp_onlyDB`** — the ALG-database-only mode, which generates each sample's `.rbh` file against an `LG_db` and omits the *n*×*n* species-species comparisons so that thousands of genomes can be processed at once | `scripts/odp_onlyDB` |
+| **`odp_filechecker`** — the standalone input-validation pipeline that was split out of `scripts/odp` so that file checks do not bottleneck large runs | `scripts/odp_filechecker` |
+| **Per-species ALG `.rbh` files** (`plot_LGs: True`) used as the input to an evolutionary genome topology analysis, e.g. in [`egt`](https://github.com/conchoecia/egt) | `scripts/odp`, `scripts/odp_onlyDB` |
+
+The exact `odp` configuration used in Schultz et al. (2026) was
+`ignore_autobreaks: True`, `diamond_or_blastp: diamond`,
+`duplicate_proteins: pass`, `plot_LGs: True`, and `plot_sp_sp: False`,
+comparing the BCnS ALGs (`LG_db/BCnSSimakov2022.tar.gz`) against
+chromosome-scale animal genomes.
+
+See also [`CITATION.cff`](../CITATION.cff).

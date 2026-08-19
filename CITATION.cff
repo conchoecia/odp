@@ -1,0 +1,60 @@
+cff-version: 1.2.0
+message: >-
+  If you use odp, please cite the preferred citation below. If you use the ALG
+  decay analysis (plot_LG_decay), odp_onlyDB, odp_filechecker, or odp's
+  per-species ALG .rbh files as input to an evolutionary genome topology
+  analysis, please additionally cite the Science Advances paper listed under
+  references. See the "Citing odp" section of docs/README.md.
+title: "odp: oxford dot plots"
+license: MIT
+repository-code: "https://github.com/conchoecia/odp"
+doi: 10.5281/zenodo.7857389
+authors:
+  - family-names: Schultz
+    given-names: "Darrin T."
+    email: darrin.schultz@univie.ac.at
+preferred-citation:
+  type: article
+  title: "Ancient gene linkages support ctenophores as sister to other animals"
+  year: 2023
+  journal: "Nature"
+  volume: 618
+  issue: 7963
+  start: 110
+  end: 117
+  doi: 10.1038/s41586-023-05936-6
+  url: "https://doi.org/10.1038/s41586-023-05936-6"
+  authors:
+    - family-names: Schultz
+      given-names: "Darrin T."
+    - family-names: Haddock
+      given-names: "Steven H. D."
+    - family-names: Bredeson
+      given-names: "Jessen V."
+    - family-names: Green
+      given-names: "Richard E."
+    - family-names: Simakov
+      given-names: Oleg
+    - family-names: Rokhsar
+      given-names: "Daniel S."
+references:
+  - type: article
+    title: "Topological mixing and irreversibility in animal chromosome evolution"
+    year: 2026
+    journal: "Science Advances"
+    volume: 12
+    issue: 34
+    number: "eadz5561"
+    doi: 10.1126/sciadv.adz5561
+    url: "https://doi.org/10.1126/sciadv.adz5561"
+    authors:
+      - family-names: Schultz
+        given-names: "Darrin T."
+      - family-names: Blümel
+        given-names: Arno
+      - family-names: Destanović
+        given-names: Dalila
+      - family-names: Sarigol
+        given-names: Fatih
+      - family-names: Simakov
+        given-names: Oleg
