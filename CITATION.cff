@@ -1,10 +1,9 @@
 cff-version: 1.2.0
 message: >-
-  If you use odp, please cite the preferred citation below. If you use the ALG
-  decay analysis (plot_LG_decay), odp_onlyDB, odp_filechecker, or odp's
-  per-species ALG .rbh files as input to an evolutionary genome topology
-  analysis, please additionally cite the Science Advances paper listed under
-  references. See the "Citing odp" section of docs/README.md.
+  If you use odp, please cite the preferred citation below. Please also cite the
+  Science Advances paper under references if you use the ALG decay analysis
+  (plot_LG_decay), odp_onlyDB, odp_filechecker, or odp's per-species ALG .rbh
+  files as input to an evolutionary genome topology analysis.
 title: "odp: oxford dot plots"
 license: MIT
 repository-code: "https://github.com/conchoecia/odp"
