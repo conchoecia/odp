@@ -738,14 +738,16 @@ def subway_plot(species_order, rbh_filelist,
         sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp][["{}_gene".format(thissp),
                                                          "{}_scaf".format(thissp),
                                                          "{}_pos".format(thissp)]]
-        sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp].groupby(
-                                   by=["{}_scaf".format(thissp)], as_index=False
-                                   ).apply(lambda x: x.reset_index(drop=True)
-                                   )
-        sp_to_genesdfs[thissp].index.names = ["{}_delete".format(thissp),"{}_chromIx".format(thissp)]
-        sp_to_genesdfs[thissp].reset_index(inplace =True)
-        sp_to_genesdfs[thissp] = sp_to_genesdfs[thissp][[x for x
-                                  in sp_to_genesdfs[thissp] if "delete" not in x]]
+        # Assign each gene its position within its chromosome (0, 1, 2,
+        # ...). This used to be done via groupby().apply(reset_index),
+        # which relied on pandas returning a MultiIndex; pandas >= 2.2 no
+        # longer does, so naming the index raised
+        # "Length of new names must be 1, got 2". `cumcount()` gives the
+        # same result, has been available since pandas 0.13, and matches
+        # the fix already in source/odp_ribbon_plot.py.
+        sp_to_genesdfs[thissp]["{}_chromIx".format(thissp)] = (
+            sp_to_genesdfs[thissp].groupby("{}_scaf".format(thissp)).cumcount()
+        )
         #print(sp_to_genesdfs[thissp])
 
     # we need a block strictly for determining the chromosome order
