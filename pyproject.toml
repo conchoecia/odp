@@ -10,9 +10,6 @@ addopts = "-v --tb=short"
 
 [tool.coverage.run]
 source = ["source"]
-omit = [
-  "source/kseq.h",
-]
 
 [tool.coverage.report]
 show_missing = true

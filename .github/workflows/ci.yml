@@ -81,24 +81,20 @@ jobs:
             hmmer \
             diamond-aligner \
             ncbi-blast+ \
-            samtools \
-            build-essential \
-            zlib1g-dev
+            samtools
 
       - name: Install python deps
         run: pip install -r requirements-dev.txt
 
-      - name: Cache bin/ + extracted LG_db + mini fixture
+      # odp compiles nothing (seqtk and fainfo were replaced by afp), so bin/
+      # holds only the tracked CLI and is not cached.
+      - name: Cache extracted LG_db + mini fixture
         uses: actions/cache@v4
         with:
           path: |
-            bin/
             LG_db/BCnSSimakov2022/
             tests/testdb/mini_LG_db/
-          key: ${{ runner.os }}-odp-fixtures-${{ hashFiles('Makefile', 'source/fainfo.c', 'LG_db/BCnSSimakov2022.tar.gz', 'tests/testdb/generate_mini_BCnSSimakov2022.snakefile') }}
-
-      - name: Build seqtk + fainfo
-        run: make seqtk fainfo
+          key: ${{ runner.os }}-odp-fixtures-${{ hashFiles('Makefile', 'LG_db/BCnSSimakov2022.tar.gz', 'tests/testdb/generate_mini_BCnSSimakov2022.snakefile') }}
 
       - name: Build full BCnSSimakov2022 LG db (cached)
         run: make BCnSSimakov2022 CORES=2

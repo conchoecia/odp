@@ -1,41 +1,10 @@
-# ---- toolchain ------------------------
-CC       ?= cc
-CFLAGS   ?= -O3 -std=c11 -Wall -Wextra
-CPPFLAGS ?= -Ibin/seqtk
-LDLIBS   ?= -lz
-
 # CORES used by snakemake for LG_db builds. Override: `make CORES=8`.
 CORES    ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 
 
-all: BCnS_ALG UnicellLG UnicellLGOrthofinder BCnSSimakov2022 seqtk fainfo
-
-.PHONY: seqtk fainfo
-
-# ---- fainfo -----------------------------------------------------------------
-# Build ./bin/fainfo from ./source/fainfo.c using kseq.h in bin/seqtk/
-fainfo: bin/fainfo
-
-KSEQ_URL = https://raw.githubusercontent.com/lh3/seqtk/master/kseq.h
-
-bin/fainfo: source/fainfo.c bin/seqtk/seqtk
-	@mkdir -p bin
-	@curl -L $(KSEQ_URL) -o source/kseq.h
-	@$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LDLIBS)
-	@echo "Built: $@"
-
-seqtk: bin/seqtk/seqtk
-
-bin/seqtk/seqtk:
-	@mkdir -p bin
-	@if [ ! -d bin/seqtk ]; then \
-	  git clone https://github.com/lh3/seqtk.git bin/seqtk; \
-	else \
-	  echo "bin/seqtk exists, assuming repo already cloned."; \
-	fi
-	@echo "Building seqtk..."
-	@$(MAKE) -C bin/seqtk
-	@echo "Built: $@"
+# odp compiles nothing: the FASTA steps that used seqtk and fainfo (built from
+# kseq.h) use the bundled Python parser, dependencies/afp.py, since November 2026.
+all: BCnS_ALG UnicellLG UnicellLGOrthofinder BCnSSimakov2022
 
 BCnS_ALG: LG_db/BCnS_LGs.tar.gz
 	cd LG_db; \
