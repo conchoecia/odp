@@ -12,7 +12,9 @@ sys.path.insert(1, dependencies_path)
 import afp as fasta
 
 # ODP-specific imports
-# None
+source_path = os.path.join(snakefile_path, "../source")
+sys.path.insert(1, source_path)
+import odp_ribbon_options as RO
 
 # Other standard python libraries
 import logging
@@ -186,6 +188,32 @@ config.setdefault("interspecies_height_in", None)
 config.setdefault("ribbon_lw", 0.25)
 config.setdefault("ribbon_lw_sig", None)
 config.setdefault("ribbon_lw_faint", None)
+# Ribbon standard options from the Schultz Lab (2026). All are off by default;
+# docs/RIBBON_OPTIONS.md lists them with examples.
+config.setdefault("ribbon_alpha_sig", 0.8)      # opacity of ribbons on significant blocks (break_FET <= 0.05)
+config.setdefault("ribbon_alpha_faint", 0.1)    # opacity of the other ribbons
+config.setdefault("unassigned_color", "#000000")# color for orthologs in no linkage group
+config.setdefault("unassigned_alpha", None)     # their opacity (None: as other ribbons)
+config.setdefault("ribbon_shuffle", False)      # shuffle drawing order so no color sits on top
+config.setdefault("chrom_lw", None)             # chromosome bar width in pt (None: matplotlib default)
+config.setdefault("min_scaf_fraction", 0)       # leave out scaffolds shorter than this fraction of the median
+config.setdefault("alg_labels", False)          # label boxes above the top species instead of the legend
+config.setdefault("alg_label_fontsize", 7)
+config.setdefault("alg_label_text_colors", {})  # {group: "black"|"white"} overrides of the APCA choice
+config.setdefault("show_legend", True)
+config.setdefault("show_chrom_labels", True)
+config.setdefault("order_ref", None)            # species whose gene order shades the ribbons and bars
+config.setdefault("focus_groups", [])           # linkage groups drawn in color; the rest gray
+config.setdefault("follow", None)               # list of SP:gene / SP:scaffold:start-end, or a file of them
+config.setdefault("follow_label", None)
+config.setdefault("microsynteny", False)        # draw runs of neighboring orthologs on top
+config.setdefault("microsynteny_color", "dark")
+config.setdefault("microsynteny_window", 3)
+config.setdefault("microsynteny_min_run", 3)
+config.setdefault("riparian_min", 0)            # bands for collinear runs of at least this many orthologs
+config.setdefault("rasterize_ribbons", False)
+if config["order_ref"] is not None and config["order_ref"] not in config.get("species_order", []):
+    sys.exit("ERROR: order_ref must be one of species_order.")
 config.setdefault("chrom_paint", False)
 config.setdefault("chrom_paint_height", 0.08)
 config.setdefault("chrom_paint_tracks", False)
@@ -774,7 +802,8 @@ def _read_chrom_file(path):
     return out
 
 
-def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy, plot_unassigned=True):
+def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy, plot_unassigned=True,
+                      lws=None, zorders=None, skip=None, sig=None, unassigned=None):
     """
     Plot bezier curves between chromosome coordinates of different species.
     - Returns the panel, but with the lines now
@@ -788,8 +817,13 @@ def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy, plot
     lw_sig   = float(config["ribbon_lw_sig"])   if config.get("ribbon_lw_sig")   is not None else lw_all
     lw_faint = float(config["ribbon_lw_faint"]) if config.get("ribbon_lw_faint") is not None else lw_all
     # plot the indices
+    un_color = config.get("unassigned_color", "#000000")
+    un_alpha = config.get("unassigned_alpha")
     for i in range(len(topxL)):
-        if (plot_unassigned is False) and (colors[i] == "#000000"):
+        is_un = (colors[i] == "#000000") if unassigned is None else unassigned[i]
+        if skip is not None and skip[i]:
+            continue  # drawn as part of a riparian band
+        if (plot_unassigned is False) and is_un:
             continue  # skip unassigned lines if plot_unassigned is False
         topx     = topxL[i]
         bottomx  = bottomxL[i]
@@ -813,18 +847,78 @@ def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy, plot
             ]
         codes, verts = zip(*path_data)
         path  = mpath.Path(verts, codes)
-        if colors[i] == "#000000":
+        is_sig = (alpha[i] >= 0.5) if sig is None else bool(sig[i])
+        if is_un:
             zord = -50
-        elif alpha[i] < 0.5:
+        elif not is_sig:
             zord = -99
         else:
             zord = 1
+        if zorders is not None and zorders[i] is not None:
+            zord = zorders[i]
+        lw = lws[i] if (lws is not None and lws[i] is not None) else (lw_sig if is_sig else lw_faint)
+        edge = un_color if (is_un and colors[i] == "#000000") else colors[i]
+        a_ = un_alpha if (is_un and un_alpha is not None and colors[i] == "#000000") else alpha[i]
         patch = patches.PathPatch(path, fill = False,
-                                  facecolor=[0,0,0,0], lw = lw_sig if alpha[i] >= 0.5 else lw_faint,
-                                  alpha=alpha[i], edgecolor = colors[i],
+                                  facecolor=[0,0,0,0], lw = lw,
+                                  alpha=a_, edgecolor = edge,
                                   zorder = zord)
         panel.add_patch(patch)
     return panel
+
+_ORDER_SHADES = {}
+
+
+def _ribbon_styles(tr, a, b, i, species_order, rbh_df_list):
+    """Color, opacity, width, layer and band membership of every ribbon of one pair (rows of tr, in order),
+    from the options order_ref, focus_groups, follow, microsynteny and riparian_min."""
+    n = len(tr)
+    color = list(tr["color"])
+    alpha = list(tr["alpha"])
+    sig = list(tr["sig"])
+    groups = [str(g) for g in tr["gene_group"]]
+    un = [str(c).upper() == "#000000" for c in color]   # odp marks orthologs in no linkage group black
+    lw, zorder, skip = [None] * n, [None] * n, [False] * n
+    a_sig = float(config.get("ribbon_alpha_sig", 0.8))
+    ref = config.get("order_ref")
+    if ref:
+        if not _ORDER_SHADES:
+            _ORDER_SHADES.update(RO.order_shades(rbh_df_list, list(species_order), ref))
+        for k, (ga, gb) in enumerate(zip(tr[a + "_gene"], tr[b + "_gene"])):
+            t = _ORDER_SHADES.get((a, ga), _ORDER_SHADES.get((b, gb)))
+            if t is not None and sig[k] and not un[k]:
+                color[k] = RO.shade(color[k], t)
+                alpha[k] = max(alpha[k], 0.55)
+    focus = set(config.get("focus_groups") or [])
+    if focus:
+        for k in range(n):
+            if groups[k] in focus:
+                alpha[k] = 0.65 if sig[k] else 0.12
+            else:
+                color[k], alpha[k], zorder[k] = "#9e9e9e", 0.07, -99
+    if config.get("follow"):
+        genes, regions = RO.parse_follow(config["follow"])
+        hit = RO.follow_mask(tr, a, b, genes, regions)
+        for k in range(n):
+            if hit[k]:
+                color[k], alpha[k], lw[k], zorder[k] = "black", 0.95, 0.75, 3
+            else:
+                alpha[k] = min(alpha[k], 0.16 if sig[k] else 0.03)
+    if config.get("microsynteny", False):
+        rows = RO.microsynteny_rows(tr, a, b, int(config.get("microsynteny_window", 3)),
+                                    int(config.get("microsynteny_min_run", 3)))
+        for k in rows:
+            color[k] = RO.micro_color(config.get("microsynteny_color", "dark"), None if un[k] else tr["color"].iloc[k])
+            alpha[k], zorder[k] = 0.8, 2
+            un[k] = False
+    bands = []
+    if int(config.get("riparian_min", 0) or 0) > 0:
+        bands = RO.collinear_runs(tr, a, b, int(config["riparian_min"]))
+        for rows, rev in bands:
+            for k in rows:
+                skip[k] = True
+    return {"color": color, "alpha": alpha, "lw": lw, "zorder": zorder, "skip": skip, "unassigned": un, "bands": bands}
+
 
 def subway_plot(species_order, rbh_filelist,
                 sp_to_chr_to_size,
@@ -1247,7 +1341,11 @@ def subway_plot(species_order, rbh_filelist,
     _lg_ncol = int(config.get("legend_ncol", 10))
     _lg_fontsize = int(config.get("legend_fontsize", 8))
     _lg_loc = config.get("legend_loc", "center left")
-    panellg.legend(handles=legend_elements,
+    if not config.get("show_legend", True):
+        panellg.set_visible(False)
+        legend_elements = []
+    if legend_elements:
+      panellg.legend(handles=legend_elements,
                    ncol = _lg_ncol,
                    fontsize = _lg_fontsize, loc=_lg_loc)
 
@@ -1263,7 +1361,9 @@ def subway_plot(species_order, rbh_filelist,
         tr = rbh_df_list[i].copy()
         if not plot_all:
             tr = tr.loc[tr["break_FET"] <= 0.05, ]
-        tr["alpha"] = tr.apply(lambda x: 0.8 if x["break_FET"] <= 0.05 else 0.1, axis = 1)
+        tr["sig"] = tr["break_FET"] <= 0.05
+        tr["alpha"] = tr["sig"].map({True: float(config.get("ribbon_alpha_sig", 0.8)),
+                                     False: float(config.get("ribbon_alpha_faint", 0.1))})
         tr = tr[["{}_gene".format(thissp),
                  "{}_scaf".format(thissp),
                   "{}_pos".format(thissp),
@@ -1271,6 +1371,8 @@ def subway_plot(species_order, rbh_filelist,
                  "{}_scaf".format(nextsp),
                   "{}_pos".format(nextsp),
                   "alpha",
+                  "sig",
+                  "gene_group",
                  "color"]]
         # handle the index plotting info
         #print(thisspChrom)
@@ -1341,23 +1443,28 @@ def subway_plot(species_order, rbh_filelist,
         tr = tr.sort_values(by=["bottomChr_finalOffset"]).reset_index(drop=True)
 
         # plot the indices
-        if pIx is not None:
-            pIx = plot_bezier_lines(pIx,
-                             tr["topIx_finalOffset"],
-                             tr["bottomIx_finalOffset"],
-                             tr["color"],
-                             tr["alpha"],
-                             i, i+1,
-                             plot_unassigned_rbh)
-
-        if pChr is not None:
-            pChr = plot_bezier_lines(pChr,
-                             tr["topChr_finalOffset"],
-                             tr["bottomChr_finalOffset"],
-                             tr["color"],
-                             tr["alpha"],
-                             i, i+1,
-                             plot_unassigned_rbh)
+        _st = _ribbon_styles(tr, thissp, nextsp, i, species_order, rbh_df_list)
+        _bands, _tr_bands = _st.pop("bands"), tr   # band rows refer to the unshuffled table
+        if config.get("ribbon_shuffle", False):
+            _perm = RO.shuffled(len(tr), seed=i + 1)
+            tr = tr.iloc[_perm].reset_index(drop=True)
+            _st = {k: [v[j] for j in _perm] for k, v in _st.items()}
+        for _panel, _top, _bot in ((pIx, "topIx_finalOffset", "bottomIx_finalOffset"),
+                                   (pChr, "topChr_finalOffset", "bottomChr_finalOffset")):
+            if _panel is None:
+                continue
+            for _rows, _rev in _bands:
+                _a = [_tr_bands[_top].iloc[j] for j in _rows]
+                _b = [_tr_bands[_bot].iloc[j] for j in _rows]
+                _c = _tr_bands["color"].iloc[_rows[0]]
+                _un = RO.is_unassigned(_c, _tr_bands["gene_group"].iloc[_rows[0]])
+                _fill = config.get("unassigned_color", "#000000") if _un else _c
+                _alpha = 0.45 if (not _un and bool(_tr_bands["sig"].iloc[_rows[0]])) else 0.15
+                _panel.add_patch(RO.band_patch(min(_a), max(_a), min(_b), max(_b), i, i + 1, _rev,
+                                               facecolor=_fill, edgecolor="none", alpha=_alpha, zorder=0.5))
+            plot_bezier_lines(_panel, tr[_top], tr[_bot], _st["color"], _st["alpha"], i, i + 1, plot_unassigned_rbh,
+                              lws=_st["lw"], zorders=_st["zorder"], skip=_st["skip"], sig=list(tr["sig"]),
+                              unassigned=_st["unassigned"])
 
     # Now we plot all the chroms
     _chr_rot       = float(config.get("chrom_label_rotation", 0))
@@ -1369,6 +1476,8 @@ def subway_plot(species_order, rbh_filelist,
     # this is a bug fix so the top and bottom species' bars aren't half-cut
     # by the panel y-limits.
     _line_kw = {"clip_on": False}
+    if config.get("chrom_lw") is not None:
+        _line_kw["linewidth"] = float(config["chrom_lw"])
     if _chr_cap is not None:
         _line_kw["solid_capstyle"] = _chr_cap
     if _chr_halo_pt > 0:
@@ -1417,6 +1526,28 @@ def subway_plot(species_order, rbh_filelist,
                 _paint_ix[(sp, c)] = _paint_bins(pts_ix[c], max(1.0, ixsizes[c]), bin_ix)
         _paint_order = {color: k for k, (color, group) in enumerate(sorted(_paint_order.items(), key=lambda t: t[1]))}
 
+    # gene-order shading (order_ref): each ortholog paints its bar halfway to its neighbors in its shade
+    _order_pts = {}
+    if config.get("order_ref"):
+        for i in range(len(species_order)):
+            sp = species_order[i]
+            g2ix = dict(zip(sp_to_genesdfs[sp]["{}_gene".format(sp)], sp_to_genesdfs[sp]["{}_chromIx".format(sp)]))
+            for gene, (scaf, pos, color, group) in _paint_points(sp, i, species_order, rbh_df_list, "none").items():
+                t = _ORDER_SHADES.get((sp, gene))
+                if t is None:
+                    continue
+                c = RO.shade(color, t)
+                _order_pts.setdefault(("chr", sp, scaf), []).append((pos, c))
+                if gene in g2ix:
+                    _order_pts.setdefault(("ix", sp, scaf), []).append((float(g2ix[gene]), c))
+
+    def _order_bar(panel, x1, x2, y, chrom_len, pts):
+        panel.add_patch(patches.Rectangle((x1, y - _paint_h / 2), x2 - x1, _paint_h, facecolor="white",
+                                          edgecolor="none", zorder=3, clip_on=False))
+        RO.paint_halfway(panel, x1, x2 - x1, chrom_len, pts, y - _paint_h / 2, _paint_h)
+        panel.add_patch(patches.Rectangle((x1, y - _paint_h / 2), x2 - x1, _paint_h, facecolor="none",
+                                          edgecolor="black", linewidth=0.5, zorder=5, clip_on=False))
+
     def _painted_bar(panel, x1, x2, y, chrom_len, bins):
         panel.add_patch(patches.Rectangle((x1, y - _paint_h / 2), x2 - x1, _paint_h, facecolor="white",
                                           edgecolor="none", zorder=3, clip_on=False))
@@ -1431,23 +1562,29 @@ def subway_plot(species_order, rbh_filelist,
                 # plot the line and the text
                 x1 = row["chrPlotOffset"]
                 x2 = row["chrPlotOffset"] + row["chrPlotPercent"]
-                if config.get("chrom_paint", False):
+                if _order_pts:
+                    _order_bar(pChr, x1, x2, i, row["chrsize"], _order_pts.get(("chr", sp, row["chrom"]), []))
+                elif config.get("chrom_paint", False):
                     _painted_bar(pChr, x1, x2, i, row["chrsize"], _paint_chr[(sp, row["chrom"])])
                 else:
                     pChr.plot([x1, x2], [i, i], 'k-', **_line_kw)
-                pChr.text(x1, i - 0.03, row["chrom"], ha="left", va="bottom",
-                          fontsize=_chr_font_chr, **_label_kw_common)
+                if config.get("show_chrom_labels", True):
+                    pChr.text(x1, i - 0.03, row["chrom"], ha="left", va="bottom",
+                              fontsize=_chr_font_chr, **_label_kw_common)
 
             if pIx is not None:
                 # plot the line and text for the index plot
                 x1 = row["ixPlotOffset"]
                 x2 = row["ixPlotOffset"] + row["ixPlotPercent"]
-                if config.get("chrom_paint", False):
+                if _order_pts:
+                    _order_bar(pIx, x1, x2, i, max(1.0, row["ixSize"]), _order_pts.get(("ix", sp, row["chrom"]), []))
+                elif config.get("chrom_paint", False):
                     _painted_bar(pIx, x1, x2, i, max(1.0, row["ixSize"]), _paint_ix[(sp, row["chrom"])])
                 else:
                     pIx.plot([x1, x2], [i, i], 'k-', **_line_kw)
-                pIx.text(x1, i - 0.03, row["chrom"], ha="left", va="bottom",
-                         fontsize=_chr_font_ix, **_label_kw_common)
+                if config.get("show_chrom_labels", True):
+                    pIx.text(x1, i - 0.03, row["chrom"], ha="left", va="bottom",
+                             fontsize=_chr_font_ix, **_label_kw_common)
 
     # Count and Fraction tracks under the last species (config chrom_paint_tracks)
     if config.get("chrom_paint_tracks", False):
@@ -1532,6 +1669,61 @@ def subway_plot(species_order, rbh_filelist,
         pIx.legend(handles=loci_legend_elements, loc='upper left', bbox_to_anchor=(1.01, 1), 
                    fontsize=6, title='Loci of Interest', title_fontsize=7, frameon=True)
 
+    # linkage-group label boxes above the top species (alg_labels): each over the chromosome that holds most of its
+    # orthologs, moved only along it, in as many tiers as needed; text white or black by APCA contrast
+    _ylim_top = {}
+    if config.get("alg_labels", False):
+        _fs = float(config.get("alg_label_fontsize", 7))
+        _renderer = fig.canvas.get_renderer()
+        _sp0, _df0 = species_order[0], rbh_df_list[0]
+        _cdf0 = sp_to_chromdf[_sp0]
+        _gcol = {}
+        for _g, _c in zip(_df0["gene_group"], _df0["color"]):
+            if not RO.is_unassigned(_c, _g):
+                _gcol.setdefault(str(_g), _c)
+        _g2ix = dict(zip(sp_to_genesdfs[_sp0]["{}_gene".format(_sp0)], sp_to_genesdfs[_sp0]["{}_chromIx".format(_sp0)]))
+        _bottom = len(species_order) - 1 + (0.75 if config.get("chrom_paint_tracks", False) else 0.35)
+        for _p, _xo, _xw, _sz, _use_ix in ((pChr, "chrPlotOffset", "chrPlotPercent", "chrsize", False),
+                                           (pIx, "ixPlotOffset", "ixPlotPercent", "ixSize", True)):
+            if _p is None:
+                continue
+            _off = dict(zip(_cdf0["chrom"], _cdf0[_xo]))
+            _wid = dict(zip(_cdf0["chrom"], _cdf0[_xw]))
+            _siz = dict(zip(_cdf0["chrom"], _cdf0[_sz]))
+            _pts = []
+            for _gene, _sc, _pos, _g, _c in zip(_df0["{}_gene".format(_sp0)], _df0["{}_scaf".format(_sp0)],
+                                                 _df0["{}_pos".format(_sp0)], _df0["gene_group"], _df0["color"]):
+                if RO.is_unassigned(_c, _g) or _sc not in _off:
+                    continue
+                _v = _g2ix.get(_gene) if _use_ix else float(_pos)
+                if _v is not None:
+                    _pts.append((str(_g), _sc, _off[_sc] + _wid[_sc] * float(_v) / max(1.0, _siz[_sc])))
+            _bb = _p.get_window_extent(_renderer)
+            _x_per_px = 1.04 / _bb.width
+            _mm_px = fig.dpi / 25.4
+            _widths = {}
+            for _g in _gcol:
+                _t = _p.text(0, 0, _g, fontsize=_fs)
+                _widths[_g] = (_t.get_window_extent(_renderer).width + 1.6 * _mm_px) * _x_per_px
+                _t.remove()
+            _placed, _ntiers = RO.place_labels(RO.label_homes(_pts), {c: (_off[c], _off[c] + _wid[c]) for c in _off},
+                                               _widths, -0.02, 1.02, 0.4 * _mm_px * _x_per_px)
+            # y units per mm, solved with the extra room the tiers need above the top row
+            _panel_mm = _bb.height / _mm_px
+            _name_mm = (_chr_font_chr * 25.4 / 72 + 0.6) if config.get("show_chrom_labels", True) else 0.0
+            _need_mm = 1.0 + _name_mm + _ntiers * 3.0
+            _range = (_bottom + 0.35) * _panel_mm / max(_panel_mm - _need_mm, 1e-6)
+            _u = _range / _panel_mm   # y units per mm
+            _y0 = -(_paint_h / 2 if (_paint or _order_pts) else 0.02) - (_name_mm + 0.8) * _u
+            for _g, _cx, _bw, _tier in _placed:
+                _fill = _gcol.get(_g, "#7f7f7f")
+                _ytop = _y0 - (_tier + 1) * 3.0 * _u + 0.4 * _u
+                _p.add_patch(RO.rounded_box(_cx - _bw / 2, _ytop, _bw, 2.6 * _u, 0.5 * _mm_px * _x_per_px, 0.5 * _u,
+                                            facecolor=_fill, edgecolor="none", zorder=6, clip_on=False))
+                _p.text(_cx, _ytop + 1.3 * _u, _g, ha="center", va="center", fontsize=_fs, zorder=7, clip_on=False,
+                        color=RO.text_color_for(_fill, config.get("alg_label_text_colors") or {}, _g))
+            _ylim_top[id(_p)] = min(-0.35, _y0 - _ntiers * 3.0 * _u - 0.5 * _u)
+
     # flip the y axes
     for p in [p for p in (pChr, pIx) if p is not None]:
         # remove some spines
@@ -1539,7 +1731,9 @@ def subway_plot(species_order, rbh_filelist,
             p.spines[side].set_visible(False)
         # set the limits
         p.set_xlim([-0.02,1.02])
-        p.set_ylim([-0.35,len(species_order)-1+(0.75 if config.get("chrom_paint_tracks", False) else 0.35)])  # Extra space for annotation boxes (and paint tracks)
+        p.set_ylim([_ylim_top.get(id(p), -0.35),len(species_order)-1+(0.75 if config.get("chrom_paint_tracks", False) else 0.35)])  # Extra space for annotation boxes (and paint tracks)
+        if config.get("rasterize_ribbons", False):
+            p.set_rasterization_zorder(1.5)   # ribbons and bands as an image; bars, labels and text stay vector
         # flip the axes
         p.set_ylim(p.get_ylim()[::-1])
         # set the axis labels — blanked when a cladogram supplies tip
@@ -1801,6 +1995,18 @@ rule make_plot_base:
                 min_chr_size[sp] = config["species"][sp]["minscafsize"]
             else:
                 min_chr_size[sp] = 0
+        _frac = float(config.get("min_scaf_fraction", 0) or 0)
+        if _frac > 0:   # leave out scaffolds far shorter than the species' chromosomes
+            for sp in params.sp_order:
+                _counts = {}
+                for _f in input.rbh_filelist:
+                    _cols = pd.read_csv(_f, sep="\t", nrows=0).columns
+                    if "{}_scaf".format(sp) in _cols:
+                        for _c, _n in pd.read_csv(_f, sep="\t", usecols=["{}_scaf".format(sp)])["{}_scaf".format(sp)].astype(str).value_counts().items():
+                            _counts[_c] = max(_counts.get(_c, 0), _n)
+                _sizes = [sp_to_chr_to_size[sp][_c] for _c, _n in _counts.items()
+                          if _n >= 10 and _c in sp_to_chr_to_size.get(sp, {}) and sp_to_chr_to_size[sp][_c] >= min_chr_size[sp]]
+                min_chr_size[sp] = max(min_chr_size[sp], RO.relative_min_size(_sizes, _frac))
         subway_plot(params.sp_order, input.rbh_filelist,
                     sp_to_chr_to_size, min_chr_size, output.pdf,
                     config["chromorder"],
@@ -1846,6 +2052,18 @@ rule make_plot_loci:
         # Load loci data for this specific label
         loci_data = _load_loci_data(params.locus_label, sp_to_locus_to_file, params.sp_order)
         
+        _frac = float(config.get("min_scaf_fraction", 0) or 0)
+        if _frac > 0:   # leave out scaffolds far shorter than the species' chromosomes
+            for sp in params.sp_order:
+                _counts = {}
+                for _f in input.rbh_filelist:
+                    _cols = pd.read_csv(_f, sep="\t", nrows=0).columns
+                    if "{}_scaf".format(sp) in _cols:
+                        for _c, _n in pd.read_csv(_f, sep="\t", usecols=["{}_scaf".format(sp)])["{}_scaf".format(sp)].astype(str).value_counts().items():
+                            _counts[_c] = max(_counts.get(_c, 0), _n)
+                _sizes = [sp_to_chr_to_size[sp][_c] for _c, _n in _counts.items()
+                          if _n >= 10 and _c in sp_to_chr_to_size.get(sp, {}) and sp_to_chr_to_size[sp][_c] >= min_chr_size[sp]]
+                min_chr_size[sp] = max(min_chr_size[sp], RO.relative_min_size(_sizes, _frac))
         subway_plot(params.sp_order, input.rbh_filelist,
                     sp_to_chr_to_size, min_chr_size, output.pdf,
                     config["chromorder"],
