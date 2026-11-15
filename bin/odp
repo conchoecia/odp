@@ -162,7 +162,7 @@ def run_subcommand(subcommand: str, args: argparse.Namespace) -> int:
     # If the user supplied --config but not --workdir, fall back to the
     # config file's parent directory. Configs commonly contain paths
     # relative to themselves; running snakemake from anywhere else makes
-    # zcat / seqtk / etc. fail with file-not-found in a way that's hard to
+    # input files fail with file-not-found in a way that's hard to
     # diagnose. Better to default-do-what-you-mean and announce it.
     if configfile is not None and workdir is None:
         workdir = configfile.parent

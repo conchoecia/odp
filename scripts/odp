@@ -32,6 +32,7 @@ source_path = os.path.join(snakefile_path, "../source")
 sys.path.insert(1, source_path)
 
 import odp_functions as odpf
+import odp_fasta_tools as oft
 import odp_plotting_functions as odp_plot
 import odp_color_manager as oc
 import rbh_tools
@@ -278,19 +279,19 @@ rule filter_prots:
     Sometimes the prot file with have sequences that are not present in
      the chrom file. Make a prot file of only the proteins in the chrom file.
 
-    Use seqtk for speed and low memory usage.
+    Both steps use afp (dependencies/afp.py) through source/odp_fasta_tools.py.
+    They replace seqtk and fainfo, which had to be compiled from kseq.h, and
+    write the same files. The genome is read in chunks and no sequence is held
+    in memory, so memory stays small for any genome.
     """
     input:
         fasta = lambda wildcards: config["species"][wildcards.sample]["genome"],
         prots = lambda wildcards: config["species"][wildcards.sample]["proteins"],
         chrom = lambda wildcards: config["species"][wildcards.sample]["chrom"]
     output:
-        ids = temp(config["tool"] + "/db/{sample}_prots.ids.txt"),
         pep = config["tool"] + "/db/{sample}_prots.pep.gz",
         chromsize = config["tool"] + "/step0-chromsize/species/{sample}.chromsize"
     params:
-        seqtk = os.path.join(bin_path, "seqtk/seqtk"),
-        fainfo = os.path.join(bin_path, "fainfo"),
         sample = lambda wildcards: wildcards.sample,
     retries: int(config.get("retries", 0))  # was 6; override via config.yaml `retries:` for HPC
     benchmark: "benchmarks/filter_prots/{sample}.filter_prots.benchmark.txt"
@@ -299,29 +300,17 @@ rule filter_prots:
         mem_mb = odpf.filtprot_get_mem_mb, # should be small
         runtime   = 10  # ten minutes # might need to change this with genome size
     threads: 1
-    shell:
-        """
-        # 0) Warn the user if the seqtk binary doesn't exist
-        if [ ! -x "{params.seqtk}" ]; then
-          echo "The seqtk binary doesn't exist or isn't executable: {params.seqtk}. Please run make in the odp install directory."
-          exit 1
-        fi
-        # 1) IDs from col1 of .chrom (uniq)
-        if [[ "{input.chrom}" == *.gz ]]; then gunzip -c "{input.chrom}"; else cat "{input.chrom}"; fi \
-          | cut -f1 | awk 'NF' | sort -u > "{output.ids}"
-
-        # 2) Filter FASTA by those IDs
-        #    - seqtk subseq matches sequence 'name' (ID before first space); it reads .gz directly
-        #    - strip descriptions so headers are just '>ID'
-        #    - OPTIONAL: dedupe by ID (keep first occurrence)
-        #    - wrap to 80 and gzip
-        {params.seqtk} subseq "{input.prots}" "{output.ids}" \
-          | {params.seqtk} seq -l 80 \
-          | gzip -c > {output.pep}
-
-        # 3) Get chrom sizes
-        {params.fainfo} {params.sample} {input.fasta} > {output.chromsize}
-        """
+    run:
+        # 1) protein IDs: the first word of column 1 of the .chrom file
+        ids = oft.chrom_ids(input.chrom)
+        # 2) those proteins, in file order, headers kept, sequences wrapped at 80, gzipped
+        written, missing = oft.filter_proteins(input.prots, ids, output.pep, wrap=80)
+        if missing:
+            print(f"odp filter_prots: {params.sample}: {len(missing)} of {len(ids)} protein IDs "
+                  f"in the .chrom file have no sequence in the protein file "
+                  f"(for example {sorted(missing)[0]})", file=sys.stderr)
+        # 3) chromosome sizes: sample, sequence name, length
+        oft.write_chrom_sizes(input.fasta, params.sample, output.chromsize)
 
 rule make_diamond_and_blast_db:
     """
