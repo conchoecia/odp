@@ -1,6 +1,10 @@
 // fainfo.c — print: <prefix>\t<name>\t<length>
 // Uses kseq.h from seqtk and zlib. Supports .fa/.fa.gz or stdin ("-").
 
+// fileno() is POSIX, not ISO C: with -std=c11, newer GCC rejects the implicit
+// declaration unless the POSIX interfaces are requested before any header.
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
