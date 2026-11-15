@@ -195,6 +195,9 @@ config.setdefault("ribbon_alpha_faint", 0.1)    # opacity of the other ribbons
 config.setdefault("unassigned_color", "#000000")# color for orthologs in no linkage group
 config.setdefault("unassigned_alpha", None)     # their opacity (None: as other ribbons)
 config.setdefault("ribbon_shuffle", False)      # shuffle drawing order so no color sits on top
+config.setdefault("ribbon_shuffle_seed", 0)     # seed of that order; species pair k uses seed + k + 1
+if isinstance(config["ribbon_shuffle_seed"], bool) or not isinstance(config["ribbon_shuffle_seed"], int):
+    sys.exit("ERROR: ribbon_shuffle_seed must be an integer; got {!r}.".format(config["ribbon_shuffle_seed"]))
 config.setdefault("chrom_lw", None)             # chromosome bar width in pt (None: matplotlib default)
 config.setdefault("min_scaf_fraction", 0)       # leave out scaffolds shorter than this fraction of the median
 config.setdefault("alg_labels", False)          # label boxes above the top species instead of the legend
@@ -1449,7 +1452,7 @@ def subway_plot(species_order, rbh_filelist,
         _st = _ribbon_styles(tr, thissp, nextsp, i, species_order, rbh_df_list)
         _bands, _tr_bands = _st.pop("bands"), tr   # band rows refer to the unshuffled table
         if config.get("ribbon_shuffle", False):
-            _perm = RO.shuffled(len(tr), seed=i + 1)
+            _perm = RO.shuffled(len(tr), seed=config["ribbon_shuffle_seed"] + i + 1)
             tr = tr.iloc[_perm].reset_index(drop=True)
             _st = {k: [v[j] for j in _perm] for k, v in _st.items()}
         for _panel, _top, _bot in ((pIx, "topIx_finalOffset", "bottomIx_finalOffset"),

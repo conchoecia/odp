@@ -126,6 +126,17 @@ rbh_directory: /path/to/odp/step2-figures/synteny_coloredby_BCnS_LGs/
 #                                  # (significant chromosome pairs).
 # ribbon_lw_faint: 0.5             # optional: width of the faint ribbons.
 #
+# ribbon_shuffle: true             # draw each species pair's ribbons in a
+#                                  # random order instead of left to right, so
+#                                  # where two linkage groups enter the same
+#                                  # chromosome neither color sits on top. The
+#                                  # layers stay: unassigned, faint and
+#                                  # significant ribbons are still drawn in
+#                                  # that order (default false).
+# ribbon_shuffle_seed: 0           # seed of the random order (species pair k,
+#                                  # counted from 0, uses seed + k + 1). Any
+#                                  # other integer gives another arrangement.
+#
 # chrom_paint: true                # paint each chromosome bar with the
 #                                  # fractions of its linkage groups along its
 #                                  # length (bins of 1/1000 of the species'
