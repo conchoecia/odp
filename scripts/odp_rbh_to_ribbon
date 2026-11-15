@@ -215,6 +215,15 @@ config.setdefault("microsynteny_window", 3)
 config.setdefault("microsynteny_min_run", 3)
 config.setdefault("riparian_min", 0)            # bands for collinear runs of at least this many orthologs
 config.setdefault("rasterize_ribbons", False)
+# Extra outputs, written next to output.pdf (all off by default)
+config.setdefault("zoom", None)                   # "SPA:chrom,SPB:chrom" (neighboring species) -> zoom_pdf
+config.setdefault("zoom_pdf", "zoom.pdf")
+config.setdefault("small_multiples", 0)           # N columns -> small_multiples_pdf
+config.setdefault("small_multiples_pdf", "small_multiples.pdf")
+config.setdefault("animate", None)                # path of an MP4 for talks (needs ffmpeg); a GIF is written beside it
+config.setdefault("animation_background", "light")
+config.setdefault("interactive_html", None)       # path of a self-contained web page of the plot
+config.setdefault("species_names", {})            # {species: "Genus species"} for the extra outputs
 if config["order_ref"] is not None and config["order_ref"] not in config.get("species_order", []):
     sys.exit("ERROR: order_ref must be one of species_order.")
 config.setdefault("chrom_paint", False)
@@ -870,6 +879,41 @@ def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy, plot
     return panel
 
 _ORDER_SHADES = {}
+
+
+def _extra_outputs(species_order, sp_to_chromdf, rbh_df_list):
+    """zoom, small_multiples, animate and interactive_html: separate files next to output.pdf."""
+    if not (config.get("zoom") or config.get("small_multiples") or config.get("animate") or config.get("interactive_html")):
+        return
+    lay = RO.layout_from(species_order, sp_to_chromdf, rbh_df_list)
+    names = config.get("species_names") or {}
+    colors = {}
+    for df in rbh_df_list:
+        for g, c in zip(df["gene_group"], df["color"]):
+            if not RO.is_unassigned(c, g):
+                colors.setdefault(str(g), c)
+    def _try(label, fn):
+        try:   # an extra output must never cost the main plot
+            fn()
+        except Exception as err:
+            print("WARNING: {} was not written: {}".format(label, err), file=sys.stderr)
+
+    if config.get("zoom"):
+        def _zoom():
+            (sa, ca), (sb, cb) = (part.split(":", 1) for part in str(config["zoom"]).split(","))
+            n = RO.zoom_figure(config.get("zoom_pdf", "zoom.pdf"), lay, (sa, ca), (sb, cb), names)
+            print("zoom: {} orthologs on {}:{} and {}:{}".format(n, sa, ca, sb, cb))
+        _try("zoom", _zoom)
+    if int(config.get("small_multiples") or 0) > 0:
+        _try("small_multiples", lambda: RO.small_multiples_figure(config.get("small_multiples_pdf", "small_multiples.pdf"),
+                                                                  lay, colors, int(config["small_multiples"]), names=names))
+    if config.get("animate"):
+        _try("animate", lambda: print("animate:", RO.animation(config["animate"], lay,
+                                                              config.get("animation_background", "light"), names)))
+    if config.get("interactive_html"):
+        _try("interactive_html", lambda: print("interactive_html: {} ribbons".format(
+            RO.interactive_page(config["interactive_html"], lay, colors, float(config.get("ribbon_alpha_sig", 0.8)),
+                                float(config.get("ribbon_alpha_faint", 0.1)), names))))
 
 
 def _ribbon_styles(tr, a, b, i, species_order, rbh_df_list):
@@ -1971,6 +2015,7 @@ def subway_plot(species_order, rbh_filelist,
         plt.savefig(outfile)
     
     plt.close(fig)
+    _extra_outputs(species_order, sp_to_chromdf, rbh_df_list)
     return sp_to_chromorder
 
 rule sp_to_chr_to_len:

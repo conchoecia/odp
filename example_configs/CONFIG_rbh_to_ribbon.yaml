@@ -121,6 +121,11 @@ rbh_directory: /path/to/odp/step2-figures/synteny_coloredby_BCnS_LGs/
 # interspecies_height_in: 0.322    # vertical spacing per species row in
 #                                  # inches (default 0.5).
 #
+# More ribbon options (labels above the top species, gene-order shading,
+# focus, follow, microsynteny, collinear riparian bands, names on bars,
+# zoom, small multiples, an animation and a web page), and the Schultz
+# Lab standard in one block: see docs/RIBBON_OPTIONS.md.
+#
 # ribbon_lw: 0.25                  # ribbon line width in pt (default 0.25).
 # ribbon_lw_sig: 0.5               # optional: width of the opaque ribbons
 #                                  # (significant chromosome pairs).

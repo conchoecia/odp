@@ -370,3 +370,317 @@ def name_on_bar(ax, x_center, y, text, fontsize=6, zorder=8):
     import matplotlib.patheffects as pe
     ax.text(x_center, y, text, ha="center", va="center", fontsize=fontsize, color="black", zorder=zorder,
             clip_on=False, path_effects=[pe.withStroke(linewidth=1.2, foreground="white")])
+
+
+# ---------------------------------------------------------------------------
+# extra outputs: zoom, small multiples, animation, interactive page
+# They use the chromosome-coordinate layout of the main plot (x from 0 to 1).
+# ---------------------------------------------------------------------------
+def layout_from(species_order, sp_to_chromdf, rbh_df_list):
+    """{sp: {chrom: (x0, width, size)}} in the chromosome-coordinate panel, and the pair tables in order."""
+    chroms = {}
+    for sp in species_order:
+        df = sp_to_chromdf[sp]
+        chroms[sp] = {c: (float(o), float(w), float(s)) for c, o, w, s in
+                      zip(df["chrom"], df["chrPlotOffset"], df["chrPlotPercent"], df["chrsize"])}
+    return {"species": list(species_order), "chroms": chroms, "pairs": list(rbh_df_list)}
+
+
+def _x(lay, sp, scaf, pos):
+    x0, w, size = lay["chroms"][sp][scaf]
+    return x0 + w * float(pos) / max(size, 1.0)
+
+
+def _rounded_bar(ax, x, y, w, h, color):
+    r = min(h / 2, w / 2) * 0.7
+    ax.add_patch(FancyBboxPatch((x + r, y - h / 2 + r), max(w - 2 * r, 1e-9), max(h - 2 * r, 1e-9),
+                                boxstyle="round,pad=%f,rounding_size=%f" % (r, r), facecolor=color, edgecolor="none",
+                                zorder=5))
+
+
+def zoom_figure(path, lay, top, bottom, names=None, width_in=7.087):
+    """The pair top=(sp, chrom), bottom=(sp, chrom) on one Mb scale, one ribbon per ortholog between them."""
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import PathCollection
+    (sa, ca), (sb, cb) = top, bottom
+    k = next((i for i in range(len(lay["species"]) - 1) if {lay["species"][i], lay["species"][i + 1]} == {sa, sb}), None)
+    if k is None:
+        raise ValueError("zoom: %s and %s must be neighboring species rows" % (sa, sb))
+    df = lay["pairs"][k]
+    la, lb = lay["chroms"][sa][ca][2], lay["chroms"][sb][cb][2]
+    mm = 1 / 25.4
+    W, H = width_in / mm, 46.0
+    fig = plt.figure(figsize=(width_in, H * mm))
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, W)
+    ax.set_ylim(H, 0)
+    ax.axis("off")
+    x0 = 32.0
+    scale = (W - 4 - x0) / max(la, lb)
+    ya, yb = 12.0, 36.0
+    paths, cols = [], []
+    for ga, sca, pa, scb, pb, grp, col in zip(df[sa + "_gene"], df[sa + "_scaf"], df[sa + "_pos"], df[sb + "_scaf"],
+                                               df[sb + "_pos"], df["gene_group"], df["color"]):
+        if sca == ca and scb == cb:
+            xa, xb = x0 + float(pa) * scale, x0 + float(pb) * scale
+            ym = (ya + yb) / 2
+            paths.append(Path([(xa, ya + 0.45), (xa, ym), (xb, ym), (xb, yb - 0.45)],
+                              [Path.MOVETO, Path.CURVE4, Path.CURVE4, Path.CURVE4]))
+            cols.append(mcolors.to_rgba("#8c8c8c", 0.3) if is_unassigned(col, grp) else mcolors.to_rgba(col, 0.6))
+    ax.add_collection(PathCollection(paths, facecolors="none", edgecolors=cols, linewidths=0.5, zorder=3))
+    for y, sp, c, L, up in ((ya, sa, ca, la, True), (yb, sb, cb, lb, False)):
+        _rounded_bar(ax, x0, y, L * scale, 0.9, "black")
+        step = 10 if L > 40e6 else 5 if L > 15e6 else 2 if L > 6e6 else 1
+        n = int(L / 1e6 // step)
+        for j in range(n + 1):
+            x = x0 + j * step * 1e6 * scale
+            yy = y - 0.45 if up else y + 0.45
+            ax.plot([x, x], [yy, yy + (-0.7 if up else 0.7)], color="black", linewidth=0.5)
+            ax.text(x, yy + (-1.0 if up else 1.0), "%d" % (j * step) + (" Mb" if j == n else ""), ha="center",
+                    va="bottom" if up else "top", fontsize=7)
+        ax.text(x0 - 2, y, (names or {}).get(sp, sp), ha="right", va="center", fontsize=7, style="italic")
+        ax.text(x0 - 2, y + 3.0, c, ha="right", va="center", fontsize=7)
+    fig.savefig(path)
+    plt.close(fig)
+    return len(paths)
+
+
+def small_multiples_figure(path, lay, colors, ncol=6, width_in=7.087, names=None):
+    """One small panel per linkage group, with only that group's ribbons; chromosomes holding at least 5 of its
+    orthologs in black, the others light gray."""
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import PathCollection
+    groups = sorted(colors)
+    sps = lay["species"]
+    mm = 1 / 25.4
+    W = width_in / mm
+    name_w = 22.0
+    pw = (W - name_w) / ncol
+    gap = 8.5
+    ph = 6.0 + gap * (len(sps) - 1) + 3.5
+    nrow = -(-len(groups) // ncol)
+    fig = plt.figure(figsize=(width_in, nrow * ph * mm))
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, W)
+    ax.set_ylim(nrow * ph, 0)
+    ax.axis("off")
+    for k, g in enumerate(groups):
+        cx, cy = name_w + (k % ncol) * pw, (k // ncol) * ph
+        px = lambda x: cx + 0.6 + x * (pw - 1.8)
+        ys = {sp: cy + 6.0 + gap * i for i, sp in enumerate(sps)}
+        paths, cols = [], []
+        held = collections.defaultdict(collections.Counter)
+        for i, df in enumerate(lay["pairs"]):
+            a, b = sps[i], sps[i + 1]
+            for sca, pa, scb, pb, grp in zip(df[a + "_scaf"], df[a + "_pos"], df[b + "_scaf"], df[b + "_pos"], df["gene_group"]):
+                if str(grp) != g or sca not in lay["chroms"][a] or scb not in lay["chroms"][b]:
+                    continue
+                held[a][sca] += 1
+                held[b][scb] += 1
+                xa, xb = px(_x(lay, a, sca, pa)), px(_x(lay, b, scb, pb))
+                y0, y1 = ys[a] + 0.35, ys[b] - 0.35
+                ym = (y0 + y1) / 2
+                paths.append(Path([(xa, y0), (xa, ym), (xb, ym), (xb, y1)], [Path.MOVETO, Path.CURVE4, Path.CURVE4, Path.CURVE4]))
+                cols.append(mcolors.to_rgba(colors[g], 0.45))
+        ax.add_collection(PathCollection(paths, facecolors="none", edgecolors=cols, linewidths=0.5, zorder=2))
+        for sp in sps:
+            for c, (x0, w, size) in lay["chroms"][sp].items():
+                _rounded_bar(ax, px(x0), ys[sp], max(px(x0 + w) - px(x0), 0.2), 0.7,
+                             "black" if held[sp][c] >= 5 else "#c8c8c8")
+        bw = 1.8 + 1.4 * len(g)
+        ax.add_patch(FancyBboxPatch((cx + 0.6 + 0.5, cy + 1.0 + 0.5), bw - 1.0, 1.6, boxstyle="round,pad=0.5,rounding_size=0.5",
+                                    facecolor=colors[g], edgecolor="none", zorder=5))
+        ax.text(cx + 0.6 + bw / 2, cy + 2.3, g, ha="center", va="center", fontsize=7, color=text_color_for(colors[g]), zorder=6)
+        if k % ncol == 0:
+            for sp in sps:
+                full = (names or {}).get(sp, sp).split()
+                short = "%s. %s" % (full[0][0], " ".join(full[1:])) if len(full) >= 2 else " ".join(full)
+                ax.text(name_w - 2, ys[sp], short, ha="right", va="center", fontsize=7, style="italic")
+    fig.savefig(path)
+    plt.close(fig)
+    return len(groups)
+
+
+def _chains(lay):
+    """Orthologs found in every species, followed through the neighboring pair tables by gene ID:
+    [{sp: (scaf, pos, color)}]."""
+    sps = lay["species"]
+    links = []
+    for i, df in enumerate(lay["pairs"]):
+        a, b = sps[i], sps[i + 1]
+        links.append({ga: (gb, sa, pa, sb, pb, col, grp) for ga, gb, sa, pa, sb, pb, col, grp in
+                      zip(df[a + "_gene"], df[b + "_gene"], df[a + "_scaf"], df[a + "_pos"], df[b + "_scaf"],
+                          df[b + "_pos"], df["color"], df["gene_group"])})
+    out = []
+    for g0, (g1, sa, pa, sb, pb, col, grp) in links[0].items():
+        rec = {sps[0]: (sa, pa), sps[1]: (sb, pb)}
+        color = "#8c8c8c" if is_unassigned(col, grp) else col
+        cur = g1
+        ok = True
+        for i in range(1, len(links)):
+            if cur not in links[i]:
+                ok = False
+                break
+            nxt, _, _, sb2, pb2, col2, grp2 = links[i][cur]
+            rec[sps[i + 1]] = (sb2, pb2)
+            cur = nxt
+        if ok and all(rec[sp][0] in lay["chroms"][sp] for sp in sps):
+            out.append((rec, color))
+    return out
+
+
+def animation(path_mp4, lay, background="light", names=None, fps=30, hold_s=1.4, move_s=3.0):
+    """Dots for the orthologs found in every genome travel from one genome's chromosomes to the next (1920 by 1080),
+    on a light or dark background; writes an MP4 with ffmpeg and a GIF beside it."""
+    import shutil
+    import subprocess
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import PatchCollection
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("animate needs ffmpeg on the PATH")
+    sps = lay["species"]
+    sel = _chains(lay)
+    bg, fg = ("#111111", "white") if background == "dark" else ("white", "black")
+    W, H = 406.4, 228.6
+    fx = lambda x: 20.0 + x * (W - 40.0)
+    yc = 150.0
+    rng = np.random.default_rng(1)
+    x = np.array([[fx(_x(lay, sp, *rec[sp])) for sp in sps] for rec, _ in sel])
+    y = yc - 3.5 - rng.uniform(0, 1, size=(len(sel), len(sps))) * 26.0
+    cols = [mcolors.to_rgb(c) for _, c in sel]
+    fig = plt.figure(figsize=(16, 9), dpi=120, facecolor=bg)
+    ax = fig.add_axes([0, 0, 1, 1], facecolor=bg)
+    ax.set_xlim(0, W)
+    ax.set_ylim(H, 0)
+    ax.axis("off")
+    bars, labels = [], []
+    for sp in sps:
+        pats = [FancyBboxPatch((fx(x0) + 1.0, yc - 0.5), max(fx(x0 + w) - fx(x0) - 2.0, 1e-6), 1.0,
+                               boxstyle="round,pad=1.0,rounding_size=1.0") for x0, w, _ in lay["chroms"][sp].values()]
+        pc = PatchCollection(pats, facecolor=fg, edgecolor="none", zorder=3)
+        ax.add_collection(pc)
+        bars.append(pc)
+        labels.append(ax.text(W / 2, 190, (names or {}).get(sp, sp), ha="center", va="center", fontsize=30, style="italic", color=fg))
+    sc = ax.scatter(x[:, 0], y[:, 0], s=30, c=cols, linewidths=0, zorder=4)
+    ax.text(W / 2, 30, "{:,} orthologs found in every genome".format(len(sel)), ha="center", va="center", fontsize=20, color=fg)
+    plan = []
+    for k in range(len(sps)):
+        plan.append(("hold", k, int(hold_s * fps)))
+        if k < len(sps) - 1:
+            plan.append(("move", k, int(move_s * fps)))
+    ff = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", "1920x1080",
+                           "-r", str(fps), "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "28", "-preset", "slow", path_mp4],
+                          stdin=subprocess.PIPE)
+    frames = 0
+    for kind, k, n in plan:
+        for j in range(n):
+            if kind == "hold":
+                px_, py_ = x[:, k], y[:, k]
+                al = [1.0 if i == k else 0.0 for i in range(len(sps))]
+                nl = al
+            else:
+                t = j / max(n - 1, 1)
+                e = t * t * (3 - 2 * t)
+                dx = x[:, k + 1] - x[:, k]
+                px_ = x[:, k] + dx * e
+                py_ = y[:, k] + (y[:, k + 1] - y[:, k]) * e - np.minimum(np.abs(dx) * 0.22, 70.0) * math.sin(math.pi * e)
+                al = [0.0] * len(sps)
+                al[k], al[k + 1] = 1 - e, e
+                nl = [max(0.0, 2 * v - 1) for v in al]
+            sc.set_offsets(np.column_stack([px_, py_]))
+            for i in range(len(sps)):
+                bars[i].set_alpha(al[i])
+                labels[i].set_alpha(nl[i])
+            fig.canvas.draw()
+            ff.stdin.write(bytes(fig.canvas.buffer_rgba()))
+            frames += 1
+    ff.stdin.close()
+    ff.wait()
+    plt.close(fig)
+    gif = path_mp4.rsplit(".", 1)[0] + ".gif"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", path_mp4, "-vf",
+                    "fps=10,scale=720:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=none", gif], check=True)
+    return {"orthologs_in_every_genome": len(sel), "frames": frames}
+
+
+_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ribbon plot</title>
+<style>
+:root{--bg:#f4f4f2;--ink:#1a1a1a;--muted:#5c5c5c;--card:#fff;--line:#d6d6d2;--tip:#1a1a1a;--tipink:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#151515;--ink:#ececec;--muted:#a8a8a8;--line:#333;--tip:#f2f2f2;--tipink:#111}}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Helvetica,Arial,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:14px 16px 24px}
+.help{font-size:13px;color:var(--muted)} button{font:inherit;font-size:13px;padding:3px 10px;border:1px solid var(--line);border-radius:6px;background:#fff;color:#1a1a1a;cursor:pointer}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px;overflow-x:auto}
+svg{display:block;width:100%;min-width:640px;height:auto} svg text{font-family:Helvetica,Arial,sans-serif;font-size:2.47px;fill:#000}
+#rb path{fill:none;stroke-width:0.176} #hit path{fill:none;stroke:transparent;stroke-width:0.9;pointer-events:stroke}
+.bar{fill:#000;cursor:pointer} .lab{cursor:pointer}
+#tip{position:fixed;pointer-events:none;background:var(--tip);color:var(--tipink);font-size:12.5px;line-height:1.35;padding:6px 9px;border-radius:6px;display:none}
+</style></head><body><main>
+<p><b>Ribbon plot</b> <span class="help">Point at a ribbon for its genes. Click a label or a chromosome to spotlight it; Esc or Reset clears.</span> <button id="reset">Reset</button></p>
+<div class="card"><svg id="fig" viewBox="0 0 @@W@@ @@H@@"><g id="rb">@@RIB@@</g><g>@@BARS@@</g><g>@@NAMES@@</g><g>@@LABS@@</g><g id="hit">@@HITS@@</g></svg></div>
+</main><div id="tip"></div>
+<script>
+const R=@@RECS@@;const rb=[...document.querySelectorAll('#rb path')];const tip=document.getElementById('tip');let spot=null,hot=null;
+function apply(){for(const p of rb){const b=+p.dataset.o;p.setAttribute('stroke-opacity',spot?(spot(p)?Math.max(.55,b):.015):b)}}
+function show(k,x,y){const r=R[k];tip.innerHTML='<b>'+(r[0]?'Linkage group '+r[0]:'No linkage group')+'</b><br>'+r[1]+'<br>'+r[2];tip.style.display='block';tip.style.left=Math.min(innerWidth-tip.offsetWidth-8,x+14)+'px';tip.style.top=Math.max(8,y-tip.offsetHeight-12)+'px'}
+document.getElementById('hit').addEventListener('mousemove',e=>{const k=e.target.dataset.k;if(k===undefined)return;if(hot!==null)document.getElementById('r'+hot).style.strokeWidth='';hot=k;const p=document.getElementById('r'+k);p.style.strokeWidth=.45;p.setAttribute('stroke-opacity',1);show(+k,e.clientX,e.clientY)});
+document.getElementById('hit').addEventListener('mouseleave',()=>{tip.style.display='none';if(hot!==null){document.getElementById('r'+hot).style.strokeWidth='';apply()}hot=null});
+document.querySelectorAll('.lab').forEach(g=>g.addEventListener('click',()=>{const x=g.dataset.g;spot=p=>p.dataset.g===x;apply()}));
+document.querySelectorAll('.bar').forEach(b=>b.addEventListener('click',()=>{const c=b.dataset.c;spot=p=>p.dataset.a===c||p.dataset.b===c;apply()}));
+document.getElementById('reset').onclick=()=>{spot=null;apply()};document.addEventListener('keydown',e=>{if(e.key==='Escape'){spot=null;apply()}});
+</script></body></html>"""
+
+
+def interactive_page(path, lay, colors, alpha_sig=0.4, alpha_faint=0.05, names=None):
+    """The chromosome-coordinate plot as a self-contained web page with gene tooltips and spotlights."""
+    import html
+    import json
+    sps = lay["species"]
+    W, gap, top, lab_col = 180.0, 24.0, 16.0, 30.0
+    X = lambda x: lab_col + x * (W - lab_col - 2.0)
+    ys = {sp: top + gap * i for i, sp in enumerate(sps)}
+    rib, hits, recs = [], [], []
+    k = 0
+    for i, df in enumerate(lay["pairs"]):
+        a, b = sps[i], sps[i + 1]
+        for ga, gb, sa, pa, sb, pb, grp, col, fet in zip(df[a + "_gene"], df[b + "_gene"], df[a + "_scaf"], df[a + "_pos"],
+                                                         df[b + "_scaf"], df[b + "_pos"], df["gene_group"], df["color"],
+                                                         df["break_FET"]):
+            if sa not in lay["chroms"][a] or sb not in lay["chroms"][b]:
+                continue
+            un = is_unassigned(col, grp)
+            xa, xb = X(_x(lay, a, sa, pa)), X(_x(lay, b, sb, pb))
+            y0, y1 = ys[a] + 0.45, ys[b] - 0.45
+            ym = (y0 + y1) / 2
+            d = "M%.2f %.2fC%.2f %.2f %.2f %.2f %.2f %.2f" % (xa, y0, xa, ym, xb, ym, xb, y1)
+            o = alpha_faint if (un or not float(fet) <= 0.05) else alpha_sig
+            rib.append('<path id="r%d" d="%s" stroke="%s" stroke-opacity="%.3f" data-o="%.3f" data-g="%s" data-a="%s" data-b="%s"/>'
+                       % (k, d, "#8c8c8c" if un else col, o, o, "" if un else html.escape(str(grp)),
+                          html.escape(a + ":" + sa), html.escape(b + ":" + sb)))
+            hits.append('<path d="%s" data-k="%d"/>' % (d, k))
+            recs.append(["" if un else str(grp), "%s %s, %.2f Mb (%s)" % ((names or {}).get(a, a), sa, float(pa) / 1e6, ga),
+                         "%s %s, %.2f Mb (%s)" % ((names or {}).get(b, b), sb, float(pb) / 1e6, gb)])
+            k += 1
+    bars = ['<rect class="bar" x="%.2f" y="%.2f" width="%.2f" height="0.9" rx="0.3" data-c="%s"/>'
+            % (X(x0), ys[sp] - 0.45, X(x0 + w) - X(x0), html.escape(sp + ":" + c))
+            for sp in sps for c, (x0, w, _) in lay["chroms"][sp].items()]
+    nms = ['<text x="%.2f" y="%.2f" text-anchor="end" font-style="italic">%s</text>'
+           % (lab_col - 2, ys[sp] + 0.85, html.escape((names or {}).get(sp, sp))) for sp in sps]
+    labs, x_at = [], lab_col
+    for g in sorted(colors):
+        bw = 1.8 + 1.5 * len(g)
+        labs.append('<g class="lab" data-g="%s"><rect x="%.2f" y="2" width="%.2f" height="2.6" rx="0.5" fill="%s"/>'
+                    '<text x="%.2f" y="3.85" text-anchor="middle" fill="%s">%s</text></g>'
+                    % (html.escape(g), x_at, bw, colors[g], x_at + bw / 2, text_color_for(colors[g]), html.escape(g)))
+        x_at += bw + 0.6
+    page = _PAGE
+    for key, val in (("@@W@@", "%.1f" % W), ("@@H@@", "%.1f" % (ys[sps[-1]] + 5)), ("@@RIB@@", "".join(rib)),
+                     ("@@BARS@@", "".join(bars)), ("@@NAMES@@", "".join(nms)), ("@@LABS@@", "".join(labs)),
+                     ("@@HITS@@", "".join(hits)), ("@@RECS@@", json.dumps(recs))):
+        page = page.replace(key, val)
+    with open(path, "w") as fh:
+        fh.write(page)
+    return k
