@@ -67,5 +67,10 @@ Each one is a separate file written next to `output.pdf`. If one fails (for exam
 | `small_multiples: N` | `small_multiples_pdf` (small_multiples.pdf): one panel per linkage group in N columns, with only that group's ribbons. |
 | `animate: talk.mp4` | A movie for talks (1920 by 1080, needs ffmpeg) and a GIF beside it. The orthologs found in every species travel as dots from one genome's chromosomes to the next. `animation_background` is `light` or `dark`. |
 | `interactive_html: ribbons.html` | The plot as a self-contained web page. Point at a ribbon for its genes and positions; click a label or a chromosome to spotlight it. |
+| `circular: circular.pdf` | One ring per genome, outer to inner in `species_order`, with a gap at the top (180 by 182 mm). Ribbons, opacities and widths follow the main plot; with `chrom_paint` the rings are painted, otherwise they are black. Label boxes sit outside the outer ring, the species names sit in the gap, and with a `tree:` block whose tips are the species the cladogram runs down the gap. The outer ring is sorted by where its orthologs land on the ring inside it. `circular_gap_deg` (64) sets the gap; `rasterize_ribbons` applies. |
 
 `species_names: {SP: "Genus species"}` names the species in the extra outputs.
+
+![circular: circular.pdf](ribbon_options/circular.jpg)
+
+`circular: circular.pdf` with the lab-standard settings and `tree: {newick: "(PMA,(OFU,SBE));"}`.

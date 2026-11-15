@@ -684,3 +684,228 @@ def interactive_page(path, lay, colors, alpha_sig=0.4, alpha_faint=0.05, names=N
     with open(path, "w") as fh:
         fh.write(page)
     return k
+
+
+# ---------------------------------------------------------------------------
+# circular layout (config circular)
+# ---------------------------------------------------------------------------
+def tree_tips(tree):
+    """Tip names of a tree given as a tip name or a sequence of subtrees (as _parse_newick returns)."""
+    return [tree] if isinstance(tree, str) else [t for k in tree for t in tree_tips(k)]
+
+
+def draw_cladogram(ax, tree, tip_y, x_left, x_right, lw=1.0, zorder=6):
+    """Rectangular cladogram in data units: tips at x_right and tip_y[tip], nodes stepped by depth, and each child's
+    stem meeting its parent's vertical. Returns the number of segments drawn."""
+    from matplotlib.collections import LineCollection
+
+    def depth(t):
+        return 0 if isinstance(t, str) else 1 + max(depth(k) for k in t)
+    step = (x_right - x_left) / max(depth(tree), 1)
+    segs = []
+
+    def walk(t, level):
+        if isinstance(t, str):
+            return tip_y[t]
+        ys = [walk(k, level + 1) for k in t]
+        x = x_left + level * step
+        segs.append([(x, min(ys)), (x, max(ys))])
+        for k, ky in zip(t, ys):
+            kx = x_right if isinstance(k, str) else x_left + (level + 1) * step
+            segs.append([(x, ky), (kx, ky)])
+        return (min(ys) + max(ys)) / 2
+    root_y = walk(tree, 0)
+    segs.append([(x_left - 0.8, root_y), (x_left, root_y)])
+    ax.add_collection(LineCollection(segs, colors="black", linewidths=lw, capstyle="projecting", zorder=zorder))
+    return len(segs)
+
+
+def relaid(chroms, key):
+    """{chrom: (x0, width, size)} laid out again in the order of key(chrom), keeping the widths, the first start and
+    the mean gap, so the span stays the same."""
+    items = sorted(chroms.items(), key=lambda kv: kv[1][0])
+    if len(items) < 2:
+        return dict(chroms)
+    gap = sum(b[0] - (a[0] + a[1]) for (_, a), (_, b) in zip(items, items[1:])) / (len(items) - 1)
+    x = items[0][1][0]
+    out = {}
+    for c, (x0, w, size) in sorted(items, key=lambda kv: key(kv[0])):
+        out[c] = (x, w, size)
+        x += w + gap
+    return out
+
+
+def short_species_name(name):
+    """'Genus species' as 'G. species'; anything else unchanged."""
+    parts = str(name).split()
+    return "%s. %s" % (parts[0][0], " ".join(parts[1:])) if len(parts) >= 2 else str(name)
+
+
+def circular_figure(path, lay, colors, style, bins=None, paint_order=None, tree=None, names=None, gap_deg=64.0,
+                    shuffle=True, rasterize=False, seed=1):
+    """One ring per genome, outer to inner in species order, with a gap at the top (180 by 182 mm).
+
+    Ribbons are drawn as in the main plot: linkage-group color, the opacity and width of significant
+    (break_FET <= 0.05) or other ribbons from style, significant ones on top, orthologs in no linkage group in
+    style["unassigned_color"]. With bins ({(sp, chrom): [(start, end, {color: count})]}, the painted-bar bins) the
+    rings are painted with the fractions of their linkage groups; otherwise they are black. Linkage-group labels sit
+    outside the outer ring, each over the chromosome that holds most of its orthologs. The species names sit in the
+    gap, and with a tree the cladogram runs down the gap to the rings. The outer ring is sorted by where its
+    orthologs land on the ring inside it. With rasterize, the ribbons are one image inside the PDF (600 dpi).
+    Writes path and returns a summary.
+
+    style: {"alpha_sig", "alpha_faint", "lw_sig", "lw_faint", "unassigned_color", "unassigned_alpha"}.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.collections import LineCollection, PatchCollection
+    from matplotlib.patches import Wedge
+    sps = lay["species"]
+    names = names or {}
+    chroms = {sp: dict(lay["chroms"][sp]) for sp in sps}
+
+    def xof(sp, scaf, pos):
+        x0, w, size = chroms[sp][scaf]
+        return x0 + w * float(pos) / max(size, 1.0)
+
+    if len(sps) > 1:   # outer ring: sorted by the mean position of its orthologs on the ring inside it
+        a, b = sps[0], sps[1]
+        df = lay["pairs"][0]
+        bary = collections.defaultdict(list)
+        for sa, sb, pb in zip(df[a + "_scaf"], df[b + "_scaf"], df[b + "_pos"]):
+            if sa in chroms[a] and sb in chroms[b]:
+                bary[sa].append(xof(b, sb, pb))
+        chroms[a] = relaid(chroms[a], lambda c: sum(bary[c]) / len(bary[c]) if bary[c] else 1e9)
+
+    x_lo = min(x0 for sp in sps for x0, w, s in chroms[sp].values())
+    x_hi = max(x0 + w for sp in sps for x0, w, s in chroms[sp].values())
+    W, H, cx, cy = 180.0, 182.0, 90.0, 95.0
+    r_out, r_in = 76.0, 34.0
+    radius = {sp: r_out - k * (r_out - r_in) / max(len(sps) - 1, 1) for k, sp in enumerate(sps)}
+
+    def theta(x):
+        return 90 - gap_deg / 2 - (x - x_lo) / max(x_hi - x_lo, 1e-12) * (360 - gap_deg)
+
+    def polar(x, r):
+        t = math.radians(theta(x))
+        return cx + r * math.cos(t), cy - r * math.sin(t)
+
+    mm = 1 / 25.4
+    fig = plt.figure(figsize=(W * mm, H * mm))
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, W)
+    ax.set_ylim(H, 0)
+    ax.axis("off")
+
+    # ribbons: cubic curves from ring to ring, in three layers (no linkage group, other, significant)
+    tt = np.linspace(0, 1, 28)
+    b0, b1, b2, b3 = (1 - tt) ** 3, 3 * (1 - tt) ** 2 * tt, 3 * (1 - tt) * tt ** 2, tt ** 3
+    layers = collections.defaultdict(list)
+    n_ribbons = 0
+    for i, df in enumerate(lay["pairs"]):
+        a, b = sps[i], sps[i + 1]
+        fets = df["break_FET"] if "break_FET" in df.columns else [1.0] * len(df)
+        ra, rb = radius[a] - 0.8, radius[b] + 0.8
+        rm = (ra + rb) / 2
+        for sa, pa, sb, pb, col, grp, fet in zip(df[a + "_scaf"], df[a + "_pos"], df[b + "_scaf"], df[b + "_pos"],
+                                                 df["color"], df["gene_group"], fets):
+            if sa not in chroms[a] or sb not in chroms[b]:
+                continue
+            sig = float(fet) <= 0.05
+            if is_unassigned(col, grp):
+                alpha = style["unassigned_alpha"]
+                if alpha is None:
+                    alpha = style["alpha_sig"] if sig else style["alpha_faint"]
+                edge, layer = mcolors.to_rgba(style["unassigned_color"], alpha), 0
+            else:
+                edge, layer = mcolors.to_rgba(col, style["alpha_sig"] if sig else style["alpha_faint"]), 2 if sig else 1
+            xa, xb = xof(a, sa, pa), xof(b, sb, pb)
+            xs = b0 * xa + b1 * xa + b2 * xb + b3 * xb
+            rs = b0 * ra + b1 * rm + b2 * rm + b3 * rb
+            layers[layer].append(([polar(u, v) for u, v in zip(xs, rs)], edge,
+                                  style["lw_sig"] if sig else style["lw_faint"]))
+            n_ribbons += 1
+    rng = random.Random(seed)
+    for layer in sorted(layers):
+        items = layers[layer]
+        if shuffle:
+            rng.shuffle(items)
+        ax.add_collection(LineCollection([s for s, _, _ in items], colors=[e for _, e, _ in items],
+                                         linewidths=[w for _, _, w in items], zorder=2 + layer, capstyle="butt",
+                                         rasterized=rasterize))
+
+    # rings: painted with the linkage-group fractions of each window, or black
+    order = paint_order or {}
+    for sp in sps:
+        r0 = radius[sp] + 0.8
+        wedges, cols = [], []
+        for c, (x0, w, size) in chroms[sp].items():
+            t1, t2 = theta(x0 + w), theta(x0)
+            cbins = (bins or {}).get((sp, c))
+            if cbins:
+                for start, end, counts in cbins:
+                    total = sum(counts.values())
+                    if not total:
+                        continue
+                    a1, a2 = theta(x0 + w * min(end, size) / size), theta(x0 + w * start / size)
+                    rr = r0
+                    for color in sorted(counts, key=lambda k: order.get(k, len(order))):
+                        h = 1.6 * counts[color] / total
+                        wedges.append(Wedge((cx, cy), rr, -a2, -a1, width=h))
+                        cols.append(color)
+                        rr -= h
+                ax.add_patch(Wedge((cx, cy), r0, -t2, -t1, width=1.6, facecolor="none", edgecolor="black",
+                                   linewidth=0.5, zorder=7))
+            else:
+                wedges.append(Wedge((cx, cy), r0, -t2, -t1, width=1.2))
+                cols.append("black")
+        ax.add_collection(PatchCollection(wedges, facecolors=cols, edgecolors=cols, linewidths=0.05, zorder=6))
+
+    # linkage-group labels outside the outer ring, over the chromosome holding most of each group's orthologs
+    top = sps[0]
+    per = collections.defaultdict(lambda: collections.defaultdict(list))
+    if lay["pairs"]:
+        df = lay["pairs"][0]
+        for sa, pa, col, grp in zip(df[top + "_scaf"], df[top + "_pos"], df["color"], df["gene_group"]):
+            if not is_unassigned(col, grp) and sa in chroms[top] and str(grp) in colors:
+                per[str(grp)][sa].append(xof(top, sa, pa))
+    centers = []
+    for g, by in per.items():
+        home = max(by, key=lambda c: len(by[c]))
+        xs_ = sorted(by[home])
+        centers.append((g, xs_[len(xs_) // 2]))
+    boxes = []
+    for g, x in sorted(centers, key=lambda t: t[1]):
+        bw = 1.8 + 1.45 * len(g)
+        for extra in (0.0, 3.4, 6.8, 10.2, 13.6):
+            px, py = polar(x, radius[top] + 4.4 + extra)
+            bb = (px - bw / 2 - 0.3, py - 1.6, px + bw / 2 + 0.3, py + 1.6)
+            if all(bb[2] <= o[0] or bb[0] >= o[2] or bb[3] <= o[1] or bb[1] >= o[3] for o in boxes):
+                break
+        boxes.append(bb)
+        ax.add_patch(FancyBboxPatch((px - bw / 2 + 0.5, py - 1.3 + 0.5), bw - 1.0, 1.6,
+                                    boxstyle="round,pad=0.5,rounding_size=0.5", facecolor=colors[g],
+                                    edgecolor="none", zorder=8))
+        ax.text(px, py, g, ha="center", va="center", fontsize=7, color=text_color_for(colors[g]), zorder=9)
+
+    # names in the gap, a dotted arc from each name to its ring, and the tree when there is one
+    for sp in sps:
+        th = np.radians(np.linspace(90, 90 - gap_deg / 2, 40))
+        ax.plot(cx + radius[sp] * np.cos(th), cy - radius[sp] * np.sin(th), color="#9a9a9a", linewidth=0.5,
+                linestyle=(0, (1, 1.5)), zorder=4)
+        ax.text(cx + 1.0, cy - radius[sp] - 1.0, short_species_name(names.get(sp, sp)), ha="left", va="bottom",
+                fontsize=7, style="italic", zorder=9)
+    drew_tree = False
+    if tree is not None:
+        tips = tree_tips(tree)
+        if sorted(tips) == sorted(sps):
+            xt = cx - 2.0
+            draw_cladogram(ax, tree, {sp: cy - radius[sp] for sp in tips}, xt - 4.0 * max(1, len(tips) - 1), xt)
+            drew_tree = True
+        else:
+            print("WARNING: circular: the tree was left out; its tips {} are not the species {}".format(
+                sorted(tips), sorted(sps)))
+    fig.savefig(path, dpi=600 if rasterize else "figure")
+    plt.close(fig)
+    return {"rings": len(sps), "ribbons": n_ribbons, "painted": bool(bins), "tree": drew_tree,
+            "outer_ring_order": list(chroms[top])}

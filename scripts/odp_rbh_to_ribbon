@@ -223,6 +223,8 @@ config.setdefault("small_multiples_pdf", "small_multiples.pdf")
 config.setdefault("animate", None)                # path of an MP4 for talks (needs ffmpeg); a GIF is written beside it
 config.setdefault("animation_background", "light")
 config.setdefault("interactive_html", None)       # path of a self-contained web page of the plot
+config.setdefault("circular", None)               # path of a circular layout: one ring per genome, tree in the gap
+config.setdefault("circular_gap_deg", 64)         # width of the gap at the top of the circle, in degrees
 config.setdefault("species_names", {})            # {species: "Genus species"} for the extra outputs
 if config["order_ref"] is not None and config["order_ref"] not in config.get("species_order", []):
     sys.exit("ERROR: order_ref must be one of species_order.")
@@ -814,6 +816,31 @@ def _read_chrom_file(path):
     return out
 
 
+def _chrom_paint_bins(species_order, sp_to_chromdf, rbh_df_list):
+    """The painted-bar bins of the chromosome-coordinate panel, {(sp, chrom): bins}, and the stacking order of the
+    colors, computed as subway_plot paints the bars (used by the circular output)."""
+    other = config.get("chrom_paint_other", "none")
+    bins, order = {}, {}
+    for i, sp in enumerate(species_order):
+        loci = _paint_points(sp, i, species_order, rbh_df_list, other)
+        for gene, (scaf, pos, color, group) in loci.items():
+            order.setdefault(color, group)
+        sizes = dict(zip(sp_to_chromdf[sp]["chrom"], sp_to_chromdf[sp]["chrsize"]))
+        pts = {c: [] for c in sizes}
+        for gene, (scaf, pos, color, group) in loci.items():
+            if scaf in pts:
+                pts[scaf].append((pos, color))
+        if other == "genes":
+            for gene, scaf, start in _read_chrom_file(config["species"][sp]["chrom"]):
+                if scaf in pts and gene not in loci:
+                    pts[scaf].append((start, PAINT_OTHER_COLOR))
+            order.setdefault(PAINT_OTHER_COLOR, "zz_other")
+        step = max(1.0, sum(sizes.values()) / 1000.0)
+        for c in sizes:
+            bins[(sp, c)] = _paint_bins(pts[c], sizes[c], step)
+    return bins, {color: k for k, (color, group) in enumerate(sorted(order.items(), key=lambda t: t[1]))}
+
+
 def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy, plot_unassigned=True,
                       lws=None, zorders=None, skip=None, sig=None, unassigned=None):
     """
@@ -882,8 +909,9 @@ _ORDER_SHADES = {}
 
 
 def _extra_outputs(species_order, sp_to_chromdf, rbh_df_list):
-    """zoom, small_multiples, animate and interactive_html: separate files next to output.pdf."""
-    if not (config.get("zoom") or config.get("small_multiples") or config.get("animate") or config.get("interactive_html")):
+    """zoom, small_multiples, animate, interactive_html and circular: separate files next to output.pdf."""
+    if not (config.get("zoom") or config.get("small_multiples") or config.get("animate") or config.get("interactive_html")
+            or config.get("circular")):
         return
     lay = RO.layout_from(species_order, sp_to_chromdf, rbh_df_list)
     names = config.get("species_names") or {}
@@ -914,6 +942,27 @@ def _extra_outputs(species_order, sp_to_chromdf, rbh_df_list):
         _try("interactive_html", lambda: print("interactive_html: {} ribbons".format(
             RO.interactive_page(config["interactive_html"], lay, colors, float(config.get("ribbon_alpha_sig", 0.8)),
                                 float(config.get("ribbon_alpha_faint", 0.1)), names))))
+    if config.get("circular"):
+        def _circular():
+            lw_all = float(config.get("ribbon_lw", 0.25))
+            style = {"alpha_sig": float(config.get("ribbon_alpha_sig", 0.8)),
+                     "alpha_faint": float(config.get("ribbon_alpha_faint", 0.1)),
+                     "lw_sig": float(config["ribbon_lw_sig"]) if config.get("ribbon_lw_sig") is not None else lw_all,
+                     "lw_faint": float(config["ribbon_lw_faint"]) if config.get("ribbon_lw_faint") is not None else lw_all,
+                     "unassigned_color": config.get("unassigned_color", "#000000"),
+                     "unassigned_alpha": (float(config["unassigned_alpha"])
+                                          if config.get("unassigned_alpha") is not None else None)}
+            bins, order = (_chrom_paint_bins(species_order, sp_to_chromdf, rbh_df_list)
+                           if config.get("chrom_paint") else (None, None))
+            tree = _parse_newick(config["tree"]["newick"]) if config.get("tree") else None
+            labels = dict((config.get("tree") or {}).get("tip_label_map") or {})
+            labels.update(names)
+            rec = RO.circular_figure(config["circular"], lay, colors, style, bins, order, tree, labels,
+                                     float(config.get("circular_gap_deg", 64)), bool(config.get("ribbon_shuffle")),
+                                     bool(config.get("rasterize_ribbons")))
+            print("circular: {} rings, {} ribbons, painted {}, tree {}".format(
+                rec["rings"], rec["ribbons"], rec["painted"], rec["tree"]))
+        _try("circular", _circular)
 
 
 def _ribbon_styles(tr, a, b, i, species_order, rbh_df_list):

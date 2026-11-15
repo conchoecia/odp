@@ -132,3 +132,50 @@ def test_micro_color(RO):
     assert RO.micro_color("gray", "#ff0000") == "#4d4d4d"
     assert RO.micro_color("#123456", None) == "#123456"
     assert RO.micro_color("dark", "#ff0000") != "#ff0000"
+
+
+def test_tree_tips_and_cladogram(RO):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    tree = ("A", ("B", "C"))
+    assert RO.tree_tips(tree) == ["A", "B", "C"]
+    fig, ax = plt.subplots()
+    # root vertical + 2 stems, inner vertical + 2 stems, root stub
+    assert RO.draw_cladogram(ax, tree, {"A": 0.0, "B": 1.0, "C": 2.0}, 0.0, 10.0) == 7
+    plt.close(fig)
+
+
+def test_relaid_keeps_widths_and_span(RO):
+    chroms = {"a": (0.0, 0.2, 100), "b": (0.3, 0.3, 150), "c": (0.7, 0.3, 150)}
+    out = RO.relaid(chroms, {"a": 3, "b": 1, "c": 2}.get)
+    assert list(out) == ["b", "c", "a"]
+    assert out["b"] == (0.0, 0.3, 150)
+    assert out["c"][0] == pytest.approx(0.4) and out["a"][0] == pytest.approx(0.8)
+    assert out["a"][0] + out["a"][1] == pytest.approx(1.0)
+
+
+def test_short_species_name(RO):
+    assert RO.short_species_name("Pecten maximus") == "P. maximus"
+    assert RO.short_species_name("PMA") == "PMA"
+
+
+def test_circular_figure_writes_rings_ribbons_and_tree(RO, tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    xy = _pair([10, 20, 30, 40], ["d1", "d1", "d2", "d2"], [5, 15, 25, 35], colors=["#ff0000"] * 3 + ["#000000"],
+               groups=["A", "A", "A", "None"])
+    xy["break_FET"] = [0.01, 0.01, 0.5, 0.5]
+    lay = {"species": ["X", "Y"], "chroms": {"X": {"c1": (0.0, 1.0, 50.0)},
+                                             "Y": {"d1": (0.0, 0.45, 20.0), "d2": (0.55, 0.45, 40.0)}},
+           "pairs": [xy]}
+    style = {"alpha_sig": 0.4, "alpha_faint": 0.05, "lw_sig": 0.5, "lw_faint": 0.5,
+             "unassigned_color": "#8c8c8c", "unassigned_alpha": 0.05}
+    out = tmp_path / "circ.pdf"
+    rec = RO.circular_figure(str(out), lay, {"A": "#ff0000"}, style, tree=("X", "Y"),
+                             names={"X": "Genus one", "Y": "Genus two"})
+    assert out.stat().st_size > 0
+    assert rec["rings"] == 2 and rec["ribbons"] == 4 and rec["tree"] and not rec["painted"]
+    # a tree whose tips are not the species is left out, and the figure is still written
+    rec = RO.circular_figure(str(out), lay, {"A": "#ff0000"}, style, tree=("X", "Z"))
+    assert rec["tree"] is False
