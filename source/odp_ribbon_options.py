@@ -326,3 +326,47 @@ def shuffled(n, seed=1):
     order = list(range(n))
     random.Random(seed).shuffle(order)
     return order
+
+
+# ---------------------------------------------------------------------------
+# chromosome names on the bars
+# ---------------------------------------------------------------------------
+def short_chrom_names(names):
+    """Drop a prefix that all of a genome's chromosome names share when it holds no digits (PMA3 -> 3, chr10 -> 10,
+    Ch_6 -> 6) and a shared version suffix (.1), but only when every shortened name is four characters or fewer.
+    Accession numbers such as NC_047017.1 or CAIIXF020000008.1 stay whole, so no accession fragment passes for a
+    chromosome number."""
+    import re
+    names = [str(n) for n in names]
+    if len(names) < 2:
+        return {n: n for n in names}
+    pre = names[0]
+    for n in names[1:]:
+        while not n.startswith(pre):
+            pre = pre[:-1]
+    while pre and pre[-1].isdigit():
+        pre = pre[:-1]
+    if any(ch.isdigit() for ch in pre):
+        pre = ""
+    suf = names[0]
+    for n in names[1:]:
+        while not n.endswith(suf):
+            suf = suf[1:]
+    m = re.search(r"\.\d+$", suf)
+    suf = m.group(0) if m else ""
+    out = {}
+    for n in names:
+        core = n[len(pre):len(n) - len(suf)] if suf else n[len(pre):]
+        if core.isdigit():
+            core = core.lstrip("0") or "0"
+        out[n] = core if core else n
+    if len(set(out.values())) < len(out) or any(len(v) > 4 for v in out.values()):
+        return {n: n for n in names}   # collisions, or accession-like names: keep the names as they are
+    return out
+
+
+def name_on_bar(ax, x_center, y, text, fontsize=6, zorder=8):
+    """A chromosome name centered on its bar: black with a thin white edge, readable over painted colors."""
+    import matplotlib.patheffects as pe
+    ax.text(x_center, y, text, ha="center", va="center", fontsize=fontsize, color="black", zorder=zorder,
+            clip_on=False, path_effects=[pe.withStroke(linewidth=1.2, foreground="white")])

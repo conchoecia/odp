@@ -202,6 +202,9 @@ config.setdefault("alg_label_fontsize", 7)
 config.setdefault("alg_label_text_colors", {})  # {group: "black"|"white"} overrides of the APCA choice
 config.setdefault("show_legend", True)
 config.setdefault("show_chrom_labels", True)
+config.setdefault("chrom_names_on_bars", False)  # chromosome names centered on the bars (where they fit)
+config.setdefault("chrom_name_fontsize", 6)
+config.setdefault("chrom_name_map", {})          # {species: {scaffold: display name}}
 config.setdefault("order_ref", None)            # species whose gene order shades the ribbons and bars
 config.setdefault("focus_groups", [])           # linkage groups drawn in color; the rest gray
 config.setdefault("follow", None)               # list of SP:gene / SP:scaffold:start-end, or a file of them
@@ -1548,6 +1551,25 @@ def subway_plot(species_order, rbh_filelist,
         panel.add_patch(patches.Rectangle((x1, y - _paint_h / 2), x2 - x1, _paint_h, facecolor="none",
                                           edgecolor="black", linewidth=0.5, zorder=5, clip_on=False))
 
+    # chromosome names on the bars (chrom_names_on_bars): shortened where safe, or from chrom_name_map
+    _names_on_bars = bool(config.get("chrom_names_on_bars", False))
+    _bar_names, _name_fs = {}, float(config.get("chrom_name_fontsize", 6))
+    if _names_on_bars:
+        _renderer_n = fig.canvas.get_renderer()
+        for _sp in species_order:
+            _short = RO.short_chrom_names(list(sp_to_chromdf[_sp]["chrom"]))
+            _short.update((config.get("chrom_name_map") or {}).get(_sp, {}) or {})
+            _bar_names[_sp] = _short
+
+    def _bar_name(panel, x1, x2, y, sp, chrom):
+        name = str(_bar_names.get(sp, {}).get(chrom, chrom))
+        t = panel.text((x1 + x2) / 2, y, name, ha="center", va="center", fontsize=_name_fs)
+        w_px = t.get_window_extent(_renderer_n).width
+        t.remove()
+        span_px = abs(panel.transData.transform((x2, y))[0] - panel.transData.transform((x1, y))[0])
+        if w_px + 2 <= span_px:   # only where the name fits on its bar
+            RO.name_on_bar(panel, (x1 + x2) / 2, y, name, fontsize=_name_fs)
+
     def _painted_bar(panel, x1, x2, y, chrom_len, bins):
         panel.add_patch(patches.Rectangle((x1, y - _paint_h / 2), x2 - x1, _paint_h, facecolor="white",
                                           edgecolor="none", zorder=3, clip_on=False))
@@ -1568,7 +1590,9 @@ def subway_plot(species_order, rbh_filelist,
                     _painted_bar(pChr, x1, x2, i, row["chrsize"], _paint_chr[(sp, row["chrom"])])
                 else:
                     pChr.plot([x1, x2], [i, i], 'k-', **_line_kw)
-                if config.get("show_chrom_labels", True):
+                if _names_on_bars:
+                    _bar_name(pChr, x1, x2, i, sp, row["chrom"])
+                elif config.get("show_chrom_labels", True):
                     pChr.text(x1, i - 0.03, row["chrom"], ha="left", va="bottom",
                               fontsize=_chr_font_chr, **_label_kw_common)
 
@@ -1582,7 +1606,9 @@ def subway_plot(species_order, rbh_filelist,
                     _painted_bar(pIx, x1, x2, i, max(1.0, row["ixSize"]), _paint_ix[(sp, row["chrom"])])
                 else:
                     pIx.plot([x1, x2], [i, i], 'k-', **_line_kw)
-                if config.get("show_chrom_labels", True):
+                if _names_on_bars:
+                    _bar_name(pIx, x1, x2, i, sp, row["chrom"])
+                elif config.get("show_chrom_labels", True):
                     pIx.text(x1, i - 0.03, row["chrom"], ha="left", va="bottom",
                              fontsize=_chr_font_ix, **_label_kw_common)
 
