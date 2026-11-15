@@ -180,6 +180,12 @@ config.setdefault("interspecies_height_in", None)
 #                             every gene of the species' .chrom file ("genes";
 #                             needs species: SP: chrom: in this config; the
 #                             gene-index panel then counts orthologs only)
+# Ribbon line width in pt (default 0.25, as before). ribbon_lw_sig and
+# ribbon_lw_faint, when set, override it for ribbons drawn opaque (significant
+# chromosome pairs, alpha 0.8) and faint (alpha 0.1).
+config.setdefault("ribbon_lw", 0.25)
+config.setdefault("ribbon_lw_sig", None)
+config.setdefault("ribbon_lw_faint", None)
 config.setdefault("chrom_paint", False)
 config.setdefault("chrom_paint_height", 0.08)
 config.setdefault("chrom_paint_tracks", False)
@@ -778,6 +784,9 @@ def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy, plot
      False means they are not plotted.
     """
     indent = 1.0
+    lw_all   = float(config.get("ribbon_lw", 0.25))
+    lw_sig   = float(config["ribbon_lw_sig"])   if config.get("ribbon_lw_sig")   is not None else lw_all
+    lw_faint = float(config["ribbon_lw_faint"]) if config.get("ribbon_lw_faint") is not None else lw_all
     # plot the indices
     for i in range(len(topxL)):
         if (plot_unassigned is False) and (colors[i] == "#000000"):
@@ -811,7 +820,7 @@ def plot_bezier_lines(panel, topxL, bottomxL, colors, alpha, topy, bottomy, plot
         else:
             zord = 1
         patch = patches.PathPatch(path, fill = False,
-                                  facecolor=[0,0,0,0], lw = 0.25,
+                                  facecolor=[0,0,0,0], lw = lw_sig if alpha[i] >= 0.5 else lw_faint,
                                   alpha=alpha[i], edgecolor = colors[i],
                                   zorder = zord)
         panel.add_patch(patch)

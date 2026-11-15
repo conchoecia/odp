@@ -121,6 +121,11 @@ rbh_directory: /path/to/odp/step2-figures/synteny_coloredby_BCnS_LGs/
 # interspecies_height_in: 0.322    # vertical spacing per species row in
 #                                  # inches (default 0.5).
 #
+# ribbon_lw: 0.25                  # ribbon line width in pt (default 0.25).
+# ribbon_lw_sig: 0.5               # optional: width of the opaque ribbons
+#                                  # (significant chromosome pairs).
+# ribbon_lw_faint: 0.5             # optional: width of the faint ribbons.
+#
 # chrom_paint: true                # paint each chromosome bar with the
 #                                  # fractions of its linkage groups along its
 #                                  # length (bins of 1/1000 of the species'
