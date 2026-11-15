@@ -1,4 +1,6 @@
 # In this document we will log changes to include with release notes.
+- Unreleased
+  - `odp_rbh_to_ribbon`: optional chromosome painting (`chrom_paint`, `chrom_paint_height`, `chrom_paint_tracks`, `chrom_paint_other`). Each chromosome bar can be painted with the fractions of its linkage groups along its length, and Count and Fraction tracks can be drawn under the last species, with the binning of the ALG composition tracks in Schultz et al. 2026 (Science Advances) Fig. 8. `chrom_paint_other` adds, in gray, orthologs in no linkage group or every gene of a species' `.chrom` file, to show how much of each window the linkage groups account for. All options are off by default; without them the output is unchanged.
 - v0.3.3 - Published on February 8th, 2024
   - Uncommented some code that prevented the `step2-figures/synteny_coloredby_*/` directory from being created. The `.rbh` files in this directory are used for the rubbon plots.
 - v0.3.2 - Published on February 5th, 2024

@@ -120,6 +120,21 @@ rbh_directory: /path/to/odp/step2-figures/synteny_coloredby_BCnS_LGs/
 # figure_height_in: 6.77           # corresponding height. Unset = auto.
 # interspecies_height_in: 0.322    # vertical spacing per species row in
 #                                  # inches (default 0.5).
+#
+# chrom_paint: true                # paint each chromosome bar with the
+#                                  # fractions of its linkage groups along its
+#                                  # length (bins of 1/1000 of the species'
+#                                  # plotted length; each bin counts itself and
+#                                  # two bins on either side), the method of
+#                                  # the ALG composition tracks of Schultz et
+#                                  # al. 2026 (Science Advances) Fig. 8.
+# chrom_paint_height: 0.08         # height of a painted bar, in species rows.
+# chrom_paint_tracks: true         # also draw the Count (symmetric) and
+#                                  # Fraction tracks under the last species.
+# chrom_paint_other: none          # none | orthologs | genes: also count, in
+#                                  # gray, orthologs in no linkage group, or
+#                                  # every gene in the species' .chrom file
+#                                  # (genes needs species: SP: chrom: path).
 
 # - Optional: Define colors for gene name patterns in loci_of_interest
 # - Uses case-insensitive substring matching for gene names
